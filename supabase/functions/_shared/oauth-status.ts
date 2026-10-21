@@ -6,7 +6,22 @@ export function oauthStateProblem(state: string, row: any, time = Date.now()) {
     return "인증 시작 후 30분이 지났습니다. 서비스의 계정 연결 버튼에서 다시 시작하세요.";
   return "";
 }
-export function oauthErrorPage(message: string, frontend: string) {
-  const esc = (s: string) => s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
-  return '<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>산지 · 계정 연결 확인</title><main style="max-width:560px;margin:10vh auto;padding:24px;font-family:sans-serif;line-height:1.8"><h1>계정 연결을 확인해 주세요</h1><p>' + esc(message) + '</p><p>이 페이지를 새로고침하지 말고, 아래 버튼으로 돌아가 연결 상태를 확인하세요. 기존에 저장된 연결은 유지됩니다.</p><a href="' + esc(frontend + '#settings') + '">서비스 연동 설정으로 돌아가기 →</a></main></html>';
+export function oauthErrorRedirect(message: string, frontend: string) {
+  const url = new URL(frontend);
+  url.searchParams.set("oauth_error", message.slice(0, 500));
+  url.hash = "settings";
+  return url.toString();
+}
+export function providerErrorDetail(url: string, options: any, response: any) {
+  let message = String(response.error?.message || response.error_description || (typeof response.error === "string" ? response.error : "") || "");
+  const secretNames = ["client_secret", "access_token", "refresh_token", "code", "code_verifier"];
+  const params = new URL(url).searchParams;
+  const body = options.body instanceof URLSearchParams ? options.body : new URLSearchParams();
+  for (const name of secretNames) for (const value of [params.get(name), body.get(name)])
+    if (value && value.length >= 4) message = message.split(value).join("[redacted]");
+  message = message.replace(/https?:\/\/\S+/g, "[provider URL]")
+    .replace(/(?:access_token|client_secret|refresh_token|code_verifier)\s*[:=]\s*[^\s,;]+/gi, "[redacted]")
+    .replace(/[\r\n]/g, " ").slice(0, 240);
+  const code = response.error?.code;
+  return (Number.isInteger(code) ? "코드 " + code + ": " : "") + message;
 }

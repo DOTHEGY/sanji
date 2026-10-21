@@ -1,5 +1,5 @@
 import { checkGmail } from "../_shared/gmail-check.ts";
-import { oauthLifetimeMs, oauthStateProblem, oauthErrorPage } from "../_shared/oauth-status.ts";
+import { oauthLifetimeMs, oauthStateProblem, oauthErrorRedirect, providerErrorDetail } from "../_shared/oauth-status.ts";
 import { selectInstagramAccount, sameInstagramConversation } from "../_shared/instagram-accounts.ts";
 import { functionRoute } from "../_shared/function-route.ts";
 import { publicContext, validateIntro } from "../_shared/personalization.ts";
@@ -124,14 +124,16 @@ async function saveConnection(u: string, p: string, data: any) {
     ),
   );
 }
-async function remote(url: string, options: any = {}) {
+async function remote(url: string, options: any = {}, stage = "") {
   const r = await fetch(url, {
       ...options,
       signal: AbortSignal.timeout(20000),
     }),
     d = await r.json().catch(() => ({}));
-  if (!r.ok)
-    throw new HttpError(r.status, "외부 제공자 요청 실패 (" + r.status + ")");
+  if (!r.ok) {
+    const detail = providerErrorDetail(url, options, d);
+    throw new HttpError(r.status, (stage ? stage + " · " : "") + "외부 제공자 요청 실패 (" + r.status + ")" + (detail ? " · " + detail : ""));
+  }
   return d;
 }
 async function owned(u: string, id: string, kind?: string) {
@@ -385,6 +387,7 @@ async function callback(
   base: string,
 ) {
   const state = url.searchParams.get("state") || "";
+  if (!state) fail(403, oauthStateProblem(state, null));
   const row = await query(
     sb
       .from("sanji_oauth_states")
@@ -441,7 +444,7 @@ async function callback(
         grant_type: "authorization_code",
         redirect_uri: base + "/oauth/instagram/callback",
       }),
-    });
+    }, "Instagram 인증 코드 교환");
     const long = await remote(
       "https://graph.instagram.com/access_token?" +
         new URLSearchParams({
@@ -449,6 +452,7 @@ async function callback(
           client_secret: env("META_APP_SECRET"),
           access_token: token.access_token,
         }),
+      {}, "Instagram 장기 토큰 교환",
     );
     const profile = await remote(
       "https://graph.instagram.com/" +
@@ -458,6 +462,7 @@ async function callback(
           fields: "id,user_id,username",
           access_token: long.access_token,
         }),
+      {}, "Instagram 프로필 조회",
     );
     const accounts = await instagramAccounts(row.owner);
     const accountId = String(profile.user_id || profile.id || "");
@@ -741,14 +746,11 @@ Deno.serve(async (req: Request) => {
     if (/^\/oauth\/(gmail|instagram)\/callback$/.test(path)) {
       try { return await callback(req, url, path.split("/")[2], base); }
       catch (e) {
-        return new Response(oauthErrorPage(e instanceof HttpError ? e.message : "계정 연결 처리에 실패했습니다. 다시 연결해 주세요.", frontend), {
-          status: e instanceof HttpError ? e.status : 500,
-          headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'" },
-        });
+        return new Response(null, { status: 302, headers: { Location: oauthErrorRedirect(e instanceof HttpError ? e.message : "계정 연결 처리에 실패했습니다. 다시 연결해 주세요.", frontend), "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
       }
     }
     if (path === "/health" && req.method === "GET")
-      return json({ ok: true, version: 5, authRequired: true });
+      return json({ ok: true, version: 6, authRequired: true });
     if (path === "/jobs/run" && req.method === "POST")
       return await runJobs(req);
     const bearer = req.headers.get("authorization") || "";

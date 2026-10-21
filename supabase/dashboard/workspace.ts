@@ -25,9 +25,22 @@ function oauthStateProblem(state, row, time = Date.now()) {
     return "\uC778\uC99D \uC2DC\uC791 \uD6C4 30\uBD84\uC774 \uC9C0\uB0AC\uC2B5\uB2C8\uB2E4. \uC11C\uBE44\uC2A4\uC758 \uACC4\uC815 \uC5F0\uACB0 \uBC84\uD2BC\uC5D0\uC11C \uB2E4\uC2DC \uC2DC\uC791\uD558\uC138\uC694.";
   return "";
 }
-function oauthErrorPage(message, frontend2) {
-  const esc = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-  return '<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>\uC0B0\uC9C0 \xB7 \uACC4\uC815 \uC5F0\uACB0 \uD655\uC778</title><main style="max-width:560px;margin:10vh auto;padding:24px;font-family:sans-serif;line-height:1.8"><h1>\uACC4\uC815 \uC5F0\uACB0\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694</h1><p>' + esc(message) + '</p><p>\uC774 \uD398\uC774\uC9C0\uB97C \uC0C8\uB85C\uACE0\uCE68\uD558\uC9C0 \uB9D0\uACE0, \uC544\uB798 \uBC84\uD2BC\uC73C\uB85C \uB3CC\uC544\uAC00 \uC5F0\uACB0 \uC0C1\uD0DC\uB97C \uD655\uC778\uD558\uC138\uC694. \uAE30\uC874\uC5D0 \uC800\uC7A5\uB41C \uC5F0\uACB0\uC740 \uC720\uC9C0\uB429\uB2C8\uB2E4.</p><a href="' + esc(frontend2 + "#settings") + '">\uC11C\uBE44\uC2A4 \uC5F0\uB3D9 \uC124\uC815\uC73C\uB85C \uB3CC\uC544\uAC00\uAE30 \u2192</a></main></html>';
+function oauthErrorRedirect(message, frontend2) {
+  const url2 = new URL(frontend2);
+  url2.searchParams.set("oauth_error", message.slice(0, 500));
+  url2.hash = "settings";
+  return url2.toString();
+}
+function providerErrorDetail(url2, options, response) {
+  let message = String(response.error?.message || response.error_description || (typeof response.error === "string" ? response.error : "") || "");
+  const secretNames = ["client_secret", "access_token", "refresh_token", "code", "code_verifier"];
+  const params = new URL(url2).searchParams;
+  const body = options.body instanceof URLSearchParams ? options.body : new URLSearchParams();
+  for (const name of secretNames) for (const value of [params.get(name), body.get(name)])
+    if (value && value.length >= 4) message = message.split(value).join("[redacted]");
+  message = message.replace(/https?:\/\/\S+/g, "[provider URL]").replace(/(?:access_token|client_secret|refresh_token|code_verifier)\s*[:=]\s*[^\s,;]+/gi, "[redacted]").replace(/[\r\n]/g, " ").slice(0, 240);
+  const code = response.error?.code;
+  return (Number.isInteger(code) ? "\uCF54\uB4DC " + code + ": " : "") + message;
 }
 
 // supabase/functions/_shared/instagram-accounts.ts
@@ -323,13 +336,15 @@ async function saveConnection(u, p, data) {
     )
   );
 }
-async function remote(url2, options = {}) {
+async function remote(url2, options = {}, stage = "") {
   const r = await fetch(url2, {
     ...options,
     signal: AbortSignal.timeout(2e4)
   }), d = await r.json().catch(() => ({}));
-  if (!r.ok)
-    throw new HttpError(r.status, "\uC678\uBD80 \uC81C\uACF5\uC790 \uC694\uCCAD \uC2E4\uD328 (" + r.status + ")");
+  if (!r.ok) {
+    const detail = providerErrorDetail(url2, options, d);
+    throw new HttpError(r.status, (stage ? stage + " \xB7 " : "") + "\uC678\uBD80 \uC81C\uACF5\uC790 \uC694\uCCAD \uC2E4\uD328 (" + r.status + ")" + (detail ? " \xB7 " + detail : ""));
+  }
   return d;
 }
 async function owned(u, id, kind) {
@@ -537,6 +552,7 @@ async function webhook(req, url2) {
 }
 async function callback(req, url2, provider, base) {
   const state = url2.searchParams.get("state") || "";
+  if (!state) fail(403, oauthStateProblem(state, null));
   const row = await query(
     sb.from("sanji_oauth_states").select("*").eq("state", await digest(state)).eq("provider", provider).maybeSingle()
   );
@@ -584,19 +600,23 @@ async function callback(req, url2, provider, base) {
         grant_type: "authorization_code",
         redirect_uri: base + "/oauth/instagram/callback"
       })
-    });
+    }, "Instagram \uC778\uC99D \uCF54\uB4DC \uAD50\uD658");
     const long = await remote(
       "https://graph.instagram.com/access_token?" + new URLSearchParams({
         grant_type: "ig_exchange_token",
         client_secret: env("META_APP_SECRET"),
         access_token: token.access_token
-      })
+      }),
+      {},
+      "Instagram \uC7A5\uAE30 \uD1A0\uD070 \uAD50\uD658"
     );
     const profile = await remote(
       "https://graph.instagram.com/" + (env("META_GRAPH_VERSION") || "v24.0") + "/me?" + new URLSearchParams({
         fields: "id,user_id,username",
         access_token: long.access_token
-      })
+      }),
+      {},
+      "Instagram \uD504\uB85C\uD544 \uC870\uD68C"
     );
     const accounts = await instagramAccounts(row.owner);
     const accountId = String(profile.user_id || profile.id || "");
@@ -818,14 +838,11 @@ Deno.serve(async (req) => {
       try {
         return await callback(req, url2, path.split("/")[2], base);
       } catch (e) {
-        return new Response(oauthErrorPage(e instanceof HttpError ? e.message : "\uACC4\uC815 \uC5F0\uACB0 \uCC98\uB9AC\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uC5F0\uACB0\uD574 \uC8FC\uC138\uC694.", frontend), {
-          status: e instanceof HttpError ? e.status : 500,
-          headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'" }
-        });
+        return new Response(null, { status: 302, headers: { Location: oauthErrorRedirect(e instanceof HttpError ? e.message : "\uACC4\uC815 \uC5F0\uACB0 \uCC98\uB9AC\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uC5F0\uACB0\uD574 \uC8FC\uC138\uC694.", frontend), "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
       }
     }
     if (path === "/health" && req.method === "GET")
-      return json({ ok: true, version: 5, authRequired: true });
+      return json({ ok: true, version: 6, authRequired: true });
     if (path === "/jobs/run" && req.method === "POST")
       return await runJobs(req);
     const bearer = req.headers.get("authorization") || "";

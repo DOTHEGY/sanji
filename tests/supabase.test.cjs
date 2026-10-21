@@ -283,7 +283,14 @@ test("Edge function compiles and denies unauthenticated/disallowed-origin reques
         new Request("https://project.example" + prefix + "/health"),
       );
       assert.equal(health.status, 200);
-      assert.equal((await health.json()).version, 5);
+      assert.equal((await health.json()).version, 6);
+      const callback = await handler(new Request("https://project.example" + prefix + "/oauth/instagram/callback"));
+      assert.equal(callback.status, 302);
+      const back = new URL(callback.headers.get("location"));
+      assert.equal(back.origin, "https://dothegy.github.io");
+      assert.match(back.searchParams.get("oauth_error"), /state/);
+      assert.equal(back.hash, "#settings");
+      assert.equal(await callback.text(), "");
       assert.equal(
         (
           await handler(
@@ -657,18 +664,20 @@ test("Instagram replies retain the receiving account; legacy ambiguous and remov
   assert.equal(same(t, a.provider, "other"), false);
 });
 
-test("OAuth expiry distinguishes missing, consumed and expired requests and renders escaped recovery page", () => {
+test("OAuth expiry distinguishes missing, consumed and expired requests and redirects safely to the UTF-8 frontend", () => {
   const compiled = esbuild.buildSync({ entryPoints: ["supabase/functions/_shared/oauth-status.ts"], bundle: true, platform: "node", format: "cjs", write: false });
   const m = { exports: {} }; new Function("module", "exports", compiled.outputFiles[0].text)(m, m.exports);
-  const { oauthStateProblem: problem, oauthLifetimeMs: ttl, oauthErrorPage: page } = m.exports;
+  const { oauthStateProblem: problem, oauthLifetimeMs: ttl, oauthErrorRedirect: redirect } = m.exports;
   assert.equal(ttl, 1800000);
   assert.match(problem("", null), /state/);
   assert.match(problem("used", null), /이미 처리/);
   assert.match(problem("old", {expires: new Date(0).toISOString()}, ttl), /30분/);
   assert.match(problem("bad", {expires: "bad"}), /30분/);
   assert.equal(problem("valid", {expires: new Date(ttl).toISOString()}, 0), "");
-  assert.equal(page("<script>bad</script>", "https://app.example/").includes("<script>"), false);
-  assert.match(page("expired", "https://app.example/"), /https:\/\/app.example\/#settings/);
+  const url = new URL(redirect("연결 실패 <script>bad</script>", "https://app.example/"));
+  assert.equal(url.origin, "https://app.example");
+  assert.equal(url.searchParams.get("oauth_error"), "연결 실패 <script>bad</script>");
+  assert.equal(url.hash, "#settings");
 });
 
 test("Gmail health checks only account and granted scopes, never invokes send or returns tokens", async () => {
@@ -696,4 +705,12 @@ test("Personalization fills only the requested inline slot, preserving the surro
   assert.throws(() => assemble(original, ""), /생성하거나 직접 입력/);
   assert.equal(assemble("기존 카피", "도입부"), "도입부\n\n기존 카피");
   assert.equal(assemble("기존 카피", ""), "기존 카피");
+});
+
+test("Provider error diagnosis retains useful codes while redacting OAuth credentials", () => {
+  const compiled = esbuild.buildSync({ entryPoints: ["supabase/functions/_shared/oauth-status.ts"], bundle: true, platform: "node", format: "cjs", write: false });
+  const m = { exports: {} }; new Function("module", "exports", compiled.outputFiles[0].text)(m, m.exports);
+  const detail = m.exports.providerErrorDetail("https://graph.instagram.com/me?access_token=private-token-123", {body: new URLSearchParams({client_secret: "private-secret-456", code: "private-code-789"})}, {error: {code: 100, message: "Invalid field user_id for private-token-123 private-secret-456 private-code-789"}});
+  assert.match(detail, /100/); assert.match(detail, /Invalid field user_id/);
+  assert.equal(detail.includes("private-"), false);
 });
