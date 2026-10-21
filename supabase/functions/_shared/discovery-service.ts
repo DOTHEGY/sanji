@@ -25,24 +25,25 @@ export function discoveryService(deps:any){
    const bytes=new Uint8Array(size);let at=0;for(const b of chunks){bytes.set(b,at);at+=b.length;}
    const charset=/charset=([^;\s]+)/i.exec(type)?.[1]||"utf-8";
    let text;try{text=new TextDecoder(charset).decode(bytes);}catch{text=new TextDecoder().decode(bytes);}
-   return {text,url:url.toString()};
+   return {text,url:url.toString(),bytes:size};
   }throw Error("리디렉션 횟수 제한 초과");
  }
  async function crawl(website:string){
   const base=publicUrl(website);
   if(marketplace(base.toString()))throw Error("플랫폼 운영사 메일을 브랜드 메일로 수집하지 않습니다. 회사·자사몰 URL을 확인하세요.");
   const robotCache=new Map<string,string>(),attempts:any[]=[],results:any[]=[],visited=new Set<string>();
-  const checked=new Date().toISOString();
+  const checked=new Date().toISOString();let htmlBudget=3*1024*1024;
   async function read(value:string,linkedFrom=""){
    const url=publicUrl(value);visited.add(url.toString());
    try{
     if(!robotCache.has(url.origin)){const r=await publicFetch(url.origin+"/robots.txt",100000);robotCache.set(url.origin,r.text);}
     if(!robotsAllowed(robotCache.get(url.origin)||"",url.pathname))throw Error("robots.txt에서 수집이 제한된 경로입니다.");
-    const page=await publicFetch(url.toString()),parsed=parseOfficialPage(page.text,page.url,checked);
+    const page=await publicFetch(url.toString(),Math.min(2*1024*1024,htmlBudget));htmlBudget-=page.bytes||0;
+    const parsed=parseOfficialPage(page.text,page.url,checked);
     const contacts=parsed.contacts.map((c:any)=>({...c,discoveryMethod:"public_page",linkedFrom,sourceRelation:linkedFrom?"홈페이지에서 연결된 페이지 · 동일 회사 소유 관계 검토 전":"홈페이지 후보 · 소유 관계 검토 전"}));
     results.push({...parsed,contacts});attempts.push({url:page.url,linkedFrom,checked,emailCount:contacts.length,status:"checked"});
     return parsed;
-   }catch(e){attempts.push({url:url.toString(),linkedFrom,checked,status:"failed",error:String(e.message||"페이지 확인 실패").slice(0,300)});return null;}
+   }catch(e){if(/크기 제한/.test(e.message||""))htmlBudget=0;attempts.push({url:url.toString(),linkedFrom,checked,status:"failed",error:String(e.message||"페이지 확인 실패").slice(0,300)});return null;}
   }
   const first=await read(base.toString());
   if(!first)return {contacts:[],excludedCount:0,inquiryLinks:[],checked,pages:0,sourceAttempts:attempts,error:attempts[0]?.error||"홈페이지 확인 실패",officialVerified:false};
@@ -50,7 +51,7 @@ export function discoveryService(deps:any){
   // A link is evidence of a relationship, never proof of legal ownership or permission to contact.
   const homeOrigin=base.origin,extraOrigins=new Set<string>();
   const queue=[...first.links.filter((l:any)=>["shop","company"].includes(l.type)),...first.links.filter((l:any)=>!["shop","company"].includes(l.type))];
-  while(queue.length&&attempts.length<5){
+  while(queue.length&&attempts.length<5&&htmlBudget>0){
    const link:any=queue.shift();let next;try{next=publicUrl(link.url);}catch{continue;}
    if(visited.has(next.toString())||marketplace(next.toString())||/login|logout|signup|cart|order|privacy|recruit|terms/i.test(next.pathname))continue;
    if(next.origin!==homeOrigin){

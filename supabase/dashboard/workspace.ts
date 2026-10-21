@@ -159,7 +159,7 @@ function discoveryService(deps) {
       } catch {
         text2 = new TextDecoder().decode(bytes);
       }
-      return { text: text2, url: url2.toString() };
+      return { text: text2, url: url2.toString(), bytes: size };
     }
     throw Error("\uB9AC\uB514\uB809\uC158 \uD69F\uC218 \uC81C\uD55C \uCD08\uACFC");
   }
@@ -168,6 +168,7 @@ function discoveryService(deps) {
     if (marketplace(base.toString())) throw Error("\uD50C\uB7AB\uD3FC \uC6B4\uC601\uC0AC \uBA54\uC77C\uC744 \uBE0C\uB79C\uB4DC \uBA54\uC77C\uB85C \uC218\uC9D1\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. \uD68C\uC0AC\xB7\uC790\uC0AC\uBAB0 URL\uC744 \uD655\uC778\uD558\uC138\uC694.");
     const robotCache = /* @__PURE__ */ new Map(), attempts = [], results = [], visited = /* @__PURE__ */ new Set();
     const checked = (/* @__PURE__ */ new Date()).toISOString();
+    let htmlBudget = 3 * 1024 * 1024;
     async function read(value, linkedFrom = "") {
       const url2 = publicUrl(value);
       visited.add(url2.toString());
@@ -177,12 +178,15 @@ function discoveryService(deps) {
           robotCache.set(url2.origin, r.text);
         }
         if (!robotsAllowed(robotCache.get(url2.origin) || "", url2.pathname)) throw Error("robots.txt\uC5D0\uC11C \uC218\uC9D1\uC774 \uC81C\uD55C\uB41C \uACBD\uB85C\uC785\uB2C8\uB2E4.");
-        const page = await publicFetch(url2.toString()), parsed = parseOfficialPage(page.text, page.url, checked);
+        const page = await publicFetch(url2.toString(), Math.min(2 * 1024 * 1024, htmlBudget));
+        htmlBudget -= page.bytes || 0;
+        const parsed = parseOfficialPage(page.text, page.url, checked);
         const contacts2 = parsed.contacts.map((c) => ({ ...c, discoveryMethod: "public_page", linkedFrom, sourceRelation: linkedFrom ? "\uD648\uD398\uC774\uC9C0\uC5D0\uC11C \uC5F0\uACB0\uB41C \uD398\uC774\uC9C0 \xB7 \uB3D9\uC77C \uD68C\uC0AC \uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804" : "\uD648\uD398\uC774\uC9C0 \uD6C4\uBCF4 \xB7 \uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804" }));
         results.push({ ...parsed, contacts: contacts2 });
         attempts.push({ url: page.url, linkedFrom, checked, emailCount: contacts2.length, status: "checked" });
         return parsed;
       } catch (e) {
+        if (/크기 제한/.test(e.message || "")) htmlBudget = 0;
         attempts.push({ url: url2.toString(), linkedFrom, checked, status: "failed", error: String(e.message || "\uD398\uC774\uC9C0 \uD655\uC778 \uC2E4\uD328").slice(0, 300) });
         return null;
       }
@@ -191,7 +195,7 @@ function discoveryService(deps) {
     if (!first) return { contacts: [], excludedCount: 0, inquiryLinks: [], checked, pages: 0, sourceAttempts: attempts, error: attempts[0]?.error || "\uD648\uD398\uC774\uC9C0 \uD655\uC778 \uC2E4\uD328", officialVerified: false };
     const homeOrigin = base.origin, extraOrigins = /* @__PURE__ */ new Set();
     const queue = [...first.links.filter((l) => ["shop", "company"].includes(l.type)), ...first.links.filter((l) => !["shop", "company"].includes(l.type))];
-    while (queue.length && attempts.length < 5) {
+    while (queue.length && attempts.length < 5 && htmlBudget > 0) {
       const link = queue.shift();
       let next;
       try {
