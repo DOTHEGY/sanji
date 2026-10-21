@@ -15,7 +15,7 @@ async function database() {
   await db.exec(
     `create role anon;create role authenticated;create role service_role bypassrls;create schema auth;create table auth.users(id uuid primary key,email text);create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;grant usage on schema auth to authenticated;grant execute on function auth.uid() to authenticated;create schema storage;create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint);create table storage.objects(id uuid,name text,bucket_id text);alter table storage.objects enable row level security;create function storage.foldername(name text) returns text[] language sql immutable as $$select string_to_array(name,'/')$$;`,
   );
-  await db.exec(migration);
+  for(const step of [1,2,3])await db.exec(fs.readFileSync(`public/setup/0${step}.sql`,"utf8"));
   return db;
 }
 const u1 = "11111111-1111-4111-8111-111111111111",

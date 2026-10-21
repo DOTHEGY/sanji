@@ -13,7 +13,7 @@
 ## 1. 관리자 계정과 DB 만들기 (Dashboard)
 
 1. https://supabase.com/dashboard/project/ofasbfpeapbdcotnptvz/auth/users 에서 Add user → Create new user. 본인 관리자 이메일과 **이 서비스용 새 비밀번호**를 입력합니다. Gmail 비밀번호를 입력하지 마세요. 대시보드의 Auto Confirm 옵션은 프로젝트 관리자가 본인 계정을 직접 생성하는 경우에 사용합니다.
-2. https://supabase.com/dashboard/project/ofasbfpeapbdcotnptvz/sql/new 에서 `supabase/migrations/202610210001_workspace.sql` 전체를 실행합니다. 다른 기존 테이블은 수정하지 않으며 `sanji_` 접두사의 새 구조와 비공개 첨부 버킷을 생성합니다.
+2. 권장: https://dothegy.github.io/sanji/setup/ 에서 1→2→3단계 전체 복사 버튼을 사용해 SQL Editor의 새 쿼리로 각각 실행하세요. 각 SQL의 마지막 COMPLETE 주석까지 붙었는지 확인하고 선택 영역 없이 실행합니다. 원본을 사용할 경우 https://supabase.com/dashboard/project/ofasbfpeapbdcotnptvz/sql/new 에서 `supabase/migrations/202610210001_workspace.sql` 전체를 실행합니다. 다른 기존 테이블은 수정하지 않으며 `sanji_` 접두사의 새 구조와 비공개 첨부 버킷을 생성합니다.
 3. `supabase/OWNER.template.sql`의 `YOUR_ADMIN_EMAIL`을 1번 이메일로 바꿔 실행합니다. 마지막 조회에서 해당 계정이 표시되는지 확인하세요. SQL은 관리자 권한으로만 실행합니다. 관리자 이메일과 실제 업무 자료를 공개 저장소에 커밋하지 마세요.
 4. 위 운영 URL에서 로그인합니다. 후보·상품·템플릿·일정·대화 관리 정보는 브라우저 임시 저장이 아니라 Supabase에 저장됩니다. 비밀번호 재설정/계정 초대 UI는 아직 제공하지 않습니다.
 
