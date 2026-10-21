@@ -283,7 +283,7 @@ test("Edge function compiles and denies unauthenticated/disallowed-origin reques
         new Request("https://project.example" + prefix + "/health"),
       );
       assert.equal(health.status, 200);
-      assert.equal((await health.json()).version, 8);
+      assert.equal((await health.json()).version, 10);
       const callback = await handler(new Request("https://project.example" + prefix + "/oauth/instagram/callback"));
       assert.equal(callback.status, 302);
       const back = new URL(callback.headers.get("location"));
@@ -746,4 +746,54 @@ test("Instagram verifies short-token profile before long exchange and explicitly
   assert.equal(requests,1);
   const full = await resolve({access_token:"test-short"}, async (url) => url.includes("/me?") ? profile : {access_token:"test-long",expires_in:5183944}, "test-secret", "v24.0", 1000);
   assert.equal(full.tokenMode,"long"); assert.equal(full.warning,""); assert.equal(full.expires,5183945000);
+});
+
+test("Actual Edge MIME supports Unicode replies, binary documents and image attachments without pretending inline images", () => {
+  const compiled = esbuild.buildSync({ entryPoints: ["supabase/functions/_shared/mail-mime.ts"], bundle: true, platform: "node", format: "cjs", write: false });
+  const m = { exports: {} }; new Function("module", "exports", "require", compiled.outputFiles[0].text)(m, m.exports, require);
+  const image = Buffer.from([137,80,78,71,13,10,26,10,1,2,3]).toString("base64");
+  const raw = Buffer.from(m.exports.mime({email:"recipient@example.test",subject:"Re: 제안 회신",messageId:"test-id",inReplyTo:"<parent@example.test>\r\nBcc: attacker@example.test",references:"<first@example.test>",body:"검토 감사합니다. 자료를 첨부합니다.",attachments:[{name:"자료.pdf",content:Buffer.from("%PDF-1.7\nexample").toString("base64")},{name:"제품.png",content:image}]}, "sender@example.test"),"base64url").toString();
+  assert.match(raw,/In-Reply-To: <parent@example.test>\r\nReferences: <first@example.test> <parent@example.test>/);
+  assert.equal(raw.includes("Bcc:"),false); assert.match(raw,/multipart\/mixed/);
+  assert.match(raw,/Content-Type: image\/png/);assert.match(raw,/Content-Type: application\/pdf/);
+  assert.ok(raw.includes(image)); assert.ok(raw.includes(encodeURIComponent("제품.png")));
+  assert.equal((raw.match(/Content-Disposition: attachment/g)||[]).length,2);
+  assert.equal(raw.includes("Content-Disposition: inline"),false);
+});
+
+function discoveryHelpers(){
+ const compiled=esbuild.buildSync({entryPoints:["supabase/functions/_shared/discovery.ts"],bundle:true,platform:"node",format:"cjs",write:false});
+ const m={exports:{}};new Function("module","exports",compiled.outputFiles[0].text)(m,m.exports);return m.exports;
+}
+test("Email discovery includes official general and customer mail, labels ownership and excludes placeholders, privacy, recruitment and platform owners",()=>{
+ const {parseOfficialPage,shoppingProspects,companyIdentity}=discoveryHelpers();
+ const r=parseOfficialPage('<p>대표 이메일 info@brand.co.kr</p><p>고객센터 cs@brand.co.kr</p><div>'+ ' '.repeat(250) +'</div><p>제휴 문의 b2b@brand.co.kr</p><input placeholder="user@gmail.com"><p>privacy@brand.co.kr hr@brand.co.kr</p><p>플랫폼 support@cafe24.com</p><p>브랜드 공개 brandbusiness@gmail.com</p>',"https://www.brand.co.kr/","2026-10-21");
+ assert.ok(r.contacts.some(c=>c.email==="info@brand.co.kr"));assert.ok(r.contacts.some(c=>c.email==="cs@brand.co.kr"));assert.ok(r.contacts.some(c=>c.email==="b2b@brand.co.kr"));
+ assert.equal(r.contacts.some(c=>c.email.includes("privacy@")||c.email.includes("hr@")||c.email==="support@cafe24.com"||c.email==="user@gmail.com"),false);
+ assert.equal(r.contacts.find(c=>c.email==="brandbusiness@gmail.com").domainMatch,false);
+ assert.equal(r.contacts.every(c=>c.verified===false),true);
+ const items=shoppingProspects([{brand:"테스트 브랜드",maker:"제조사 A",title:"<b>건강</b> 상품",link:"https://www.coupang.com/x",mallName:"쿠팡"},{brand:"테스트 브랜드",title:"다른 SKU"},{brand:"쿠팡"}],"건강식품","2026-10-21");
+ assert.equal(items.length,1);assert.equal(items[0].company,"");assert.equal(items[0].manufacturerClaim,"제조사 A");assert.equal(companyIdentity("(주) 테스트 회사"),companyIdentity("주식회사테스트회사"));
+});
+test("Discovery blocks private targets, honors robots and distinguishes marketplace discovery from official sites",()=>{
+ const {publicUrl,publicIp,robotsAllowed,marketplace}=discoveryHelpers();
+ for(const u of ["http://brand.co.kr","https://127.0.0.1","https://169.254.169.254","https://localhost","https://x.internal","https://user:pass@brand.co.kr"] )assert.throws(()=>publicUrl(u));
+ for(const ip of ["127.0.0.1","10.0.0.1","172.16.0.1","192.168.0.1","169.254.169.254","::1","fc00::1"])assert.equal(publicIp(ip),false);
+ assert.equal(publicIp("172.67.1.2"),true);assert.equal(publicIp("8.8.8.8"),true);
+ assert.equal(robotsAllowed("User-agent: *\nDisallow: /private/", "/private/contact"),false);
+ assert.equal(robotsAllowed("User-agent: *\nDisallow: /", "/"),false);
+ assert.equal(robotsAllowed("User-agent: *\nDisallow: /private/", "/contact"),true);
+ assert.equal(marketplace("https://smartstore.naver.com/brand"),true);assert.equal(marketplace("https://www.coupang.com/x"),true);assert.equal(marketplace("https://brand.co.kr"),false);
+});
+test("Discovery schema is repeatable, tenant private and daily claims cannot overlap",async()=>{
+ const db=await database();try{
+  const sql=fs.readFileSync("supabase/migrations/202610210003_discovery.sql","utf8");await db.exec(sql);await db.exec(sql);
+  await db.query("insert into auth.users values($1,$2),($3,$4)",[u1,"one@test.example",u2,"two@test.example"]);await db.query("insert into public.sanji_members(user_id) values($1),($2)",[u1,u2]);
+  await db.query("insert into public.sanji_discovery_leads(owner,identity,data) values($1,'brand','{\"name\":\"brand\"}')",[u1]);
+  await login(db,u2);assert.equal((await db.query("select * from public.sanji_discovery_leads")).rows.length,0);
+  await assert.rejects(()=>db.query("select public.sanji_discovery_claim($1)",[u2]),/permission denied/);
+  await db.exec("reset role");const first=(await db.query("select * from public.sanji_discovery_claim($1)",[u1])).rows[0];assert.equal(first.calls,1);
+  const second=(await db.query("select * from public.sanji_discovery_claim($1)",[u1])).rows[0];assert.equal(second.owner,null);
+  await login(db,u1);assert.equal((await db.query("select * from public.sanji_discovery_leads")).rows.length,1);
+ }finally{await db.close();}
 });

@@ -914,3 +914,19 @@ test("copy editor keeps main template intact while AI changes intro only; schedu
     await h.close();
   }
 });
+
+test("Email discovery UI separates mail results from no-email companies and saves daily goal without sending", async()=>{
+ const h=await harness();let browser;try{
+  await h.login();browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||"/usr/bin/chromium",headless:true,args:["--no-sandbox"]});
+  const p=await browser.newPage();let saved=null;
+  const fixture={configured:false,settings:{enabled:true,target:30,keywords:["건강식품"]},usage:{emails:1,processed:2,added:2},leads:[{id:"lead-one",status:"review",data:{name:"테스트 회사",company:"",product:"미확인",source:"https://brand.example.test",website:"https://brand.example.test",contacts:[{email:"info@brand.example.test",purpose:"대표·일반 문의",source:"https://brand.example.test",checked:"2026-10-21",context:"공식 대표 메일"}]}},{id:"lead-two",status:"review",data:{name:"메일 없는 테스트 회사",contacts:[]}}]};
+  await p.route(h.base+"/api/discovery",r=>r.fulfill({contentType:"application/json",body:JSON.stringify(fixture)}));
+  await p.route(h.base+"/api/discovery/settings",r=>{saved=r.request().postDataJSON();return r.fulfill({contentType:"application/json",body:'{"ok":true}'});});
+  await p.goto(h.base+"/app/");await p.locator("[name=email]").fill("owner@example.com");await p.locator("[name=password]").fill("only-test-password-12345");await p.locator("#auth-form button").click();await p.waitForSelector("#nav a");
+  await p.goto(h.base+"/app/#discovery");await p.locator("strong").filter({hasText:"info@brand.example.test"}).waitFor();
+  assert.equal(await p.getByText("메일 없는 테스트 회사",{exact:true}).count(),0);
+  await p.getByRole("button",{name:"메일 미확보 업체도 보기"}).click();await p.getByText("메일 없는 테스트 회사",{exact:true}).waitFor();
+  await p.getByText("하루 목표·자동 발굴 설정",{exact:true}).click();await p.locator("#discovery-settings [name=target]").fill("40");await p.locator("#discovery-settings button[type=submit]").click();await p.waitForFunction(()=>document.querySelector("#discovery-settings")!==null);
+  assert.equal(saved.target,40);assert.equal(saved.enabled,true);assert.equal((await h.call("/state")).data.outbox.length,0);
+ }finally{if(browser)await browser.close();await h.close();}
+});

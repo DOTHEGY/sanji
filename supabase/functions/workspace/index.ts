@@ -1,3 +1,6 @@
+import { discoveryService } from "../_shared/discovery-service.ts";
+import { mime } from "../_shared/mail-mime.ts";
+import { instagramTokenResponse } from "../_shared/instagram-token.ts";
 import { resolveInstagramSession } from "../_shared/instagram-session.ts";
 import { checkGmail } from "../_shared/gmail-check.ts";
 import { oauthLifetimeMs, oauthStateProblem, oauthErrorRedirect, providerErrorDetail } from "../_shared/oauth-status.ts";
@@ -113,10 +116,11 @@ async function saveConnection(u: string, p: string, data: any) {
         provider: p,
         encrypted: await encrypt(data),
         summary:
-          p === "gmail"
+          p === "naver" ? {connected:true,configured:true} : p === "gmail"
             ? { email: data.email, connected: true }
             : {
                 username: data.username,
+                accountId: data.id,
                 expires: data.expires,
                 connected: true,
                 tokenMode: data.tokenMode || "long",
@@ -128,6 +132,7 @@ async function saveConnection(u: string, p: string, data: any) {
     ),
   );
 }
+const discovery = discoveryService({sb,query,connection,saveConnection,env,audit,putRecord});
 async function remote(url: string, options: any = {}, stage = "") {
   const r = await fetch(url, {
       ...options,
@@ -223,56 +228,8 @@ async function gmailToken(u: string) {
   await saveConnection(u, "gmail", updated);
   return updated;
 }
-function messageIds(v: string) {
-  return (String(v || "").match(/<[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~@-]+>/g) || [])
-    .slice(-20)
-    .join(" ");
-}
-function mime(d: any, from: string) {
-  const lines = [
-    `From: ${from}`,
-    `To: ${d.email}`,
-    `Subject: =?UTF-8?B?${Buffer.from(d.subject).toString("base64")}?=`,
-    `Message-ID: <${d.messageId}@sanji.local>`,
-    "MIME-Version: 1.0",
-  ];
-  if (d.inReplyTo)
-    lines.push(
-      "In-Reply-To: " + messageIds(d.inReplyTo),
-      "References: " + messageIds(d.references) + " " + messageIds(d.inReplyTo),
-    );
-  const attachments = d.attachments || [];
-  if (!attachments.length)
-    return Buffer.from(
-      [
-        ...lines,
-        "Content-Type: text/plain; charset=UTF-8",
-        "Content-Transfer-Encoding: base64",
-        "",
-        Buffer.from(d.body).toString("base64"),
-      ].join("\r\n"),
-    ).toString("base64url");
-  const boundary = "sanji_" + uuid();
-  lines.push(
-    `Content-Type: multipart/mixed; boundary="${boundary}"`,
-    "",
-    `--${boundary}`,
-    "Content-Type: text/plain; charset=UTF-8",
-    "Content-Transfer-Encoding: base64",
-    "",
-    Buffer.from(d.body).toString("base64"),
-  );
-  for (const a of attachments)
-    lines.push(
-      `--${boundary}`,
-      "Content-Type: application/octet-stream",
-      `Content-Disposition: attachment; filename*=UTF-8''${encodeURIComponent(a.name)}`,
-      "Content-Transfer-Encoding: base64",
-      "",
-      a.content.match(/.{1,76}/g)?.join("\r\n") || "",
-    );
-  lines.push(`--${boundary}--`);
-  return Buffer.from(lines.join("\r\n")).toString("base64url");
+function gmailHasAttachments(part: any): boolean {
+  return !!part?.filename || (part?.parts || []).some(gmailHasAttachments);
 }
 function textBody(p: any): string {
   if (p.mimeType === "text/plain" && p.body?.data)
@@ -439,21 +396,25 @@ async function callback(
       expires: Date.now() + token.expires_in * 1000,
     });
   } else if (provider === "instagram") {
-    const tokenResponse = await remote("https://api.instagram.com/oauth/access_token", {
-      method: "POST",
-      body: new URLSearchParams({
-        client_id: env("META_APP_ID"),
-        client_secret: env("META_APP_SECRET"),
-        code,
-        grant_type: "authorization_code",
-        redirect_uri: base + "/oauth/instagram/callback",
-      }),
-    }, "Instagram 인증 코드 교환");
+    // Use the multipart form and login parameters documented for Instagram Login.
+    const form = new FormData();
+    for (const [name, value] of Object.entries({ client_id:env("META_APP_ID"), client_secret:env("META_APP_SECRET"), code, grant_type:"authorization_code", redirect_uri:base + "/oauth/instagram/callback" })) form.set(name, value);
+    const tokenResponse = await remote("https://api.instagram.com/oauth/access_token", { method:"POST", body:form }, "Instagram 인증 코드 교환");
+    let token;
+    try { token = instagramTokenResponse(tokenResponse); }
+    catch (e) { fail(502, e.message); }
+    // Restricted, encrypted diagnostic slot: never a connected account or sender.
+    // It expires for diagnostic use after ten minutes and is removed on success.
+    await query(sb.from("sanji_connections").upsert({owner:row.owner,provider:"instagram_pending",encrypted:await encrypt({...token,expires:Date.now()+600000}),summary:{connected:false,expires:Date.now()+600000}}, {onConflict:"owner,provider"}));
     let session;
-    try { session = await resolveInstagramSession(tokenResponse, remote, env("META_APP_SECRET"), env("META_GRAPH_VERSION") || "v24.0"); }
-    catch (e) { fail(e instanceof HttpError ? e.status : 502, e.message); }
+    try { session = await resolveInstagramSession(tokenResponse, remote, env("META_APP_SECRET"), env("META_GRAPH_VERSION") || "v26.0"); }
+    catch (e) {
+      await audit(row.owner, "instagram_profile_failed", {appId:env("META_APP_ID"),version:env("META_GRAPH_VERSION") || "v26.0",tokenFields:Object.keys(token),permissions:token.permissions || null,error:e.message});
+      fail(e instanceof HttpError ? e.status : 502, e.message);
+    }
+    await query(sb.from("sanji_connections").delete().eq("owner",row.owner).eq("provider","instagram_pending"));
     const accounts = await instagramAccounts(row.owner);
-    const existing = accounts.find((a: any) => a.provider === "instagram:" + session.id || (a.provider === "instagram" && a.summary?.username === session.username));
+    const existing = accounts.find((a: any) => a.provider === "instagram:" + session.id || String(a.summary?.accountId || "") === session.id || (a.provider === "instagram" && a.summary?.username === session.username));
     // Do not replace a still usable long session with a shorter session silently.
     let keepExisting = false;
     if (existing && session.tokenMode === "short") {
@@ -749,7 +710,11 @@ Deno.serve(async (req: Request) => {
       }
     }
     if (path === "/health" && req.method === "GET")
-      return json({ ok: true, version: 8, authRequired: true });
+      return json({ ok: true, version: 10, authRequired: true });
+    if (path === "/discovery/tick" && req.method === "POST") {
+      if (!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403, "발굴 실행기 인증 실패");
+      return json(await discovery.scheduled());
+    }
     if (path === "/jobs/run" && req.method === "POST")
       return await runJobs(req);
     const bearer = req.headers.get("authorization") || "";
@@ -774,6 +739,10 @@ Deno.serve(async (req: Request) => {
         fail(413, "요청 크기 초과");
       return text ? JSON.parse(text) : {};
     };
+    if (path === "/discovery" || path.startsWith("/discovery/")) {
+      try { return json(await discovery.handle(path,req.method,u,input)); }
+      catch(e) { fail(e instanceof HttpError ? e.status : 400, String(e.message || "발굴 작업 실패")); }
+    }
     if (path === "/personalize" && req.method === "POST") {
       if (!env("AI_API_KEY"))
         fail(
@@ -905,7 +874,7 @@ Deno.serve(async (req: Request) => {
           accounts: accounts.map((a: any) => ({ key: a.provider, ...a.summary })),
           enabled: env("INSTAGRAM_SENDING_ENABLED") === "true",
         },
-        search: { configured: !!env("BRAVE_SEARCH_API_KEY") },
+        search: { configured: !!env("BRAVE_SEARCH_API_KEY") || await discovery.configured(u) },
         ai: {
           configured: !!env("AI_API_KEY"),
           model: env("AI_MODEL") || "gpt-4.1-mini",
@@ -969,7 +938,8 @@ Deno.serve(async (req: Request) => {
               code_challenge_method: "S256",
             })
           : new URLSearchParams({
-              force_authentication: "1",
+              force_reauth: "true",
+              enable_fb_login: "false",
               client_id: env("META_APP_ID"),
               redirect_uri: base + "/oauth/instagram/callback",
               response_type: "code",
@@ -987,6 +957,7 @@ Deno.serve(async (req: Request) => {
     if (path === "/search" && req.method === "GET") {
       const q = (url.searchParams.get("q") || "").slice(0, 200);
       if (q.length < 2) fail(400, "검색어를 2자 이상 입력하세요.");
+      if (await discovery.configured(u)) return json(await discovery.search(u,q + (url.searchParams.get("type") === "creator" ? " site:instagram.com 건강식품 공동구매" : " 공식 홈페이지 회사 이메일")));
       if (!env("BRAVE_SEARCH_API_KEY"))
         return json(
           {
@@ -1076,6 +1047,7 @@ Deno.serve(async (req: Request) => {
                   .toLowerCase()
                   .includes(g.email.toLowerCase()),
                 text: textBody(m.payload) || m.snippet || "[본문 미지원]",
+                hasAttachments: gmailHasAttachments(m.payload),
                 at: new Date(Number(m.internalDate)).toISOString(),
                 automatic:
                   (!!h["auto-submitted"] && h["auto-submitted"] !== "no") ||

@@ -16,9 +16,9 @@ export function providerErrorDetail(url: string, options: any, response: any) {
   let message = String(response.error?.message || response.error_description || (typeof response.error === "string" ? response.error : "") || "");
   const secretNames = ["client_secret", "access_token", "refresh_token", "code", "code_verifier"];
   const params = new URL(url).searchParams;
-  const body = options.body instanceof URLSearchParams ? options.body : new URLSearchParams();
+  const body = (options.body instanceof URLSearchParams || options.body instanceof FormData) ? options.body : new URLSearchParams();
   for (const name of secretNames) for (const value of [params.get(name), body.get(name)])
-    if (value && value.length >= 4) message = message.split(value).join("[redacted]");
+    if (typeof value === "string" && value.length >= 4) message = message.split(value).join("[redacted]");
   message = message.replace(/https?:\/\/\S+/g, "[provider URL]")
     .replace(/(?:access_token|client_secret|refresh_token|code_verifier)\s*[:=]\s*[^\s,;]+/gi, "[redacted]")
     .replace(/[\r\n]/g, " ").slice(0, 240);

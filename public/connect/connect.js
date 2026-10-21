@@ -7,7 +7,7 @@ async function copy(text) {
   $("#status").textContent =
     "전체 " + text.length.toLocaleString() + "자를 복사했습니다.";
 }
-fetch("workspace.ts?release=instagram-session-v8", { cache: "no-store" })
+fetch("workspace.ts?release=email-discovery-v10", { cache: "no-store" })
   .then((r) => {
     if (!r.ok) throw Error("함수 코드 로드 실패");
     return r.text();

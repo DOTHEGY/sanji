@@ -3,7 +3,20 @@ import { instagramTokenResponse } from "./instagram-token.ts";
 // expiry is absent, 15 minutes is our local session limit, not a provider claim.
 export async function resolveInstagramSession(response: any, request: any, appSecret: string, version: string, time = Date.now()) {
   const token = instagramTokenResponse(response);
-  const profile = await request("https://graph.instagram.com/" + version + "/me?" + new URLSearchParams({fields:"id,user_id,username",access_token:token.access_token}), {}, "Instagram 단기 토큰 계정 검증");
+  let profile: any, error: any;
+  // Both documented profile forms are read-only. Try the unversioned form only
+  // for the specific unsupported-method response, never for revoked tokens.
+  const paths = [version + "/me", "me"];
+  for (const path of paths) {
+    try {
+      profile = await request("https://graph.instagram.com/" + path + "?" + new URLSearchParams({fields:"user_id,username",access_token:token.access_token}), {}, "Instagram 단기 토큰 계정 검증");
+      break;
+    } catch (e) {
+      error = e;
+      if (!String(e?.message || "").includes("Unsupported request - method type: get")) throw e;
+    }
+  }
+  if (!profile) throw error;
   if (!/^\d+$/.test(String(profile.user_id || profile.id || "")) || !profile.username)
     throw new Error("Instagram 계정 ID·이름을 확인할 수 없습니다. 기존 연결은 유지됩니다.");
   try {
