@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>산지 · 운영 워크스페이스</title>
+    <link rel="stylesheet" href="/app/style.css" />
+  </head>
+  <body>
+    <aside>
+      <a class="logo" href="/app/#dashboard"><b>산</b> 산지.</a>
+      <div class="workspace">파트너 워크스페이스 <small>LIVE</small></div>
+      <p class="nav-label">WORKSPACE</p>
+      <nav id="nav"></nav>
+      <div class="user" id="user"></div>
+    </aside>
+    <main>
+      <header>
+        <span id="breadcrumb">운영 워크스페이스</span
+        ><button data-action="logout">로그아웃</button>
+      </header>
+      <div id="connection-banner" class="demo-banner">
+        로그인 후 실제 영업 자료를 안전하게 관리하세요.
+      </div>
+      <section id="app"></section>
+      <footer>
+        실제 발송에는 개별 승인과 공식 계정 연결이 필요합니다. 식품 표시·광고
+        기준과 광고성 정보 전송 요건을 확인하세요.
+      </footer>
+    </main>
+    <dialog id="modal">
+      <div id="modal-content"></div>
+      <button class="close" data-action="close" aria-label="닫기">×</button>
+    </dialog>
+    <div id="toast" role="status"></div>
+    <script src="/app/app.js" defer></script>
+  </body>
+</html>

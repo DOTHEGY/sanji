@@ -1,37 +1,30 @@
-# 산지 · 공동구매 파트너 워크스페이스
+# 산지 · 공동구매 영업 워크스페이스
 
-가상 건강식품 공동구매 영업 MVP. 외부 발송·인증·실제 연락처 수집 없음. 공개 데모에 실제 정보를 입력하지 마세요.
+브랜드·유통사 발굴부터 상품 딜·크리에이터 매칭·승인 제안·답장까지 관리하는 Node.js 24 / SQLite 웹서비스입니다.
+
+- **공개 체험:** https://dothegy.github.io/sanji/ — 가상 데이터 데모, 실제 발송 없음
+- **운영 시작 안내:** https://dothegy.github.io/sanji/operate.html
+- **실제 운영 코드:** `api/`, `private/ui/`, `server.cjs`. 별도 서버 배포 및 외부 계정 연결 필요. 운영 DB에는 가상 데이터 없음.
 
 ## 실행
 
-Node.js 24에서 검증했습니다.
-
 ```sh
 npm ci --cache /tmp/sanji-npm-cache
-npm start
+DATA_DIR=/tmp/sanji-local npm start
 ```
 
-기본 포트 3000. 데이터는 브라우저 localStorage `sanji-v1`에만 보존되며 다른 사용자·브라우저와 공유되지 않습니다. 화면 상단에서 초기화할 수 있습니다. 서버에는 쓰기·메일·DM API가 없습니다.
+루트에서 `/app/`으로 이동합니다. 첫 실행은 DATA_DIR의 비공개 `setup.token` 또는 SANJI_SETUP_TOKEN으로 초기 관리자 계정을 생성합니다. 생성 후 가입은 닫힙니다. 서버 운영 필수 설정과 Gmail/Meta 공식 인증 방법은 [운영 안내](docs/PRODUCTION.md)를 확인하세요. 외부 서비스 비밀번호를 입력하지 않습니다.
 
 ```sh
 npm test
 ```
 
-테스트는 `/usr/bin/chromium`과 실행 중인 서버가 필요합니다. 8개 화면 이동, 후보 검색·메모 저장, 새로고침 보존, 딜 버전 이력, 매칭, 승인 없는 가상 처리 차단, 가상 발송·회신, 수신 거부 목록 저장, 모바일 폭을 검증합니다.
-
-## 데모 체험 순서
-
-1. 브랜드 발굴에서 검색 → 상세 → 후보 저장·상태·메모 변경.
-2. 상품 딜에서 조건 상세 → 새 가격 버전 저장 → 이전 조건 확인.
-3. 크리에이터 발굴 → 프로필 → 상품 매칭 → 1~3개 선택.
-4. 신규 가상 수신자(민서 등)와 확정 상품을 선택 → 카피 작성 → 미리보기 → 승인 → 가상 처리.
-5. 통합 대화함에서 담당자·다음 행동 수정 → 직접 가상 회신. 신규 제안 중복은 차단되므로 기존 대상에는 대화함 사용.
-6. 수신 거부로 분류하면 신규 제안과 회신 모두 차단. 설정에서 제한·기록 확인.
+Chromium이 `/usr/bin/chromium`에 있어야 합니다. 다른 경로는 CHROMIUM_PATH로 지정합니다. 테스트는 독립 임시 DB/서버를 생성하며 실제 외부 발송은 하지 않습니다. Gmail 공급자는 모의 응답으로 검증합니다.
 
 ## 배포
 
-`.github/workflows/pages.yml`은 `public/`만 GitHub Pages에 배포합니다. 저장소 Settings → Pages → Source를 GitHub Actions로 지정해야 합니다. 기본 예상 경로는 `https://dothegy.github.io/sanji/`이지만 배포 작업 성공·외부 HTTP 응답 확인 전에는 공개 완료로 볼 수 없습니다. Actions의 배포 결과 URL을 최종 주소로 사용하세요. 공개 배포는 실사용자 인증이 없는 가상 데모 전용입니다.
+`render.yaml`로 Render의 단일 서버·영구 디스크를 준비할 수 있습니다. **유료 플랜 선언이며 계정 연결·가격 확인·별도 비용 승인 후에만 생성하세요. 아직 운영 서버를 배포하지 않았습니다.** 실발송 플래그는 기본 false입니다. 실제 발송하려면 공식 Gmail/Meta 계정 연결, 서버 발송 활성화, 각 최종 수신자·내용 승인이 필요합니다.
 
-## 구현 범위와 운영 전 요건
+GitHub Pages 워크플로는 `public/`만 배포합니다. 실제 운영 UI·DB·서버 코드·시크릿을 Pages에 복사하지 마세요. 실제 영업 자료는 인증 API 뒤에서 관리합니다.
 
-[docs/OPERATIONS.md](docs/OPERATIONS.md) 참고. 실제 운영 화면이나 서버 인증은 구현하지 않았습니다. 실제 웹 검색·이메일·DM·매출·AI 추론을 동작하는 것처럼 표시하지 않습니다.
+구현 범위, 확인한 정책, 외부 연동 미검증 항목 및 운영 한계는 [docs/PRODUCTION.md](docs/PRODUCTION.md)에 명시했습니다. 이전 데모 설명은 [docs/OPERATIONS.md](docs/OPERATIONS.md)에 있습니다.

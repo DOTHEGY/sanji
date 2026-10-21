@@ -1,1 +1,13 @@
-const http=require('node:http'),fs=require('node:fs'),path=require('node:path');const root=path.join(__dirname,'public');http.createServer((req,res)=>{const p=path.join(root,decodeURIComponent(req.url.split('?')[0])==='/'?'index.html':decodeURIComponent(req.url.split('?')[0]));if(!p.startsWith(root+path.sep)){res.writeHead(403);return res.end();}fs.readFile(p,(e,b)=>{res.writeHead(e?404:200,{'Content-Type':p.endsWith('.js')?'application/javascript':p.endsWith('.css')?'text/css':'text/html','X-Content-Type-Options':'nosniff'});res.end(e?'Not found':b);});}).listen(process.env.PORT||3000,'0.0.0.0');
+const { createApp } = require("./api/app.cjs");
+const app = createApp();
+const server = app.listen(process.env.PORT || 3000, "0.0.0.0", () =>
+  console.log(
+    "Sanji server started. Private workspace: /app/. Real sending defaults to OFF.",
+  ),
+);
+process.on("SIGTERM", () =>
+  server.close(() => {
+    app.locals.db.close();
+    process.exit(0);
+  }),
+);
