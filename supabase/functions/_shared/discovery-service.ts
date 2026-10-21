@@ -165,13 +165,14 @@ export function discoveryService(deps:any){
   if(path==="/discovery/run"&&method==="POST")return await cycle(u);
   if((path==="/discovery/import"||path==="/discovery/prepare-contact")&&method==="POST"){
    const lead=await query(sb.from("sanji_discovery_leads").select("*").eq("owner",u).eq("id",b.id).single());
-   const selected=(lead.data.contacts||[]).find((c:any)=>c.email===b.email);
+   const eligible=(lead.data.contacts||[]).filter((c:any)=>!c.excluded&&!c.excludeFromOutreach);
+   const selected=eligible.find((c:any)=>c.email===b.email)||eligible[0];
    const company=String(lead.data.outreach?.brandName||lead.data.name||lead.data.company||b.company||"").trim().slice(0,200);
    const emails=mailRecipients({emails:(lead.data.contacts||[]).filter((e:any)=>!e.excluded&&!e.excludeFromOutreach).map((e:any)=>e.email)});
    if(selected){const source=String(b.source||selected.source||"").trim();if(source)selected.source=publicUrl(source).toString();else if(selected.evidenceType!=="screenshot")throw Error("이메일 원문 출처를 확인하세요.");}
    if(!b.approved||!selected||!company)throw Error("회사·이메일 소유 관계·사업용 용도를 확인하고 승인하세요.");
-   const key=companyIdentity(company),existing=await query(sb.from("sanji_records").select("id,data,version").eq("owner",u).eq("kind","candidate"));
-   const previous=existing.find((r:any)=>r.id===lead.data.candidateId||companyIdentity(r.data.company||"")===key||emails.includes(r.data.contact?.email?.toLowerCase()));
+   const key=companyIdentity(lead.data.company||company),existing=await query(sb.from("sanji_records").select("id,data,version").eq("owner",u).eq("kind","candidate"));
+   const previous=existing.find((r:any)=>r.id===lead.data.candidateId||(r.data.companyKey||companyIdentity(r.data.legalCompanyName||r.data.company||""))===key||emails.includes(r.data.contact?.email?.toLowerCase()));
    const c={name:company,company,legalCompanyName:lead.data.company||"",recipientEmails:emails,companyKey:key,kind:"브랜드",product:String(lead.data.product||"").slice(0,200),category:"미확인",classification:"개별 제품의 법적 분류 확인 필요",authority:"브랜드·법인 소유 관계 확인, 해당 제품 판매·유통 권한은 별도 확인 필요",website:lead.data.website,channels:lead.data.channel||"",contact:{email:selected.email,owner:company,source:selected.source,checked:selected.checked.slice(0,10),purpose:selected.purpose === "사업 제휴" ? "사업 제휴" : "비즈니스",verified:true},handle:"",profile:"",agency:"",topics:[],followers:null,metricsSource:"",metricsChecked:"",evidence:[{url:selected.source,checked:selected.checked.slice(0,10),description:selected.context}],reason:"공식 사이트의 공개 회사 이메일을 직접 검토·승인함. 제품·조건은 미확인.",status:"미접촉",note:"이메일 용도: "+selected.purpose+" / 발굴 출처: "+lead.data.source,next:"상품·법적 분류와 제안 근거 확인",due:"",owner:""};
    c.product=String(lead.data.outreach?.productName||c.product||"").slice(0,200);
    const saved=await putRecord(u,"candidate",previous?{...previous.data,...c,status:previous.data.status,version:previous.version}:c,previous?.id);await query(sb.from("sanji_discovery_leads").update({status:"imported",data:{...lead.data,candidateId:saved.id},updated:new Date().toISOString()}).eq("owner",u).eq("id",lead.id));await audit(u,"discovery_email_approved",{lead:lead.id});return {ok:true,candidateId:saved.id};

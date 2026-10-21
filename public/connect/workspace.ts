@@ -352,7 +352,8 @@ function discoveryService(deps) {
     if (path === "/discovery/run" && method === "POST") return await cycle(u);
     if ((path === "/discovery/import" || path === "/discovery/prepare-contact") && method === "POST") {
       const lead = await query2(sb2.from("sanji_discovery_leads").select("*").eq("owner", u).eq("id", b.id).single());
-      const selected = (lead.data.contacts || []).find((c2) => c2.email === b.email);
+      const eligible = (lead.data.contacts || []).filter((c2) => !c2.excluded && !c2.excludeFromOutreach);
+      const selected = eligible.find((c2) => c2.email === b.email) || eligible[0];
       const company = String(lead.data.outreach?.brandName || lead.data.name || lead.data.company || b.company || "").trim().slice(0, 200);
       const emails = mailRecipients({ emails: (lead.data.contacts || []).filter((e) => !e.excluded && !e.excludeFromOutreach).map((e) => e.email) });
       if (selected) {
@@ -361,8 +362,8 @@ function discoveryService(deps) {
         else if (selected.evidenceType !== "screenshot") throw Error("\uC774\uBA54\uC77C \uC6D0\uBB38 \uCD9C\uCC98\uB97C \uD655\uC778\uD558\uC138\uC694.");
       }
       if (!b.approved || !selected || !company) throw Error("\uD68C\uC0AC\xB7\uC774\uBA54\uC77C \uC18C\uC720 \uAD00\uACC4\xB7\uC0AC\uC5C5\uC6A9 \uC6A9\uB3C4\uB97C \uD655\uC778\uD558\uACE0 \uC2B9\uC778\uD558\uC138\uC694.");
-      const key2 = companyIdentity(company), existing = await query2(sb2.from("sanji_records").select("id,data,version").eq("owner", u).eq("kind", "candidate"));
-      const previous = existing.find((r) => r.id === lead.data.candidateId || companyIdentity(r.data.company || "") === key2 || emails.includes(r.data.contact?.email?.toLowerCase()));
+      const key2 = companyIdentity(lead.data.company || company), existing = await query2(sb2.from("sanji_records").select("id,data,version").eq("owner", u).eq("kind", "candidate"));
+      const previous = existing.find((r) => r.id === lead.data.candidateId || (r.data.companyKey || companyIdentity(r.data.legalCompanyName || r.data.company || "")) === key2 || emails.includes(r.data.contact?.email?.toLowerCase()));
       const c = { name: company, company, legalCompanyName: lead.data.company || "", recipientEmails: emails, companyKey: key2, kind: "\uBE0C\uB79C\uB4DC", product: String(lead.data.product || "").slice(0, 200), category: "\uBBF8\uD655\uC778", classification: "\uAC1C\uBCC4 \uC81C\uD488\uC758 \uBC95\uC801 \uBD84\uB958 \uD655\uC778 \uD544\uC694", authority: "\uBE0C\uB79C\uB4DC\xB7\uBC95\uC778 \uC18C\uC720 \uAD00\uACC4 \uD655\uC778, \uD574\uB2F9 \uC81C\uD488 \uD310\uB9E4\xB7\uC720\uD1B5 \uAD8C\uD55C\uC740 \uBCC4\uB3C4 \uD655\uC778 \uD544\uC694", website: lead.data.website, channels: lead.data.channel || "", contact: { email: selected.email, owner: company, source: selected.source, checked: selected.checked.slice(0, 10), purpose: selected.purpose === "\uC0AC\uC5C5 \uC81C\uD734" ? "\uC0AC\uC5C5 \uC81C\uD734" : "\uBE44\uC988\uB2C8\uC2A4", verified: true }, handle: "", profile: "", agency: "", topics: [], followers: null, metricsSource: "", metricsChecked: "", evidence: [{ url: selected.source, checked: selected.checked.slice(0, 10), description: selected.context }], reason: "\uACF5\uC2DD \uC0AC\uC774\uD2B8\uC758 \uACF5\uAC1C \uD68C\uC0AC \uC774\uBA54\uC77C\uC744 \uC9C1\uC811 \uAC80\uD1A0\xB7\uC2B9\uC778\uD568. \uC81C\uD488\xB7\uC870\uAC74\uC740 \uBBF8\uD655\uC778.", status: "\uBBF8\uC811\uCD09", note: "\uC774\uBA54\uC77C \uC6A9\uB3C4: " + selected.purpose + " / \uBC1C\uAD74 \uCD9C\uCC98: " + lead.data.source, next: "\uC0C1\uD488\xB7\uBC95\uC801 \uBD84\uB958\uC640 \uC81C\uC548 \uADFC\uAC70 \uD655\uC778", due: "", owner: "" };
       c.product = String(lead.data.outreach?.productName || c.product || "").slice(0, 200);
       const saved = await putRecord2(u, "candidate", previous ? { ...previous.data, ...c, status: previous.data.status, version: previous.version } : c, previous?.id);
