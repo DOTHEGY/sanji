@@ -65,23 +65,6 @@ function parseOfficialPage(html, source, checked) {
   }).filter((a) => a && /제휴|입점|도매|공동구매|문의|contact|partner|business|회사소개|about/i.test(a.label));
   return { contacts, rejected, links, text: text2.slice(-8e3) };
 }
-function shoppingProspects(items, keyword, checked) {
-  const found = /* @__PURE__ */ new Map();
-  for (const item of items) {
-    const brand = plainHtml(String(item.brand || "")), maker = plainHtml(String(item.maker || ""));
-    const name = brand || maker;
-    if (!name || name.length < 2 || /쿠팡|네이버|스마트스토어|해외직구|상세참조|상세설명|상품상세|기타|알수없음|없음/.test(name)) continue;
-    const identity = companyIdentity(name);
-    if (found.has(identity)) continue;
-    let source = "";
-    try {
-      source = publicUrl(String(item.link || "")).toString();
-    } catch {
-    }
-    found.set(identity, { identity, name, company: "", manufacturerClaim: maker, brandClaim: brand, product: plainHtml(String(item.title || "")), source, channel: item.mallName || "\uB124\uC774\uBC84 \uC0C1\uD488\uAC80\uC0C9", keyword, checked, classification: "\uBBF8\uD655\uC778", authority: "\uBBF8\uD655\uC778", officialVerified: false });
-  }
-  return Array.from(found.values());
-}
 function robotsAllowed(robots, path) {
   let active = false;
   const rules = [];
@@ -100,16 +83,7 @@ function robotsAllowed(robots, path) {
 var defaults = { enabled: false, target: 30, keywords: ["\uAC74\uAC15\uAE30\uB2A5\uC2DD\uD488 \uC720\uC0B0\uADE0", "\uAC74\uAC15\uC2DD\uD488 \uD6A8\uC18C", "\uAC74\uAC15\uC2DD\uD488 \uB2E8\uBC31\uC9C8", "\uAC74\uAC15\uC2DD\uD488 \uACAC\uACFC", "\uAC74\uAC15\uC2DD\uD488 \uC62C\uB9AC\uBE0C\uC624\uC77C"] };
 var day = () => (/* @__PURE__ */ new Date()).toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
 function discoveryService(deps) {
-  const { sb: sb2, query: query2, connection: connection2, saveConnection: saveConnection2, env: env2, audit: audit2, putRecord: putRecord2 } = deps;
-  const navKeys = async (u) => await connection2(u, "naver") || { clientId: env2("NAVER_CLIENT_ID"), clientSecret: env2("NAVER_CLIENT_SECRET") };
-  async function naver(u, kind, q, start = 1) {
-    const c = await navKeys(u);
-    if (!c.clientId || !c.clientSecret) throw Error("\uB124\uC774\uBC84 \uAC80\uC0C9 \uC5F0\uACB0\uC774 \uD544\uC694\uD569\uB2C8\uB2E4. API \uD0A4 \uC5C6\uC774\uB3C4 \uACF5\uC2DD URL \uC9C1\uC811 \uC218\uC9D1\uC740 \uAC00\uB2A5\uD569\uB2C8\uB2E4.");
-    const url2 = "https://openapi.naver.com/v1/search/" + kind + ".json?" + new URLSearchParams({ query: q, display: kind === "shop" ? "100" : "5", start: String(start) });
-    const r = await fetch(url2, { headers: { "X-Naver-Client-Id": c.clientId, "X-Naver-Client-Secret": c.clientSecret }, signal: AbortSignal.timeout(1e4) });
-    if (!r.ok) throw Error("\uB124\uC774\uBC84 \uAC80\uC0C9 \uC694\uCCAD \uC2E4\uD328 (" + r.status + "). \uD0A4\xB7\uC774\uC6A9 \uD55C\uB3C4\uB97C \uD655\uC778\uD558\uC138\uC694. \uC790\uB3D9 \uC7AC\uC2DC\uB3C4\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
-    return await r.json();
-  }
+  const { sb: sb2, query: query2, audit: audit2, putRecord: putRecord2 } = deps;
   async function publicFetch(value, cap = 7e5) {
     let url2 = publicUrl(value);
     for (let redirect = 0; redirect < 3; redirect++) {
@@ -169,7 +143,7 @@ function discoveryService(deps) {
     const results = [first];
     let count = 1;
     for (const link of first.links) {
-      if (count >= 3) break;
+      if (count >= 5) break;
       let next;
       try {
         next = publicUrl(link.url);
@@ -192,9 +166,8 @@ function discoveryService(deps) {
   }
   async function cycle(u) {
     const settings = await config(u);
-    const keys = await navKeys(u);
     let pending = await query2(sb2.from("sanji_discovery_leads").select("*").eq("owner", u).eq("status", "new").order("created").limit(1));
-    if (!pending.length && (!keys.clientId || !keys.clientSecret)) return { status: "waiting_connection", message: "\uB124\uC774\uBC84 \uAC80\uC0C9 API \uBBF8\uC5F0\uACB0 \xB7 \uACF5\uC2DD URL \uC9C1\uC811 \uC218\uC9D1\uC740 \uAC00\uB2A5" };
+    if (!pending.length) return { status: "sources_exhausted", message: "\uD604\uC7AC \uD648\uD398\uC774\uC9C0 \uD6C4\uBCF4 \uB300\uAE30\uC5F4\uC744 \uBAA8\uB450 \uD655\uC778\uD588\uC2B5\uB2C8\uB2E4. \uC2E0\uADDC \uC18C\uC2A4 \uBCF4\uAC15\uC774 \uD544\uC694\uD569\uB2C8\uB2E4. \uC218\uC9D1 \uC911\uC73C\uB85C \uD45C\uC2DC\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4." };
     const claimed = await query2(sb2.rpc("sanji_discovery_claim", { p_owner: u }));
     const usage = Array.isArray(claimed) ? claimed[0] : claimed;
     if (!usage?.owner) return { status: "busy_or_budget", message: "\uC2E4\uD589 \uC911\uC774\uAC70\uB098 \uC624\uB298 \uC2E4\uD589 \uD55C\uB3C4\uC5D0 \uB3C4\uB2EC\uD588\uC2B5\uB2C8\uB2E4." };
@@ -204,19 +177,9 @@ function discoveryService(deps) {
       if (pending.length) {
         const lead = pending[0], data = { ...lead.data };
         try {
-          if (!data.website) {
-            const result = await naver(u, "webkr", data.name + " \uACF5\uC2DD \uD648\uD398\uC774\uC9C0 \uC81C\uD734 \uBB38\uC758");
-            const match = (result.items || []).find((x) => {
-              try {
-                return !marketplace(x.link) && companyIdentity(plainHtml(x.title + " " + x.description)).includes(companyIdentity(data.name)) && publicUrl(x.link);
-              } catch {
-                return false;
-              }
-            });
-            if (!match) throw Error("\uACF5\uC2DD \uD648\uD398\uC774\uC9C0 \uD6C4\uBCF4\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. URL\uC744 \uC9C1\uC811 \uBCF4\uC644\uD558\uC138\uC694.");
-            data.website = match.link;
-            data.officialSearchSource = { title: plainHtml(match.title), description: plainHtml(match.description), url: match.link };
-          }
+          if (!data.website) throw Error("\uD648\uD398\uC774\uC9C0 \uD6C4\uBCF4 \uC8FC\uC18C\uAC00 \uC5C6\uC5B4 \uC218\uC9D1\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+          data.crawlStarted = (/* @__PURE__ */ new Date()).toISOString();
+          await query2(sb2.from("sanji_discovery_leads").update({ data, updated: data.crawlStarted }).eq("owner", u).eq("id", lead.id));
           Object.assign(data, await crawl(data.website));
           const previous = await query2(sb2.from("sanji_discovery_leads").select("data").eq("owner", u));
           const known = new Set(previous.flatMap((r) => (r.data.contacts || []).map((c) => c.email.toLowerCase())));
@@ -224,23 +187,14 @@ function discoveryService(deps) {
           data.error = "";
         } catch (e) {
           data.error = String(e.message || "\uC218\uC9D1 \uC2E4\uD328").slice(0, 400);
+          error = data.error;
           data.contacts = data.contacts || [];
+          data.checked = (/* @__PURE__ */ new Date()).toISOString();
         }
         await query2(sb2.from("sanji_discovery_leads").update({ data, status: "review", updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", u).eq("id", lead.id));
         processed = 1;
-      } else if (usage.added < 150) {
-        const keywords = settings.keywords.length ? settings.keywords : defaults.keywords;
-        const index = Math.floor(usage.calls / 2) % keywords.length;
-        const page = Math.floor(usage.calls / (keywords.length * 2)) % 10;
-        const result = await naver(u, "shop", keywords[index], page * 100 + 1);
-        const prospects = shoppingProspects(result.items || [], keywords[index], (/* @__PURE__ */ new Date()).toISOString()).slice(0, Math.min(20, 150 - usage.added));
-        for (const data of prospects) {
-          const { error: e } = await sb2.from("sanji_discovery_leads").insert({ owner: u, identity: data.identity, data });
-          if (!e) added++;
-          else if (e.code !== "23505") throw Error("\uBC1C\uAD74 \uD6C4\uBCF4 \uC800\uC7A5 \uC2E4\uD328");
-        }
       }
-      return { status: "processed", added, processed, emailCandidatesAdded: emails };
+      return { status: error ? "source_failed" : "processed", added, processed, emailCandidatesAdded: emails, message: error || (emails ? "\uACF5\uAC1C \uC774\uBA54\uC77C \uD6C4\uBCF4 " + emails + "\uAC1C \uD655\uBCF4" : "\uC5C5\uCCB4 \uD655\uC778 \uC644\uB8CC \xB7 \uC2E0\uADDC \uC774\uBA54\uC77C \uD6C4\uBCF4 \uC5C6\uC74C") };
     } catch (e) {
       error = String(e.message || "\uBC1C\uAD74 \uC2E4\uD589 \uC2E4\uD328").slice(0, 400);
       return { status: "error", message: error };
@@ -258,10 +212,16 @@ function discoveryService(deps) {
   }
   async function handle(path, method, u, input) {
     if (path === "/discovery" && method === "GET") {
-      const settings = await config(u), keys = await navKeys(u);
+      const settings = await config(u);
       const leads = await query2(sb2.from("sanji_discovery_leads").select("*").eq("owner", u).order("created", { ascending: false }).limit(500));
       const usage = await query2(sb2.from("sanji_discovery_usage").select("*").eq("owner", u).eq("day", day()).maybeSingle());
-      return { settings, leads, usage: usage || { calls: 0, added: 0, processed: 0, emails: 0 }, configured: !!keys.clientId && !!keys.clientSecret, scope: "\uD55C\uAD6D\uC2DC\uAC04 \uC624\uB298 \xB7 \uACF5\uC2DD \uACF5\uAC1C \uC774\uBA54\uC77C \uD6C4\uBCF4 / \uCD5C\uC885 \uAC80\uC99D \uC804 \xB7 \uBB38\uC758\uD3FC\xB7\uC804\uD654\uBC88\uD638 \uC81C\uC678", llmCalls: 0 };
+      const today = usage || { calls: 0, added: 0, processed: 0, emails: 0 };
+      const pending = leads.filter((l) => l.status === "new");
+      const active = !!usage?.lease_until && Date.parse(usage.lease_until) > Date.now();
+      const status = !settings.enabled ? "paused" : today.emails >= settings.target ? "target_reached" : today.calls >= 160 ? "daily_limit" : !pending.length ? "sources_exhausted" : active ? "running" : "queued";
+      const labels = { paused: "\uC790\uB3D9 \uC218\uC9D1 \uAEBC\uC9D0", target_reached: "\uC624\uB298 \uC774\uBA54\uC77C \uD6C4\uBCF4 \uBAA9\uD45C \uB3C4\uB2EC", daily_limit: "\uC624\uB298 \uC2E4\uD589 \uD55C\uB3C4 \uB3C4\uB2EC", sources_exhausted: "\uB300\uAE30\uC5F4 \uC18C\uC9C4 \xB7 \uC2E0\uADDC \uC18C\uC2A4 \uBCF4\uAC15 \uD544\uC694", running: "\uD648\uD398\uC774\uC9C0 \uACF5\uAC1C \uC774\uBA54\uC77C \uD655\uC778 \uC911", queued: "\uD648\uD398\uC774\uC9C0 \uD6C4\uBCF4 \uC21C\uCC28 \uC218\uC9D1 \uB300\uAE30 \xB7 5\uBD84 \uAC04\uACA9" };
+      const activity = leads.filter((l) => l.status !== "new").sort((a, b2) => Date.parse(b2.updated) - Date.parse(a.updated)).slice(0, 12).map((l) => ({ id: l.id, name: l.data.name, checked: l.data.checked || l.updated, emailCount: l.data.contacts?.length || 0, pages: l.data.pages || 0, error: l.data.error || "" }));
+      return { settings, leads, usage: today, configured: false, engine: { status, label: labels[status], pending: pending.length, current: active ? pending[0]?.data.name || "" : "", heartbeat: settings.updated, lastCompleted: activity[0]?.checked || null, mode: "homepage_queue", nextRun: settings.enabled && pending.length && today.emails < settings.target && today.calls < 160 ? new Date(Math.ceil((Date.now() + 1e3) / 3e5) * 3e5).toISOString() : null }, activity, scope: "\uD55C\uAD6D\uC2DC\uAC04 \uC624\uB298 \xB7 \uACF5\uC2DD \uACF5\uAC1C \uC774\uBA54\uC77C \uD6C4\uBCF4 / \uCD5C\uC885 \uAC80\uC99D \uC804 \xB7 \uBB38\uC758\uD3FC\xB7\uC804\uD654\uBC88\uD638 \uC81C\uC678", llmCalls: 0 };
     }
     const b = await input();
     if (path === "/discovery/settings" && method === "POST") {
@@ -269,12 +229,6 @@ function discoveryService(deps) {
       if (!Number.isInteger(target) || target < 1 || target > 100) throw Error("\uD558\uB8E8 \uBAA9\uD45C\uB294 1~100\uC785\uB2C8\uB2E4.");
       const keywords = Array.isArray(b.keywords) ? b.keywords.map((x) => String(x).trim().slice(0, 80)).filter(Boolean).slice(0, 20) : defaults.keywords;
       await query2(sb2.from("sanji_discovery_config").upsert({ owner: u, enabled: b.enabled === true, target, keywords, updated: (/* @__PURE__ */ new Date()).toISOString() }, { onConflict: "owner" }));
-      return { ok: true };
-    }
-    if (path === "/discovery/credentials" && method === "POST") {
-      if (typeof b.clientId !== "string" || typeof b.clientSecret !== "string" || b.clientId.length < 8 || b.clientSecret.length < 8 || b.clientId.length > 200 || b.clientSecret.length > 300) throw Error("\uBC1C\uAE09\uB41C \uB124\uC774\uBC84 \uAC80\uC0C9 API Client ID\xB7Secret\uC744 \uD655\uC778\uD558\uC138\uC694.");
-      await saveConnection2(u, "naver", { clientId: b.clientId.trim(), clientSecret: b.clientSecret.trim() });
-      await audit2(u, "discovery_search_connected");
       return { ok: true };
     }
     if (path === "/discovery/seed" && method === "POST") {
@@ -309,13 +263,7 @@ function discoveryService(deps) {
     }
     throw Error("\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uBC1C\uAD74 \uC791\uC5C5\uC785\uB2C8\uB2E4.");
   }
-  return { handle, scheduled, configured: async (u) => {
-    const c = await navKeys(u);
-    return !!c.clientId && !!c.clientSecret;
-  }, search: async (u, q) => {
-    const r = await naver(u, "webkr", q);
-    return { results: (r.items || []).map((x) => ({ title: plainHtml(x.title), url: x.link, description: plainHtml(x.description), checked: (/* @__PURE__ */ new Date()).toISOString(), verification: "\uB124\uC774\uBC84 \uAC80\uC0C9 \uACB0\uACFC \xB7 \uD68C\uC0AC \uC18C\uC720 \uAD00\uACC4 \uAC80\uC99D \uC804" })) };
-  } };
+  return { handle, scheduled, configured: async () => false };
 }
 
 // supabase/functions/_shared/mail-mime.ts
@@ -1250,7 +1198,7 @@ Deno.serve(async (req) => {
       }
     }
     if (path === "/health" && req.method === "GET")
-      return json({ ok: true, version: 11, authRequired: true });
+      return json({ ok: true, version: 12, authRequired: true });
     if (path === "/discovery/tick" && req.method === "POST") {
       if (!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403, "\uBC1C\uAD74 \uC2E4\uD589\uAE30 \uC778\uC99D \uC2E4\uD328");
       return json(await discovery.scheduled());
@@ -1467,7 +1415,6 @@ Deno.serve(async (req) => {
     if (path === "/search" && req.method === "GET") {
       const q = (url2.searchParams.get("q") || "").slice(0, 200);
       if (q.length < 2) fail(400, "\uAC80\uC0C9\uC5B4\uB97C 2\uC790 \uC774\uC0C1 \uC785\uB825\uD558\uC138\uC694.");
-      if (await discovery.configured(u)) return json(await discovery.search(u, q + (url2.searchParams.get("type") === "creator" ? " site:instagram.com \uAC74\uAC15\uC2DD\uD488 \uACF5\uB3D9\uAD6C\uB9E4" : " \uACF5\uC2DD \uD648\uD398\uC774\uC9C0 \uD68C\uC0AC \uC774\uBA54\uC77C")));
       if (!env("BRAVE_SEARCH_API_KEY"))
         return json(
           {

@@ -720,7 +720,7 @@ Deno.serve(async (req: Request) => {
       }
     }
     if (path === "/health" && req.method === "GET")
-      return json({ ok: true, version: 11, authRequired: true });
+      return json({ ok: true, version: 12, authRequired: true });
     if (path === "/discovery/tick" && req.method === "POST") {
       if (!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403, "발굴 실행기 인증 실패");
       return json(await discovery.scheduled());
@@ -969,7 +969,7 @@ Deno.serve(async (req: Request) => {
     if (path === "/search" && req.method === "GET") {
       const q = (url.searchParams.get("q") || "").slice(0, 200);
       if (q.length < 2) fail(400, "검색어를 2자 이상 입력하세요.");
-      if (await discovery.configured(u)) return json(await discovery.search(u,q + (url.searchParams.get("type") === "creator" ? " site:instagram.com 건강식품 공동구매" : " 공식 홈페이지 회사 이메일")));
+
       if (!env("BRAVE_SEARCH_API_KEY"))
         return json(
           {

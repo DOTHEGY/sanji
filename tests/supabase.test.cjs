@@ -283,7 +283,7 @@ test("Edge function compiles and denies unauthenticated/disallowed-origin reques
         new Request("https://project.example" + prefix + "/health"),
       );
       assert.equal(health.status, 200);
-      assert.equal((await health.json()).version, 11);
+      assert.equal((await health.json()).version, 12);
       const callback = await handler(new Request("https://project.example" + prefix + "/oauth/instagram/callback"));
       assert.equal(callback.status, 302);
       const back = new URL(callback.headers.get("location"));
@@ -816,4 +816,67 @@ test("Gmail replies address the actual Reply-To sender and reject ambiguous or i
  assert.equal(selected.email,"partner@brand.example.test");assert.equal(selected.changed,true);
  assert.equal(replyRecipient(null,"info@brand.example.test").email,"info@brand.example.test");
  assert.throws(()=>replyRecipient({from:"invalid"},"info@brand.example.test"),/회신 주소/);
+});
+
+test("Brand workflow combines discovery and registered brands, previews exact copy, invalidates approval on edits, and schedules only checked recipients", async () => {
+  const express = require("express"), app = express(); app.use(express.json());
+  const brands = ["A","B"].map((name,i)=>({id:"brand-"+i,name,company:name,kind:"브랜드",category:"미확인",status:"미접촉",product:"제품 "+name,topics:[],contact:{email:name.toLowerCase()+"@brand.example",verified:true}}));
+  const state={candidates:brands,deals:[],templates:[{id:"copy",name:"보존할 카피",channel:"이메일",subject:"(광고) {{브랜드명}} 제안",body:"공통 앞부분\n{{개인화}}\n공통 끝부분",signature:"원본 서명"}],threads:[],outbox:[],jobs:[],suppression:[],settings:{dailyLimit:20,senderName:"운영자",senderAddress:"주소",senderPhone:"번호"}};
+  const drafted=[],scheduled=[];let sends=0;
+  app.all(/^\/api\/.*/, (req,res)=>{
+    const p=req.path.replace("/api","");
+    if(p==="/me")return res.json({email:"owner@example.test",csrf:"test"});
+    if(p==="/state")return res.json(state);
+    if(p==="/connections")return res.json({gmail:{connected:true,enabled:true},instagram:{connected:false},search:{configured:false},ai:{configured:false}});
+    if(p==="/discovery")return res.json({settings:{enabled:true,target:30,keywords:[]},leads:[],usage:{emails:1,processed:3,calls:3},activity:[{name:"확인한 업체",emailCount:1,pages:2,checked:new Date().toISOString()}],engine:{status:"sources_exhausted",label:"대기열 소진 · 신규 소스 보강 필요",pending:0}});
+    if(p==="/drafts") {drafted.push(req.body);const c=brands.find(c=>c.id===req.body.target);return res.json({id:"draft-"+c.id,hash:"hash-"+c.id,target:c.name,email:c.contact.email,subject:req.body.subject.replace("{{브랜드명}}",c.name),body:req.body.body+"\n"+req.body.signature,attachments:[]});}
+    if(p==="/schedule") {scheduled.push(req.body);return res.json({run_at:req.body.runAt});}
+    if(p.endsWith("/send")){sends++;return res.status(500).json({error:"never send in this test"});}
+    return res.status(404).json({error:p});
+  });
+  app.use("/app",express.static("private/ui"));
+  const server=app.listen(0,"127.0.0.1");await new Promise(r=>server.on("listening",r));let browser;
+  try {
+    browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||"/usr/bin/chromium",headless:true,args:["--no-sandbox"]});const page=await browser.newPage();const errors=[];page.on("pageerror",e=>errors.push(e.message));
+    await page.goto("http://127.0.0.1:"+server.address().port+"/app/#brands");
+    await page.waitForSelector("#discovery-progress");
+    assert.equal(await page.locator('#nav a[href="#discovery"]').count(),0);
+    assert.equal(await page.getByText("네이버 검색 연결",{exact:true}).count(),0);
+    assert.match(await page.locator("#discovery-progress").textContent(),/대기열 소진/);
+    await page.locator('[data-action="brand-tab"][data-id="saved"]').click();
+    await page.waitForSelector("#candidate-results");
+    assert.equal(await page.locator('#candidate-results [data-action="compose"]').count(),2);
+    await page.locator('#candidate-results [data-action="compose"]').first().click();
+    assert.equal(await page.locator('#compose-form [name=body]').inputValue(),state.templates[0].body);
+    await page.locator('[data-action="close"]').click();
+    await page.locator('[data-action="bulk-compose"]').click();
+    await page.locator('[name=bulk-target]').first().check();
+    await page.locator('[name="intro-brand-0"]').fill("확인한 제품 특징. 확인한 콘텐츠 적합성.");
+    await page.locator('#bulk-compose-form [name=lawfulBasis]').fill("사전 동의 기록 확인 완료");
+    await page.locator('#bulk-compose-form button[type=submit]').click();
+    await page.waitForSelector('[name=bulk-approve]');
+    assert.equal(drafted[0].body,"공통 앞부분\n확인한 제품 특징. 확인한 콘텐츠 적합성.\n공통 끝부분");
+    assert.equal(drafted[0].subject,state.templates[0].subject);assert.equal(scheduled.length,0);assert.equal(sends,0);
+    await page.locator('[data-action="bulk-schedule"]').click();
+    await page.waitForFunction(()=>document.querySelector("#form-error").textContent.includes("승인 체크"));assert.equal(scheduled.length,0);
+    await page.locator('[name=bulk-approve]').check();
+    await page.locator('#bulk-compose-form [name=body]').fill(state.templates[0].body+" 수정");
+    assert.equal(await page.locator('[name=bulk-approve]').count(),0);
+    await page.locator('#bulk-compose-form button[type=submit]').click();await page.waitForSelector('[name=bulk-approve]');
+    await page.locator('[name=bulk-approve]').check();
+    const future=new Date(Date.now()+86400000);await page.locator('#bulk-run-at').fill(future.toISOString().slice(0,16));
+    await page.locator('[data-action="bulk-schedule"]').click();await page.waitForFunction(()=>document.querySelector('[id^="bulk-result-"]').textContent.includes("예약 완료"));
+    assert.equal(scheduled.length,1);assert.equal(scheduled[0].approved,true);assert.equal(scheduled[0].draftId,"draft-brand-0");assert.equal(sends,0);
+    assert.equal(await page.locator('[name=bulk-approve]:disabled').count(),1);assert.deepEqual(errors,[]);
+  } finally {if(browser)await browser.close();await new Promise(r=>server.close(r));}
+});
+
+test("Discovery works without search API keys and reports exhausted sources instead of pretending to collect", async()=>{
+  const compiled=esbuild.buildSync({entryPoints:["supabase/functions/_shared/discovery-service.ts"],bundle:true,platform:"node",format:"cjs",write:false});
+  const m={exports:{}};new Function("module","exports",compiled.outputFiles[0].text)(m,m.exports);
+  const stored={sanji_discovery_config:{enabled:true,target:30,keywords:[],updated:new Date().toISOString()},sanji_discovery_leads:[],sanji_discovery_usage:{calls:3,emails:1,processed:3}};
+  const sb={from(table){const q={table};for(const k of ["select","eq","order","limit","maybeSingle"])q[k]=()=>q;return q;}};
+  const service=m.exports.discoveryService({sb,query:async q=>stored[q.table],audit:async()=>{},putRecord:async()=>{}});
+  const r=await service.handle("/discovery","GET","owner",async()=>({}));assert.equal(r.engine.status,"sources_exhausted");assert.equal(r.engine.nextRun,null);assert.equal(r.engine.mode,"homepage_queue");
+  const result=await service.handle("/discovery/run","POST","owner",async()=>({}));assert.equal(result.status,"sources_exhausted");assert.equal(JSON.stringify(result).includes("네이버"),false);
 });

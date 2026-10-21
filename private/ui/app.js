@@ -48,7 +48,6 @@ let csrf = "",
 const routes = {
   dashboard: ["◫", "대시보드"],
   brands: ["▣", "브랜드 발굴"],
-  discovery: ["✉", "이메일 자동 발굴"],
   deals: ["▤", "상품 딜"],
   creators: ["◎", "크리에이터 발굴"],
   matching: ["⇄", "상품 매칭"],
@@ -161,7 +160,8 @@ async function authPage() {
 }
 function render() {
   if (!me) return;
-  const key = location.hash.slice(1) || "dashboard";
+  const rawKey = location.hash.slice(1) || "dashboard";
+  const key = rawKey === "discovery" ? "brands" : rawKey;
   $("#nav").innerHTML = Object.entries(routes)
     .map(
       ([k, v]) =>
@@ -210,15 +210,16 @@ function dashboard() {
 function outboxTable() {
   return `<div class="table-scroll"><table><thead><tr><th>대상</th><th>채널</th><th>상태</th><th>일시</th></tr></thead><tbody>${data.outbox.map((o) => `<tr><td>${esc(targetName(o.target))}</td><td>${esc(o.channel)}</td><td>${tag(o.status, o.status === "accepted" ? "" : "orange")}<small>${esc(o.data.error || "")}</small></td><td>${esc(new Date(o.created).toLocaleString("ko-KR"))}</td></tr>`).join("") || '<tr><td colspan="4" class="empty">실제 발송·수동 기록이 없습니다.</td></tr>'}</tbody></table></div>`;
 }
-function candidatesPage(type) {
+function candidatesPage(type, embedded = false) {
   const creator = type === "creator";
-  $("#app").innerHTML =
-    head(
+  const destination = embedded ? $("#brand-saved") : $("#app");
+  destination.innerHTML =
+    (embedded ? "" : head(
       creator ? "크리에이터 발굴" : "브랜드·유통사 발굴",
       "공식 출처를 기록하고, 연락처 소유 관계를 확인한 뒤 영업 후보로 관리하세요.",
       button("＋ 직접 추가", creator ? "add-creator" : "add-brand", "", true),
-    ) +
-    `<div class="panel"><h2>웹에서 실제 후보 찾기</h2><form id="search-form" data-type="${type}" class="toolbar"><input class="search" name="q" required minlength="2" placeholder="${creator ? "예: 식물성 레시피 공동구매 인스타그램" : "예: 건강기능식품 브랜드 공식 도매 문의"}" aria-label="실제 후보 웹 검색"><button type="submit">검색</button><a href="https://www.google.com/search?q=${encodeURIComponent(creator ? "site:instagram.com 건강식품 공동구매" : "건강기능식품 공식 브랜드 제휴 문의")}" target="_blank" rel="noopener">직접 검색 ↗</a></form><div id="search-results" class="fine">${connections.search.configured ? "검색 API 연결됨. 결과는 검증 전 자료로 표시됩니다." : "검색 API 미연결. 검색 링크는 지금 이용할 수 있고, 확인한 공식 URL은 직접 추가할 수 있습니다."}</div></div><div class="toolbar"><input id="candidate-filter" class="search" placeholder="저장한 후보 이름·제품·콘텐츠 주제 검색" aria-label="후보 검색"><select id="status-filter"><option value="">모든 상태</option>${statuses.map((s) => `<option>${s}</option>`).join("")}</select><select id="category-filter"><option value="">모든 분류</option><option>건강기능식품</option><option>일반 건강식품</option><option>미확인</option></select></div><div class="panel" id="candidate-results" data-type="${type}"></div>`;
+    )) +
+    `<details class="panel"><summary>직접 검색·추가 (보조 기능)</summary>${button("＋ 직접 추가", creator ? "add-creator" : "add-brand")}<h2>웹에서 실제 후보 찾기</h2><form id="search-form" data-type="${type}" class="toolbar"><input class="search" name="q" required minlength="2" placeholder="${creator ? "예: 식물성 레시피 공동구매 인스타그램" : "예: 건강기능식품 브랜드 공식 도매 문의"}" aria-label="실제 후보 웹 검색"><button type="submit">검색</button><a href="https://www.google.com/search?q=${encodeURIComponent(creator ? "site:instagram.com 건강식품 공동구매" : "건강기능식품 공식 브랜드 제휴 문의")}" target="_blank" rel="noopener">직접 검색 ↗</a></form><div id="search-results" class="fine">${connections.search.configured ? "검색 API 연결됨. 결과는 검증 전 자료로 표시됩니다." : "검색 API 미연결. 검색 링크는 지금 이용할 수 있고, 확인한 공식 URL은 직접 추가할 수 있습니다."}</div></details><div class="toolbar"><input id="candidate-filter" class="search" placeholder="저장한 후보 이름·제품·콘텐츠 주제 검색" aria-label="후보 검색"><select id="status-filter"><option value="">모든 상태</option>${statuses.map((s) => `<option>${s}</option>`).join("")}</select><select id="category-filter"><option value="">모든 분류</option><option>건강기능식품</option><option>일반 건강식품</option><option>미확인</option></select></div><div class="panel" id="candidate-results" data-type="${type}"></div>`;
   filterCandidates();
 }
 function filterCandidates() {
@@ -237,7 +238,7 @@ function filterCandidates() {
       (!cat || c.category === cat),
   );
   $("#candidate-results").innerHTML =
-    `<div class="table-scroll"><table><thead><tr><th>이름 / 회사</th><th>분류 · 상태</th><th>공식 출처 · 연락처</th><th>다음 행동</th><th></th></tr></thead><tbody>${rows.map((c) => `<tr><td><strong>${esc(c.name)}</strong><small>${esc(c.company || c.handle || "관계 미확인")}</small><small>${esc(c.product || c.topics.join(" · "))}</small></td><td>${tag(c.category)} ${tag(c.status)}<small>${esc(c.classification)}</small></td><td>${c.website || c.profile ? `<a href="${esc(c.website || c.profile)}" target="_blank" rel="noopener">공식 링크 확인 ↗</a>` : "미확인"}<small>${esc(c.contact.email || "이메일 미확인")}</small>${tag(c.contact.verified ? "사용자 검증 기록 있음" : "검증 전", c.contact.verified ? "" : "orange")}</td><td>${esc(c.next || "—")}<small>${esc(c.owner)} · ${esc(c.due)}</small></td><td>${button("상세·수정", "edit-candidate", c.id)} ${button("제안", "compose", c.id)}</td></tr>`).join("") || '<tr><td colspan="5" class="empty">실제 후보를 추가해 주세요. 가상 데이터는 넣지 않습니다.</td></tr>'}</tbody></table></div>`;
+    `<div class="table-scroll"><table><thead><tr><th>이름 / 회사</th><th>분류 · 상태</th><th>공식 출처 · 연락처</th><th>다음 행동</th><th></th></tr></thead><tbody>${rows.map((c) => `<tr><td><strong>${esc(c.name)}</strong><small>${esc(c.company || c.handle || "관계 미확인")}</small><small>${esc(c.product || c.topics.join(" · "))}</small></td><td>${tag(c.category)} ${tag(c.status)}<small>${esc(c.classification)}</small></td><td>${c.website || c.profile ? `<a href="${esc(c.website || c.profile)}" target="_blank" rel="noopener">공식 링크 확인 ↗</a>` : "미확인"}<small>${esc(c.contact.email || "이메일 미확인")}</small>${tag(c.contact.verified ? "사용자 검증 기록 있음" : "검증 전", c.contact.verified ? "" : "orange")}</td><td>${esc(c.next || "—")}<small>${esc(c.owner)} · ${esc(c.due)}</small></td><td>${button("상세·수정", "edit-candidate", c.id)} ${button("메일 작성·미리보기", "compose", c.id)}</td></tr>`).join("") || '<tr><td colspan="5" class="empty">실제 후보를 추가해 주세요. 가상 데이터는 넣지 않습니다.</td></tr>'}</tbody></table></div>`;
 }
 function candidateForm(id = "", creator = false) {
   const c = candidate(id) || {
@@ -358,6 +359,7 @@ function templateForm(id = "") {
 }
 function compose(target = "", ds = [], templateId = "", replyTo = "") {
   close();
+  if (!templateId && !replyTo) templateId = data.templates.find(t => t.channel === "이메일")?.id || "";
   const t = data.templates.find((t) => t.id === templateId) || {
     subject: replyTo
       ? "Re: " + data.threads.find((t) => t.id === replyTo).subject
@@ -467,31 +469,114 @@ function settingsPage() {
       "운영 설정·공식 계정 연결",
       "외부 서비스 비밀번호를 받지 않습니다. OAuth 토큰은 서버에서 암호화해 저장합니다.",
     ) +
-    `${oauthNotice ? `<div class="${oauthNoticeIsError ? "error" : "notice"}" role="alert"><strong>계정 인증 안내</strong><p>${esc(oauthNotice)}</p><p>아래 계정 추가·재인증 버튼에서 다시 시작하세요. 기존 연결은 유지됩니다.</p></div>` : ""}<div class="grid"><div class="panel"><h2>Gmail / Google Workspace</h2><p class="notice">${connections.gmail.connected ? esc(connections.gmail.email) + " 연결됨" : "아직 연결되지 않았습니다."}<br>공식 OAuth 앱 설정 ${connections.gmail.configured ? "완료" : "필요"} · 실제 발송 ${connections.gmail.enabled ? "사용자 승인 후 허용" : "차단 중"}</p>${button("Google 공식 로그인", "connect-gmail", "", true)} ${button("Gmail 연결·권한 점검 (발송 없음)", "check-gmail")}<div id="gmail-check-result" class="fine" role="status"></div> ${button("연결 해제", "disconnect", "gmail")}<p class="fine">gmail.send / gmail.readonly 권한. 운영 계정 동의·검증이 필요합니다. 동기화는 등록 대상과 최근 90일 대화만 가져옵니다.</p></div><div class="panel"><h2>Instagram 프로페셔널 계정</h2><p class="notice">${connections.instagram.connected ? esc(connections.instagram.username) + " 연결됨" : "미연결"} · 앱 설정 ${connections.instagram.configured ? "완료" : "필요"}<br>신규 선제 DM 자동화 불가. 사용자가 먼저 보낸 대화는 웹훅으로 수신하며 24시간 이내 텍스트 회신만 제공합니다.</p>${button("Instagram 계정 추가·재인증", "connect-instagram", "", true)}${connections.instagram.accounts ? connections.instagram.accounts.map((a) => `<div class="task"><strong>@${esc(a.username)}</strong> · ${a.expires && a.expires < Date.now() ? "재인증 필요" : a.tokenMode === "short" ? "임시 연결 · 최대 15분 · 장기 인증 미완료" : "연결됨"}${a.warning ? `<p class="notice">${esc(a.warning)}</p>` : ""} ${button("이 계정 연결 해제", "disconnect", a.key)}</div>`).join("") : button("연결 해제", "disconnect", "instagram")}${(connections.instagram.loginPending || []).map(a => `<div class="notice"><strong>로그인 응답 수신 · 계정 조회 대기</strong><p>${esc(a.checked)} · DM 수신·발송은 미연동입니다.</p><details><summary>계정 조회 진단 정보</summary><p>${esc(a.detail)}</p></details>${button("이 인증 기록 제거", "disconnect", a.key)}</div>`).join("")}<p class="fine">Instagram 로그인은 선택 사항이며 브랜드 이메일 업무와 독립적입니다. 인증 응답만 받은 상태와 계정·API 검증 완료 상태를 구분합니다.</p><p class="fine">계정 추가 시 Instagram 인증 화면에서 다른 계정으로 로그인하세요. 기존 연결은 유지됩니다. 회신은 해당 대화를 받은 계정으로 고정됩니다.</p><p class="fine">공식 인증·권한 심사·웹훅 설정이 필요합니다. 계정 아이디만으로 로그인하지 않습니다.</p></div></div><div class="panel"><h2>발신자 정보·일일 제한</h2><form id="settings-form" class="form-grid" style="margin-top:20px">${field("senderName", "사업자·발신자명", data.settings.senderName)}${field("senderAddress", "사업장 주소", data.settings.senderAddress)}${field("senderPhone", "발신자 연락처", data.settings.senderPhone)}${field("dailyLimit", "일일 발송 제한 (UTC 기준, 1~100)", data.settings.dailyLimit || 20, "number")}<div class="full"><p class="notice">수신 거부 안내는 이메일 하단에 자동 포함됩니다. 영업 메일은 기본적으로 광고성 정보로 처리합니다. 무료 회신 수신 거부, 동의 근거·발신자 표시·야간 제한은 운영 전에 전문가와 확인하세요. 수신자·본문을 최종 승인한 건만 실제로 발송합니다.</p><button type="submit" class="primary">운영 설정 저장</button></div></form><h3>수신 거부·거절 차단 목록</h3>${data.suppression.map((s) => `<div class="task">${esc(s.identity)} ${tag(s.reason, "orange")}</div>`).join("") || '<p class="fine">차단 기록 없음</p>'}<h3>오류·발송 로그</h3>${outboxTable()}<h3>승인된 예약 자동 발송</h3>${jobTable()}${button("감사 기록 조회", "audit")}</div><div class="notice">검색 API: ${connections.search.configured ? "연결됨" : "이메일 자동 발굴에서 검색 연결 가능"}. Instagram 정책은 <a href="https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api/" target="_blank" rel="noopener">공식 문서</a>를 확인하세요. 수신·전달·매출 수치는 확인한 값만 표시합니다. AI는 지정한 개인화 문장만 제안하며 공통 카피를 유지합니다. 승인된 예약만 Cron 실행기가 자동 처리하며 미승인 초안은 발송하지 않습니다.</div>`;
+    `${oauthNotice ? `<div class="${oauthNoticeIsError ? "error" : "notice"}" role="alert"><strong>계정 인증 안내</strong><p>${esc(oauthNotice)}</p><p>아래 계정 추가·재인증 버튼에서 다시 시작하세요. 기존 연결은 유지됩니다.</p></div>` : ""}<div class="grid"><div class="panel"><h2>Gmail / Google Workspace</h2><p class="notice">${connections.gmail.connected ? esc(connections.gmail.email) + " 연결됨" : "아직 연결되지 않았습니다."}<br>공식 OAuth 앱 설정 ${connections.gmail.configured ? "완료" : "필요"} · 실제 발송 ${connections.gmail.enabled ? "사용자 승인 후 허용" : "차단 중"}</p>${button("Google 공식 로그인", "connect-gmail", "", true)} ${button("Gmail 연결·권한 점검 (발송 없음)", "check-gmail")}<div id="gmail-check-result" class="fine" role="status"></div> ${button("연결 해제", "disconnect", "gmail")}<p class="fine">gmail.send / gmail.readonly 권한. 운영 계정 동의·검증이 필요합니다. 동기화는 등록 대상과 최근 90일 대화만 가져옵니다.</p></div><div class="panel"><h2>Instagram 프로페셔널 계정</h2><p class="notice">${connections.instagram.connected ? esc(connections.instagram.username) + " 연결됨" : "미연결"} · 앱 설정 ${connections.instagram.configured ? "완료" : "필요"}<br>신규 선제 DM 자동화 불가. 사용자가 먼저 보낸 대화는 웹훅으로 수신하며 24시간 이내 텍스트 회신만 제공합니다.</p>${button("Instagram 계정 추가·재인증", "connect-instagram", "", true)}${connections.instagram.accounts ? connections.instagram.accounts.map((a) => `<div class="task"><strong>@${esc(a.username)}</strong> · ${a.expires && a.expires < Date.now() ? "재인증 필요" : a.tokenMode === "short" ? "임시 연결 · 최대 15분 · 장기 인증 미완료" : "연결됨"}${a.warning ? `<p class="notice">${esc(a.warning)}</p>` : ""} ${button("이 계정 연결 해제", "disconnect", a.key)}</div>`).join("") : button("연결 해제", "disconnect", "instagram")}${(connections.instagram.loginPending || []).map(a => `<div class="notice"><strong>${a.username ? "@" + esc(a.username) + " · " : ""}로그인 응답 수신 · 계정 조회 대기</strong>${a.userDesignated ? "<p class=fine>계정명은 사용자가 지정한 표시이며 API로 확인되지 않았습니다.</p>" : ""}<p>${esc(a.checked)} · DM 수신·발송은 미연동입니다.</p><details><summary>계정 조회 진단 정보</summary><p>${esc(a.detail)}</p></details>${button("이 인증 기록 제거", "disconnect", a.key)}</div>`).join("")}<p class="fine">Instagram 로그인은 선택 사항이며 브랜드 이메일 업무와 독립적입니다. 인증 응답만 받은 상태와 계정·API 검증 완료 상태를 구분합니다.</p><p class="fine">계정 추가 시 Instagram 인증 화면에서 다른 계정으로 로그인하세요. 기존 연결은 유지됩니다. 회신은 해당 대화를 받은 계정으로 고정됩니다.</p><p class="fine">공식 인증·권한 심사·웹훅 설정이 필요합니다. 계정 아이디만으로 로그인하지 않습니다.</p></div></div><div class="panel"><h2>발신자 정보·일일 제한</h2><form id="settings-form" class="form-grid" style="margin-top:20px">${field("senderName", "사업자·발신자명", data.settings.senderName)}${field("senderAddress", "사업장 주소", data.settings.senderAddress)}${field("senderPhone", "발신자 연락처", data.settings.senderPhone)}${field("dailyLimit", "일일 발송 제한 (UTC 기준, 1~100)", data.settings.dailyLimit || 20, "number")}<div class="full"><p class="notice">수신 거부 안내는 이메일 하단에 자동 포함됩니다. 영업 메일은 기본적으로 광고성 정보로 처리합니다. 무료 회신 수신 거부, 동의 근거·발신자 표시·야간 제한은 운영 전에 전문가와 확인하세요. 수신자·본문을 최종 승인한 건만 실제로 발송합니다.</p><button type="submit" class="primary">운영 설정 저장</button></div></form><h3>수신 거부·거절 차단 목록</h3>${data.suppression.map((s) => `<div class="task">${esc(s.identity)} ${tag(s.reason, "orange")}</div>`).join("") || '<p class="fine">차단 기록 없음</p>'}<h3>오류·발송 로그</h3>${outboxTable()}<h3>승인된 예약 자동 발송</h3>${jobTable()}${button("감사 기록 조회", "audit")}</div><div class="notice">Instagram 정책은 <a href="https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api/" target="_blank" rel="noopener">공식 문서</a>를 확인하세요. 수신·전달·매출 수치는 확인한 값만 표시합니다. AI는 지정한 개인화 문장만 제안하며 공통 카피를 유지합니다. 승인된 예약만 Cron 실행기가 자동 처리하며 미승인 초안은 발송하지 않습니다.</div>`;
 }
 let discoveryView = null, discoveryOnlyEmails = true;
+let brandTab = "discovery", discoveryRefresh = null;
+const localTime = v => v ? new Date(v).toLocaleString("ko-KR") : "아직 없음";
+function discoveryProgress(r) {
+  const contacts = new Set(r.leads.flatMap(l => (l.data.contacts || []).map(c => c.email.toLowerCase())));
+  return `<div class="stats"><div class="stat"><label>오늘 신규 이메일 후보</label><strong>${r.usage.emails} / ${r.settings.target}</strong><small>한국시간 · 고유 메일 · 검증 전</small></div><div class="stat"><label>전체 이메일 후보</label><strong>${contacts.size}</strong><small>전화·문의 폼 제외</small></div><div class="stat"><label>검토 후 브랜드 등록</label><strong>${r.leads.filter(l => l.status === "imported").length}</strong><small>소유 관계 승인 완료</small></div><div class="stat"><label>수집 대기 업체</label><strong>${r.engine?.pending ?? r.leads.filter(l => l.status === "new").length}</strong><small>오늘 처리 ${r.usage.processed}곳</small></div></div>
+  <div class="notice" role="status"><strong>${esc(r.engine?.label || "수집 현황 확인 중")}</strong>${r.engine?.current ? " · " + esc(r.engine.current) : ""}<br>최근 수집 완료: ${esc(localTime(r.engine?.lastCompleted))} · 다음 실행 예정: ${esc(localTime(r.engine?.nextRun))}<br><small>화면은 30초마다 현황을 갱신합니다. 서버 수집은 5분 간격입니다. 홈페이지 후보 대기열을 확인하며 검색 API는 필요하지 않습니다. 대기열이 소진되면 별도 웹 조사로 소스를 보강해야 합니다. 하루 30개는 목표이며 확보 보장이 아닙니다.</small>${r.usage.last_error ? "<p class=error>최근 수집 오류: " + esc(r.usage.last_error) + "</p>" : ""}</div>
+  <details class="panel" open><summary>최근 수집 진행 내역</summary>${(r.activity || []).map(a => `<div class="task"><strong>${esc(a.name)}</strong> · ${a.emailCount ? "메일 후보 " + a.emailCount + "개" : "메일 미확보"}<small>${esc(localTime(a.checked))} · 확인 ${a.pages}페이지</small>${a.error ? `<p class="error">${esc(a.error)}</p>` : ""}</div>`).join("") || '<p class="fine">아직 처리한 업체가 없습니다.</p>'}</details>`;
+}
 async function discoveryPage() {
-  $("#app").innerHTML = head("회사 이메일 발굴", "공식 출처의 공식 회사 이메일을 찾습니다. 전화·문의 폼은 이메일 실적에서 제외합니다.") + '<div class="panel">수집 현황 확인 중…</div>';
+  clearTimeout(discoveryRefresh);
+  $("#app").innerHTML = head("브랜드 발굴·이메일 영업", "이메일 수집 → 출처·소유 관계 검토 → 브랜드 등록 → 메일 미리보기 → 승인한 건 일괄 예약", button("진행 현황 새로고침", "discovery-refresh")) + '<div class="panel">수집 현황 확인 중…</div>';
   try {
     const r = await api("/discovery"); discoveryView = r;
-    const contacts = new Set(r.leads.flatMap(l => (l.data.contacts || []).map(c => c.email)));
-    const verified = r.leads.filter(l => l.status === "imported").length;
     const rows = r.leads.filter(l => !discoveryOnlyEmails || l.data.contacts?.length);
-    $("#app").innerHTML = head("회사 이메일 발굴", "대표·일반 문의·영업·제휴·고객센터까지 폭넓게 찾고 용도를 구분합니다. 자동 발송하지 않습니다.", button("지금 한 단계 수집", "discovery-run", "", true)) +
-      `<div class="stats"><div class="stat"><label>오늘 이메일 후보</label><strong>${r.usage.emails} / ${r.settings.target}</strong><small>한국시간 · 신규 고유 공식 공개 메일 후보 · 최종 검증 전</small></div><div class="stat"><label>전체 이메일 후보</label><strong>${contacts.size}</strong><small>전화·문의 폼·제외 주소는 미포함</small></div><div class="stat"><label>검토 후 등록</label><strong>${verified}</strong><small>회사 소유 관계를 직접 승인한 업체</small></div><div class="stat"><label>대기 업체</label><strong>${r.leads.filter(l => l.status === "new").length}</strong><small>오늘 검토 ${r.usage.processed}곳 · AI 호출 0회</small></div></div>` +
-      `<p class="notice">${r.configured ? "네이버 검색 연결됨" : "네이버 검색 미연결 · 자동 검색은 키 등록 후 시작됩니다. 공식 URL 직접 수집은 가능합니다."} · 자동 발굴 ${r.settings.enabled ? "켜짐" : "꺼짐"}. 하루 목표는 이메일 후보이며 실제 확보를 보장하는 수치가 아닙니다. 법인 중복·소유 관계 검증과 발송 승인은 별도입니다.${r.usage.last_error ? " 최근 오류: " + esc(r.usage.last_error) : ""}</p>` +
-      `<details class="panel"><summary>하루 목표·자동 발굴 설정</summary><form id="discovery-settings" class="form-grid">${field("target", "하루 공식 공개 이메일 후보 목표", r.settings.target, "number")}${field("enabled", "5분마다 실행 · 목표·일일 한도에 도달하면 대기", r.settings.enabled, "checkbox")}${field("keywords", "발굴 키워드 · 한 줄에 하나", r.settings.keywords.join("\n"), "textarea")}<button type="submit">설정 저장</button></form><p class="fine">쿠팡·스마트스토어 상품은 네이버 상품검색 결과를 통해 발견합니다. 플랫폼 로그인·차단 우회·무단 대량 스크래핑을 하지 않습니다. AI를 쓰지 않고 하루 최대 160단계·신규 업체 후보 150곳까지 처리합니다.</p></details>` +
-      `<details class="panel"><summary>네이버 검색 연결</summary><p>네이버 개발자센터에서 검색 API 사용 앱을 발급한 뒤 입력하세요. 제공량·약관은 발급 콘솔에서 확인하세요. 유료 검색·AI 서비스를 자동 결제하지 않습니다. 키는 서버에서 암호화 보관합니다.</p><a href="https://developers.naver.com/apps/#/register" target="_blank" rel="noopener">네이버 검색 API 앱 등록 ↗</a><form id="discovery-credentials" class="form-grid">${field("clientId", "Client ID", "")}${field("clientSecret", "Client Secret", "", "password")}<button type="submit">검색 연결 저장</button></form></details>` +
-      `<details class="panel"><summary>공식 홈페이지 URL로 직접 이메일 찾기</summary><form id="discovery-seed" class="form-grid">${field("name", "확인한 회사·브랜드명", "")}${field("url", "공식 홈페이지 HTTPS URL", "", "url")}<button type="submit">수집 대기열에 추가</button></form><p class="fine">동일 공식 사이트에서 최대 3페이지를 확인합니다. 이메일을 추측하지 않으며 로그인·보안문자·robots.txt 제한을 우회하지 않습니다.</p></details>` +
-      `<div class="actions">${button(discoveryOnlyEmails ? "메일 미확보 업체도 보기" : "이메일 있는 업체만 보기", "discovery-filter")}${button("이메일 후보 목록 복사", "discovery-copy")}</div>` +
-      `<div class="cards">${rows.map(l => `<article class="panel">${tag(l.status === "imported" ? "검토 후 등록됨" : l.data.contacts?.length ? "공식 공개 메일 후보 · 소유 관계 검토 전" : l.status === "new" ? "수집 대기" : "메일 미확보")}<h3>${esc(l.data.name)}</h3><p>${esc(l.data.product || "상품 미선정")}<br>${esc(l.data.channel || "")} · 제품 법적 분류·판매 권한 미확인</p>${l.data.website ? `<a href="${esc(l.data.website)}" target="_blank" rel="noopener">홈페이지 후보 ↗</a>` : ""}<p class="fine">발견 출처: ${l.data.source ? `<a href="${esc(l.data.source)}" target="_blank" rel="noopener">원본 보기</a>` : "미확인"} · ${esc(l.data.checked || "")}</p>${l.data.error ? `<p class="error">${esc(l.data.error)}</p>` : ""}${(l.data.contacts || []).map(c => `<div class="message"><strong>${esc(c.email)}</strong>${tag(c.purpose || "용도 미확인")}<p class="fine">${esc(c.ownership || "소유 관계 검토 필요")}</p><p>${esc(c.context)}</p><a href="${esc(c.source)}" target="_blank" rel="noopener">이메일 공식 출처 ↗</a> · ${esc(c.checked)}</div>`).join("")}${l.data.contacts?.length && l.status !== "imported" ? `<form id="discovery-import-${l.id}" data-discovery-import="true" data-id="${l.id}">${field("company", "확인한 이메일 소유 법인명", l.data.company || "")}<label class="field">등록할 이메일<select name="email">${l.data.contacts.map(c => `<option>${esc(c.email)}</option>`).join("")}</select></label>${field("approved", "공식 사이트 소유 회사와 제안 대상 회사가 같고 해당 회사가 공식 공개한 이메일임을 확인했습니다", false, "checkbox")}<button type="submit">검토한 이메일로 브랜드 등록</button></form>` : ""}${!l.data.contacts?.length && l.status !== "new" ? `<form id="discovery-requeue-${l.id}" data-discovery-requeue="true" data-id="${l.id}">${field("url", "확인한 공식 홈페이지 URL로 재수집", l.data.website || "", "url")}<button type="submit">URL 보완 후 대기열에 넣기</button></form>` : ""}<p class="fine">${l.data.excludedCount || 0}개 주소 제외. 이메일 미확보 업체는 실적에 포함되지 않습니다.</p></article>`).join("") || '<div class="panel empty">아직 조건을 충족한 이메일 후보가 없습니다. 검색 연결 후 실행하거나 공식 홈페이지 URL을 추가하세요.</div>'}</div>`;
-  } catch (e) { $("#app").innerHTML = head("이메일 발굴 연결 확인", "") + `<div class="error">${esc(e.message)}</div>`; }
+    $("#app").innerHTML = head("브랜드 발굴·이메일 영업", "이메일 수집 → 소유 관계 검토 → 브랜드 등록 → 메일 미리보기 → 승인한 건 일괄 예약", button("진행 현황 새로고침", "discovery-refresh")) +
+      `<div class="actions">${button("발굴·수집 현황", "brand-tab", "discovery", brandTab === "discovery")}${button("등록 브랜드·메일 작성", "brand-tab", "saved", brandTab === "saved")}${button("일괄 메일 작성·미리보기", "bulk-compose", "", true)}</div><div id="discovery-progress">${discoveryProgress(r)}</div>` +
+      (brandTab === "saved" ? '<div class="panel"><h2>등록 후 이렇게 진행하세요</h2><p>브랜드의 제품명·이메일을 확인한 뒤 ‘메일 작성·미리보기’를 누르세요. 공통 카피는 <a href="#templates">템플릿</a>에서 편집하고, 개인화 1~2줄은 수신자별로 입력합니다. 최종 내용을 승인하면 예약 실행기가 발송하고, 답장은 <a href="#inbox">통합 대화함</a>에서 확인·회신합니다.</p></div><div id="brand-saved"></div><div class="panel"><h2>승인된 메일 예약 현황</h2>'+jobTable()+'</div>' :
+      `<details class="panel"><summary>수집 설정·보조 기능</summary><form id="discovery-settings" class="form-grid">${field("target", "하루 신규 이메일 후보 목표", r.settings.target, "number")}${field("enabled", "5분 간격 자동 수집", r.settings.enabled, "checkbox")}<input name="keywords" type="hidden" value="${esc(r.settings.keywords.join("\n"))}"><button type="submit">설정 저장</button></form>${button("지금 다음 업체 수집", "discovery-run")}<details><summary>직접 홈페이지 추가 (보조 기능)</summary><form id="discovery-seed" class="form-grid">${field("name", "회사·브랜드명", "")}${field("url", "홈페이지 후보 HTTPS URL", "", "url")}<button type="submit">수집 대기열에 추가</button></form></details><p class="fine">대표·일반 문의·고객센터 메일도 찾고 용도를 구분합니다. 이메일 추측·차단 우회·자동 문의폼 제출은 하지 않습니다. AI 호출 없이 사이트당 최대 5페이지를 확인합니다.</p></details>` +
+      `<div class="actions">${button(discoveryOnlyEmails ? "메일 미확보·대기 업체도 보기" : "이메일 있는 업체만 보기", "discovery-filter")}${button("이메일 후보 목록 복사", "discovery-copy")}</div>` +
+      `<div class="cards">${rows.map(l => `<article class="panel">${tag(l.status === "imported" ? "검토 후 등록됨" : l.data.contacts?.length ? "공식 공개 메일 후보 · 소유 관계 검토 전" : l.status === "new" ? "수집 대기" : "메일 미확보")}<h3>${esc(l.data.name)}</h3><p>${esc(l.data.product || "상품 미선정")}<br>${esc(l.data.channel || "")} · 제품 법적 분류·판매 권한 미확인</p>${l.data.website ? `<a href="${esc(l.data.website)}" target="_blank" rel="noopener">홈페이지 후보 ↗</a>` : ""}<p class="fine">발견 출처: ${l.data.source ? `<a href="${esc(l.data.source)}" target="_blank" rel="noopener">원본 보기</a>` : "미확인"} · ${esc(l.data.checked || "")}</p>${l.data.error ? `<p class="error">${esc(l.data.error)}</p>` : ""}${(l.data.contacts || []).map(c => `<div class="message"><strong>${esc(c.email)}</strong>${tag(c.purpose || "용도 미확인")}<p class="fine">${esc(c.ownership || "소유 관계 검토 필요")}</p><p>${esc(c.context)}</p><a href="${esc(c.source)}" target="_blank" rel="noopener">이메일 공식 출처 ↗</a> · ${esc(c.checked)}</div>`).join("")}${l.data.contacts?.length && l.status !== "imported" ? `<form id="discovery-import-${l.id}" data-discovery-import="true" data-id="${l.id}">${field("company", "확인한 이메일 소유 법인명", l.data.company || "")}<label class="field">등록할 이메일<select name="email">${l.data.contacts.map(c => `<option>${esc(c.email)}</option>`).join("")}</select></label>${field("approved", "공식 사이트 소유 회사와 제안 대상 회사가 같고 해당 회사가 공식 공개한 이메일임을 확인했습니다", false, "checkbox")}<button type="submit">검토한 이메일로 브랜드 등록</button></form>` : ""}${!l.data.contacts?.length && l.status !== "new" ? `<form id="discovery-requeue-${l.id}" data-discovery-requeue="true" data-id="${l.id}">${field("url", "확인한 공식 홈페이지 URL로 재수집", l.data.website || "", "url")}<button type="submit">URL 보완 후 대기열에 넣기</button></form>` : ""}<p class="fine">${l.data.excludedCount || 0}개 주소 제외. 이메일 미확보 업체는 실적에 포함되지 않습니다.</p></article>`).join("") || '<div class="panel empty">아직 조건을 충족한 이메일 후보가 없습니다. 홈페이지 후보를 순서대로 확인하고 있습니다. 진행 현황에서 대기·실패 여부를 확인하세요.</div>'}</div>`);
+    if (brandTab === "saved") candidatesPage("brand", true);
+    scheduleDiscoveryRefresh();
+  } catch (e) { if (e.status === 404) { candidatesPage("brand"); return; } $("#app").innerHTML = head("브랜드 발굴 연결 확인", "") + `<div class="error">${esc(e.message)}</div>`; }
+}
+function scheduleDiscoveryRefresh() {
+  clearTimeout(discoveryRefresh);
+  discoveryRefresh = setTimeout(async () => {
+    if (!me || !["brands", "discovery"].includes(location.hash.slice(1))) return;
+    try { const r = await api("/discovery"); discoveryView = r; if ($("#discovery-progress")) $("#discovery-progress").innerHTML = discoveryProgress(r); }
+    catch (e) { if ($("#discovery-progress")) $("#discovery-progress").innerHTML += `<p class="error">현황 갱신 실패: ${esc(e.message)}</p>`; }
+    scheduleDiscoveryRefresh();
+  }, 30000);
+}
+
+let bulkPreviews = [], bulkTemplateId = "";
+function bulkCompose() {
+  close(); bulkPreviews = [];
+  const templates = data.templates.filter(t => t.channel === "이메일");
+  if (!templates.length) return toast("템플릿 화면에 이메일 공통 카피를 먼저 저장하세요.");
+  const targets = data.candidates.filter(c => c.kind !== "크리에이터" && c.contact?.verified && c.contact.email && !["거절", "수신 거부"].includes(c.status) && !data.outbox.some(o => o.target === c.id) && !data.threads.some(t => t.target === c.id));
+  bulkTemplateId = templates[0].id;
+  modal(`<h2>브랜드 이메일 일괄 작성</h2><p class="notice">수신자별 최종 제목·본문을 먼저 만듭니다. 미리보기만으로는 발송되지 않습니다. 마지막에 직접 승인한 메일만 예약합니다. 기존 연락·거절·수신 거부 대상은 제외합니다.</p>${!data.settings.senderAddress ? '<p class="error">발신자 사업장 주소가 비어 있습니다. 연동 설정에서 입력해야 최종 미리보기를 만들 수 있습니다.</p>' : ""}<form id="bulk-compose-form"><label class="field">공통 템플릿<select name="templateId" id="bulk-template">${templates.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select></label><div id="bulk-copy-fields"></div>${field("lawfulBasis", "발송 근거·동의 기록|공개 이메일이라는 사실만으로 광고성 정보 발송에 동의한 것은 아닙니다. 확인한 근거를 적으세요.", "", "textarea")}${field("marketing", "광고성 정보에 해당함", true, "checkbox")}<h3>수신자 선택·개인화 1~2문장</h3><p class="fine">최대 일일 제한 ${Number(data.settings.dailyLimit || 20)}건 이내로 선택하세요. 개인화는 공통 본문의 {{개인화}} 위치에만 들어갑니다.</p>${targets.map(c => `<article class="panel"><label><input type="checkbox" name="bulk-target" value="${c.id}"> <strong>${esc(c.name)}</strong> · ${esc(c.contact.email)}</label><p class="fine">제품: ${esc(c.product || "미입력 · 브랜드 상세에서 실제 제품명 입력 필요")}</p>${field("intro-" + c.id, "눈여겨본 제품 특징 / 콘텐츠·팬층과 맞는 이유 · 근거가 확인된 사실만", "", "textarea")}${connections.ai?.configured ? button("이 업체 개인화 2문장 제안", "bulk-personalize", c.id) : '<p class="fine">AI 미연결 · 개인화 문장을 직접 입력하세요.</p>'}</article>`).join("") || '<p class="notice">선택 가능한 등록 브랜드가 없습니다. 발굴 목록에서 이메일 출처·소유 관계를 검토해 브랜드로 등록하세요.</p>'}<label class="field">공통 첨부파일 (파일당 2MB·최대 5개·합계 5MB)<input name="attachments" type="file" multiple></label><button type="submit" class="primary">선택한 수신자별 최종 메일 미리보기</button></form><div id="bulk-previews"></div>`);
+  applyBulkTemplate();
+}
+function applyBulkTemplate() {
+  bulkTemplateId = $("#bulk-template").value;
+  const t = data.templates.find(t => t.id === bulkTemplateId);
+  $("#bulk-copy-fields").innerHTML = field("subject", "공통 제목 · 광고성 메일은 (광고)로 시작", t.subject) + field("body", "공통 본문 · 저장된 카피 그대로", t.body, "textarea") + field("signature", "서명", t.signature, "textarea");
+  invalidateBulk();
+}
+function invalidateBulk() {
+  bulkPreviews = [];
+  if ($("#bulk-previews")) $("#bulk-previews").innerHTML = '<p class="fine">수신자·내용 변경 시 미리보기와 승인을 다시 진행하세요.</p>';
+}
+async function bulkPrepare(form) {
+  invalidateBulk();
+  const f = new FormData(form), targets = f.getAll("bulk-target");
+  if (!targets.length) throw Error("수신자를 선택하세요.");
+  if (targets.length > Number(data.settings.dailyLimit || 20)) throw Error("선택 수가 일일 발송 제한보다 많습니다. 나누어 예약하세요.");
+  const attachments = []; let total = 0;
+  for (const file of form.querySelector("[name=attachments]").files) {
+    if (file.size > 2 * 1024 * 1024) throw Error("첨부파일은 파일당 2MB 이하입니다.");
+    total += file.size;
+    if (total > 5 * 1024 * 1024 || attachments.length >= 5) throw Error("첨부파일은 최대 5개·합계 5MB입니다.");
+    let binary = ""; for (const byte of new Uint8Array(await file.arrayBuffer())) binary += String.fromCharCode(byte);
+    attachments.push({name:file.name,content:btoa(binary)});
+  }
+  const errors = [];
+  for (const target of targets) {
+    $("#bulk-previews").textContent = `최종 메일 생성 중 ${bulkPreviews.length + errors.length + 1} / ${targets.length} · 실제 발송 없음`;
+    try {
+      const body = assemblePersonalization(f.get("body"), f.get("intro-" + target));
+      const p = await api("/drafts", "POST", {target,dealIds:[],channel:"email",subject:f.get("subject"),body,signature:f.get("signature"),lawfulBasis:f.get("lawfulBasis"),marketing:f.has("marketing"),attachments});
+      bulkPreviews.push({...p,candidateId:target});
+    } catch(e) { errors.push({name:targetName(target),error:e.message}); }
+  }
+  $("#bulk-previews").innerHTML = `<h3>최종 메일 ${bulkPreviews.length}건 · 생성 실패 ${errors.length}건</h3><p class="notice">각 메일을 펼쳐 수신자·제목·본문·첨부를 확인하고 개별 체크하세요. 15분 안에 승인해야 합니다. 위 내용을 수정하면 모든 미리보기 승인이 해제됩니다.</p>${errors.map(e => `<p class="error">${esc(e.name)}: ${esc(e.error)}</p>`).join("")}${bulkPreviews.map((p,i) => `<article class="panel"><details open><summary>${esc(p.target)} · ${esc(p.email)}</summary><div class="preview">${esc("수신: " + p.email + "\n제목: " + p.subject + "\n\n" + p.body + "\n\n첨부: " + (p.attachments.map(a => a.name).join(", ") || "없음"))}</div></details><label><input type="checkbox" name="bulk-approve" value="${i}"> 이 수신자·최종 내용·첨부를 확인하고 발송을 승인합니다.</label><div id="bulk-result-${i}" role="status"></div></article>`).join("")}${bulkPreviews.length ? `<label class="field">예약 시각 · 기기 시간 기준 · 광고성 이메일은 한국시간 08~21시<input id="bulk-run-at" type="datetime-local"></label><p class="fine">선택한 시각 이후 5분 간격 실행기가 승인한 건만 순서대로 발송합니다. 일일 제한·중복·수신 거부를 다시 검사하며 실패 건은 자동 재발송하지 않습니다.</p>${button("체크한 메일만 승인·일괄 예약", "bulk-schedule", "", true)}` : ""}`;
+}
+async function bulkSchedule() {
+  const checked = $$("[name=bulk-approve]:checked:not(:disabled)");
+  if (!checked.length) throw Error("최종 메일을 확인한 뒤 수신자별 승인 체크를 하세요.");
+  const value = $("#bulk-run-at")?.value, time = new Date(value);
+  if (!value || !Number.isFinite(time.getTime()) || time.getTime() < Date.now()) throw Error("미래 예약 시각을 선택하세요.");
+  const day = time.toISOString().slice(0,10);
+  const used = data.outbox.filter(o => ["accepted","sending","outcome_unknown"].includes(o.status) && new Date(o.created).toISOString().slice(0,10) === day).length;
+  const reserved = (data.jobs || []).filter(j => ["queued","processing"].includes(j.status) && new Date(j.run_at).toISOString().slice(0,10) === day).length;
+  if (used + reserved + checked.length > Number(data.settings.dailyLimit || 20)) throw Error("해당 날짜의 발송·예약 수를 합하면 일일 제한을 넘습니다. 수신자를 줄이거나 날짜를 나누세요.");
+  let success = 0, failed = 0;
+  for (const check of checked) {
+    const i = Number(check.value), p = bulkPreviews[i];
+    if (!p) continue;
+    try {
+      const r = await api("/schedule", "POST", {draftId:p.id,hash:p.hash,approved:true,runAt:time.toISOString()});
+      check.disabled = true; check.checked = false; success++;
+      $("#bulk-result-"+i).textContent = "예약 완료 · " + localTime(r.run_at);
+    } catch(e) { failed++; $("#bulk-result-"+i).textContent = "예약 실패 · " + e.message; }
+  }
+  data = await api("/state");
+  toast(`예약 완료 ${success}건 · 실패 ${failed}건. 실패한 메일은 예약되지 않았습니다.`);
 }
 
 const pages = {
   dashboard,
   discovery: discoveryPage,
-  brands: () => candidatesPage("brand"),
+  brands: discoveryPage,
   deals: dealsPage,
   creators: () => candidatesPage("creator"),
   matching: matchingPage,
@@ -513,11 +598,11 @@ document.addEventListener("submit", async (e) => {
   try {
     const f = formObject(form),
       fid = form.dataset.id;
+    if (form.id === "bulk-compose-form") { await bulkPrepare(form); return; }
     if (form.id.startsWith("discovery-")) {
       if (form.dataset.discoveryRequeue) await api("/discovery/requeue", "POST", {id:fid,url:f.url});
       else if (form.dataset.discoveryImport) await api("/discovery/import", "POST", { id:fid, email:f.email, company:f.company, approved:f.approved === "on" });
       else if (form.id === "discovery-settings") await api("/discovery/settings", "POST", { target:Number(f.target), enabled:f.enabled === "on", keywords:f.keywords.split(/\r?\n/).filter(Boolean) });
-      else if (form.id === "discovery-credentials") await api("/discovery/credentials", "POST", {clientId:f.clientId,clientSecret:f.clientSecret});
       else if (form.id === "discovery-seed") await api("/discovery/seed", "POST", {name:f.name,url:f.url});
       toast("저장했습니다."); await reload(); await discoveryPage(); return;
     }
@@ -631,6 +716,11 @@ document.addEventListener("submit", async (e) => {
 });
 const actions = {
   close,
+  "bulk-compose": bulkCompose,
+  "bulk-schedule": bulkSchedule,
+  "bulk-personalize": async (target) => { const r = await api("/personalize", "POST", {target,templateId:bulkTemplateId}); $("#bulk-compose-form [name=\"intro-"+target+"\"]").value = r.intro; invalidateBulk(); },
+  "discovery-refresh": discoveryPage,
+  "brand-tab": async (tab) => { brandTab = tab; await discoveryPage(); },
   "discovery-run": async () => { const r = await api("/discovery/run", "POST", {}); await discoveryPage(); toast(r.message || `신규 업체 ${r.added || 0}곳 · 이메일 후보 ${r.emailCandidatesAdded || 0}개 · 검토 ${r.processed || 0}곳`); },
   "discovery-filter": async () => { discoveryOnlyEmails = !discoveryOnlyEmails; await discoveryPage(); },
   "discovery-copy": async () => { const emails = [...new Set((discoveryView?.leads || []).flatMap(l => (l.data.contacts || []).map(c => c.email)))]; if (!emails.length) return toast("확보한 이메일 후보가 없습니다."); await navigator.clipboard.writeText(emails.join("\n")); toast("메일 후보를 복사했습니다. 발송 전 소유 관계와 동의 근거를 확인하세요."); },
@@ -810,6 +900,7 @@ function invalidatePreview() {
 }
 document.addEventListener("input", (e) => {
   if (e.target.closest("#compose-form")) invalidatePreview();
+  if (e.target.closest("#bulk-compose-form")) invalidateBulk();
   if (
     ["candidate-filter", "status-filter", "category-filter"].includes(
       e.target.id,
@@ -820,6 +911,8 @@ document.addEventListener("input", (e) => {
 });
 document.addEventListener("change", (e) => {
   if (e.target.closest("#compose-form")) invalidatePreview();
+  if (e.target.closest("#bulk-compose-form")) invalidateBulk();
+  if (e.target.id === "bulk-template") applyBulkTemplate();
   if (e.target.id === "match-direction") updateMatchOptions();
   if (e.target.id === "match-target") showMatches();
   if (["status-filter", "category-filter"].includes(e.target.id))

@@ -925,8 +925,8 @@ test("Email discovery UI separates mail results from no-email companies and save
   await p.goto(h.base+"/app/");await p.locator("[name=email]").fill("owner@example.com");await p.locator("[name=password]").fill("only-test-password-12345");await p.locator("#auth-form button").click();await p.waitForSelector("#nav a");
   await p.goto(h.base+"/app/#discovery");await p.locator("strong").filter({hasText:"info@brand.example.test"}).waitFor();
   assert.equal(await p.getByText("메일 없는 테스트 회사",{exact:true}).count(),0);
-  await p.getByRole("button",{name:"메일 미확보 업체도 보기"}).click();await p.getByText("메일 없는 테스트 회사",{exact:true}).waitFor();
-  await p.getByText("하루 목표·자동 발굴 설정",{exact:true}).click();await p.locator("#discovery-settings [name=target]").fill("40");await p.locator("#discovery-settings button[type=submit]").click();await p.waitForFunction(()=>document.querySelector("#discovery-settings")!==null);
+  await p.getByRole("button",{name:"메일 미확보·대기 업체도 보기"}).click();await p.getByText("메일 없는 테스트 회사",{exact:true}).waitFor();
+  await p.getByText("수집 설정·보조 기능",{exact:true}).click();await p.locator("#discovery-settings [name=target]").fill("40");await p.locator("#discovery-settings button[type=submit]").click();await p.waitForFunction(()=>document.querySelector("#discovery-settings")!==null);
   assert.equal(saved.target,40);assert.equal(saved.enabled,true);assert.equal((await h.call("/state")).data.outbox.length,0);
  }finally{if(browser)await browser.close();await h.close();}
 });
