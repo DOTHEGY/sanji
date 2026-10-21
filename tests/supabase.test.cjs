@@ -283,7 +283,7 @@ test("Edge function compiles and denies unauthenticated/disallowed-origin reques
         new Request("https://project.example" + prefix + "/health"),
       );
       assert.equal(health.status, 200);
-      assert.equal((await health.json()).version, 10);
+      assert.equal((await health.json()).version, 11);
       const callback = await handler(new Request("https://project.example" + prefix + "/oauth/instagram/callback"));
       assert.equal(callback.status, 302);
       const back = new URL(callback.headers.get("location"));
@@ -796,4 +796,12 @@ test("Discovery schema is repeatable, tenant private and daily claims cannot ove
   const second=(await db.query("select * from public.sanji_discovery_claim($1)",[u1])).rows[0];assert.equal(second.owner,null);
   await login(db,u1);assert.equal((await db.query("select * from public.sanji_discovery_leads")).rows.length,1);
  }finally{await db.close();}
+});
+
+test("Instagram login response status never pretends API verification or persists access tokens",()=>{
+ const compiled=esbuild.buildSync({entryPoints:["supabase/functions/_shared/instagram-token.ts"],bundle:true,platform:"node",format:"cjs",write:false});
+ const m={exports:{}};new Function("module","exports",compiled.outputFiles[0].text)(m,m.exports);
+ const result=m.exports.instagramLoginPending({access_token:"private-token-not-for-status",user_id:"1234"},"API check pending",0);
+ assert.equal(result.connected,false);assert.equal(result.apiVerified,false);assert.equal(result.authorizationResponseReceived,true);assert.equal(result.subject,"1234");
+ assert.equal(JSON.stringify(result).includes("private-token-not-for-status"),false);assert.equal(result.access_token,undefined);
 });

@@ -1,6 +1,6 @@
 import { discoveryService } from "../_shared/discovery-service.ts";
 import { mime } from "../_shared/mail-mime.ts";
-import { instagramTokenResponse } from "../_shared/instagram-token.ts";
+import { instagramTokenResponse, instagramLoginPending } from "../_shared/instagram-token.ts";
 import { resolveInstagramSession } from "../_shared/instagram-session.ts";
 import { checkGmail } from "../_shared/gmail-check.ts";
 import { oauthLifetimeMs, oauthStateProblem, oauthErrorRedirect, providerErrorDetail } from "../_shared/oauth-status.ts";
@@ -410,8 +410,14 @@ async function callback(
     try { session = await resolveInstagramSession(tokenResponse, remote, env("META_APP_SECRET"), env("META_GRAPH_VERSION") || "v26.0"); }
     catch (e) {
       await audit(row.owner, "instagram_profile_failed", {appId:env("META_APP_ID"),version:env("META_GRAPH_VERSION") || "v26.0",tokenFields:Object.keys(token),permissions:token.permissions || null,error:e.message});
-      fail(e instanceof HttpError ? e.status : 502, e.message);
+      const pending = instagramLoginPending(token, e.message);
+      await query(sb.from("sanji_connections").upsert({owner:row.owner,provider:"instagram_login:"+(pending.subject||"latest"),encrypted:await encrypt(pending),summary:pending},{onConflict:"owner,provider"}));
+      const back = new URL(frontend);
+      back.searchParams.set("oauth_notice","Instagram 로그인 응답은 받았습니다. 계정 조회·메시지 API 확인은 대기 중이며 DM 연동 완료 상태는 아닙니다. 브랜드 이메일 영업은 그대로 이용할 수 있습니다.");
+      back.hash = "settings";
+      return Response.redirect(back.toString(),302);
     }
+    await query(sb.from("sanji_connections").delete().eq("owner",row.owner).eq("provider","instagram_login:"+(String(token.user_id||"")||"latest")));
     await query(sb.from("sanji_connections").delete().eq("owner",row.owner).eq("provider","instagram_pending"));
     const accounts = await instagramAccounts(row.owner);
     const existing = accounts.find((a: any) => a.provider === "instagram:" + session.id || String(a.summary?.accountId || "") === session.id || (a.provider === "instagram" && a.summary?.username === session.username));
@@ -710,7 +716,7 @@ Deno.serve(async (req: Request) => {
       }
     }
     if (path === "/health" && req.method === "GET")
-      return json({ ok: true, version: 10, authRequired: true });
+      return json({ ok: true, version: 11, authRequired: true });
     if (path === "/discovery/tick" && req.method === "POST") {
       if (!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403, "발굴 실행기 인증 실패");
       return json(await discovery.scheduled());
@@ -859,6 +865,7 @@ Deno.serve(async (req: Request) => {
       const gmail = await connection(u, "gmail"),
         accounts = await instagramAccounts(u);
       const ig = accounts.find((a: any) => Number(a.summary?.expires) > Date.now())?.summary;
+      const loginPending = await query(sb.from("sanji_connections").select("provider,summary").eq("owner",u).like("provider","instagram_login:%"));
       return json({
         gmail: {
           configured:
@@ -872,6 +879,7 @@ Deno.serve(async (req: Request) => {
           connected: !!ig,
           username: ig?.username || "",
           accounts: accounts.map((a: any) => ({ key: a.provider, ...a.summary })),
+          loginPending:loginPending.map((a:any)=>({key:a.provider,...a.summary})),
           enabled: env("INSTAGRAM_SENDING_ENABLED") === "true",
         },
         search: { configured: !!env("BRAVE_SEARCH_API_KEY") || await discovery.configured(u) },

@@ -8,3 +8,12 @@ export function instagramTokenResponse(response: any, requireExpiry = false) {
     throw new Error("Instagram 장기 토큰의 유효기간을 확인할 수 없습니다. 기존 연결은 유지됩니다.");
   return token;
 }
+
+// Code exchange success is recorded separately from verified API access.
+// Persist no access token in this long-lived status record.
+export function instagramLoginPending(token: any, detail: string, time = Date.now()) {
+  return { connected:false, apiVerified:false, authorizationResponseReceived:true,
+    subject:/^\d+$/.test(String(token.user_id||""))?String(token.user_id):"",
+    stage:"code_exchanged_profile_pending", checked:new Date(time).toISOString(),
+    detail:String(detail||"").slice(0,500) };
+}

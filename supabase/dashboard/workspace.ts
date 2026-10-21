@@ -371,6 +371,17 @@ function instagramTokenResponse(response, requireExpiry = false) {
     throw new Error("Instagram \uC7A5\uAE30 \uD1A0\uD070\uC758 \uC720\uD6A8\uAE30\uAC04\uC744 \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uAE30\uC874 \uC5F0\uACB0\uC740 \uC720\uC9C0\uB429\uB2C8\uB2E4.");
   return token;
 }
+function instagramLoginPending(token, detail, time = Date.now()) {
+  return {
+    connected: false,
+    apiVerified: false,
+    authorizationResponseReceived: true,
+    subject: /^\d+$/.test(String(token.user_id || "")) ? String(token.user_id) : "",
+    stage: "code_exchanged_profile_pending",
+    checked: new Date(time).toISOString(),
+    detail: String(detail || "").slice(0, 500)
+  };
+}
 
 // supabase/functions/_shared/instagram-session.ts
 async function resolveInstagramSession(response, request, appSecret, version, time = Date.now()) {
@@ -975,8 +986,14 @@ async function callback(req, url2, provider, base) {
       session = await resolveInstagramSession(tokenResponse, remote, env("META_APP_SECRET"), env("META_GRAPH_VERSION") || "v26.0");
     } catch (e) {
       await audit(row.owner, "instagram_profile_failed", { appId: env("META_APP_ID"), version: env("META_GRAPH_VERSION") || "v26.0", tokenFields: Object.keys(token), permissions: token.permissions || null, error: e.message });
-      fail(e instanceof HttpError ? e.status : 502, e.message);
+      const pending = instagramLoginPending(token, e.message);
+      await query(sb.from("sanji_connections").upsert({ owner: row.owner, provider: "instagram_login:" + (pending.subject || "latest"), encrypted: await encrypt(pending), summary: pending }, { onConflict: "owner,provider" }));
+      const back = new URL(frontend);
+      back.searchParams.set("oauth_notice", "Instagram \uB85C\uADF8\uC778 \uC751\uB2F5\uC740 \uBC1B\uC558\uC2B5\uB2C8\uB2E4. \uACC4\uC815 \uC870\uD68C\xB7\uBA54\uC2DC\uC9C0 API \uD655\uC778\uC740 \uB300\uAE30 \uC911\uC774\uBA70 DM \uC5F0\uB3D9 \uC644\uB8CC \uC0C1\uD0DC\uB294 \uC544\uB2D9\uB2C8\uB2E4. \uBE0C\uB79C\uB4DC \uC774\uBA54\uC77C \uC601\uC5C5\uC740 \uADF8\uB300\uB85C \uC774\uC6A9\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.");
+      back.hash = "settings";
+      return Response.redirect(back.toString(), 302);
     }
+    await query(sb.from("sanji_connections").delete().eq("owner", row.owner).eq("provider", "instagram_login:" + (String(token.user_id || "") || "latest")));
     await query(sb.from("sanji_connections").delete().eq("owner", row.owner).eq("provider", "instagram_pending"));
     const accounts = await instagramAccounts(row.owner);
     const existing = accounts.find((a) => a.provider === "instagram:" + session.id || String(a.summary?.accountId || "") === session.id || a.provider === "instagram" && a.summary?.username === session.username);
@@ -1213,7 +1230,7 @@ Deno.serve(async (req) => {
       }
     }
     if (path === "/health" && req.method === "GET")
-      return json({ ok: true, version: 10, authRequired: true });
+      return json({ ok: true, version: 11, authRequired: true });
     if (path === "/discovery/tick" && req.method === "POST") {
       if (!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403, "\uBC1C\uAD74 \uC2E4\uD589\uAE30 \uC778\uC99D \uC2E4\uD328");
       return json(await discovery.scheduled());
@@ -1349,6 +1366,7 @@ Deno.serve(async (req) => {
     if (path === "/connections" && req.method === "GET") {
       const gmail = await connection(u, "gmail"), accounts = await instagramAccounts(u);
       const ig = accounts.find((a) => Number(a.summary?.expires) > Date.now())?.summary;
+      const loginPending = await query(sb.from("sanji_connections").select("provider,summary").eq("owner", u).like("provider", "instagram_login:%"));
       return json({
         gmail: {
           configured: !!env("GOOGLE_CLIENT_ID") && !!env("GOOGLE_CLIENT_SECRET"),
@@ -1361,6 +1379,7 @@ Deno.serve(async (req) => {
           connected: !!ig,
           username: ig?.username || "",
           accounts: accounts.map((a) => ({ key: a.provider, ...a.summary })),
+          loginPending: loginPending.map((a) => ({ key: a.provider, ...a.summary })),
           enabled: env("INSTAGRAM_SENDING_ENABLED") === "true"
         },
         search: { configured: !!env("BRAVE_SEARCH_API_KEY") || await discovery.configured(u) },
