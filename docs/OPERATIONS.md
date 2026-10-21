@@ -17,7 +17,7 @@
 
 ## 정책 확인과 한계
 
-2026-10-21 이 환경의 Meta 공식 문서 HTTPS 요청이 네트워크 정책 403으로 차단되었습니다. 최신 정책 확인을 완료하지 않았습니다. 다음 원문을 실제 운영 연결 전에 반드시 검토하세요.
+2026-10-21 네트워크 설정 반영 후 Meta 공식 메시징 문서를 HTTP 200으로 읽어 확인했습니다. 대화는 상대 Instagram 사용자의 메시지로 시작하며, 그 이후에만 API로 메시지를 보낼 수 있습니다. 일반 메시징 창은 대부분 24시간, Click-to-Direct 광고에서 시작한 첫 메시지는 최대 7일인 경로가 있습니다. instagram_business_basic 및 instagram_business_manage_messages, 액세스 토큰·웹훅이 필요하며 타사 프로페셔널 계정을 서비스하면 Advanced Access가 필요합니다. 운영 시 다음 원문을 다시 검토하세요. KISA·식약처 세부 법률 검토는 아직 완료하지 않았습니다.
 
 - https://developers.facebook.com/docs/instagram-platform/
 - https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api/
@@ -31,3 +31,7 @@
 현재 데모는 별도 유료 API가 없습니다. GitHub Pages 사용 가능 여부·무료 범위는 저장소 공개 여부와 GitHub 요금제에 따라 확인해야 합니다. 무료 범위를 넘거나 비공개 호스팅이 필요하면 별도 승인 필요.
 
 초기 운영 계획 범위: 호스팅/DB 합계 월 약 0~10만 원, 도메인 연 약 1~4만 원, 업무용 메일 계정당 월 약 1~3만 원. 전송 공급자·검색 API·AI는 사용량별 추가 비용이며 제품 선택 전에는 확정할 수 없습니다. Meta API 자체 사용료와 별개로 서버·심사 대응·유지보수 비용이 발생할 수 있습니다. 최신 제공자 요금은 아직 확인하지 않았으며 결제·권한 연결·실제 발송을 진행하지 않았습니다.
+
+## 이번 배포 확인 결과
+
+커밋 ddf9401의 GitHub Actions 실행 39529507819는 configure-pages 단계에서 실패했습니다. Pages 조회는 404, Pages 활성화 POST는 403 Resource not accessible by integration 응답으로 현재 연동 권한으로 활성화할 수 없습니다. 관리자가 저장소 Settings → Pages → Source: GitHub Actions를 지정한 후 Publish fictional demo 워크플로를 재실행해야 합니다. 예상 URL https://dothegy.github.io/sanji/ 요청은 404였으므로 공개 데모 접속 확인은 아직 미완료입니다.
