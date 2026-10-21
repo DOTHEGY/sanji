@@ -1,4 +1,4 @@
-import { instagramTokenResponse } from "../_shared/instagram-token.ts";
+import { resolveInstagramSession } from "../_shared/instagram-session.ts";
 import { checkGmail } from "../_shared/gmail-check.ts";
 import { oauthLifetimeMs, oauthStateProblem, oauthErrorRedirect, providerErrorDetail } from "../_shared/oauth-status.ts";
 import { selectInstagramAccount, sameInstagramConversation } from "../_shared/instagram-accounts.ts";
@@ -119,6 +119,9 @@ async function saveConnection(u: string, p: string, data: any) {
                 username: data.username,
                 expires: data.expires,
                 connected: true,
+                tokenMode: data.tokenMode || "long",
+                warning: data.warning || "",
+                expiryKnown: data.expiryKnown !== false,
               },
       },
       { onConflict: "owner,provider" },
@@ -446,41 +449,30 @@ async function callback(
         redirect_uri: base + "/oauth/instagram/callback",
       }),
     }, "Instagram 인증 코드 교환");
-    let token;
-    try { token = instagramTokenResponse(tokenResponse); }
-    catch (e) { fail(502, e.message); }
-    const longResponse = await remote(
-      "https://graph.instagram.com/access_token?" +
-        new URLSearchParams({
-          grant_type: "ig_exchange_token",
-          client_secret: env("META_APP_SECRET"),
-          access_token: token.access_token,
-        }),
-      {}, "Instagram 장기 토큰 교환",
-    );
-    let long;
-    try { long = instagramTokenResponse(longResponse, true); }
-    catch (e) { fail(502, e.message); }
-    const profile = await remote(
-      "https://graph.instagram.com/" +
-        (env("META_GRAPH_VERSION") || "v24.0") +
-        "/me?" +
-        new URLSearchParams({
-          fields: "id,user_id,username",
-          access_token: long.access_token,
-        }),
-      {}, "Instagram 프로필 조회",
-    );
+    let session;
+    try { session = await resolveInstagramSession(tokenResponse, remote, env("META_APP_SECRET"), env("META_GRAPH_VERSION") || "v24.0"); }
+    catch (e) { fail(e instanceof HttpError ? e.status : 502, e.message); }
     const accounts = await instagramAccounts(row.owner);
-    const accountId = String(profile.user_id || profile.id || "");
-    const existing = accounts.find((a: any) => a.provider === "instagram:" + accountId || (a.provider === "instagram" && a.summary?.username === profile.username));
-    if (!/^\d+$/.test(accountId)) fail(502, "Instagram 계정 ID를 확인할 수 없습니다.");
-    await saveConnection(row.owner, existing?.provider || "instagram:" + accountId, {
-      ...long,
-      ...profile,
-      id: accountId,
-      expires: Date.now() + long.expires_in * 1000,
-    });
+    const existing = accounts.find((a: any) => a.provider === "instagram:" + session.id || (a.provider === "instagram" && a.summary?.username === session.username));
+    // Do not replace a still usable long session with a shorter session silently.
+    let keepExisting = false;
+    if (existing && session.tokenMode === "short") {
+      const prior = await decrypt(existing.encrypted);
+      if (prior.tokenMode !== "short" && prior.expires > Date.now()) {
+        try {
+          const p = await remote("https://graph.instagram.com/" + (env("META_GRAPH_VERSION") || "v24.0") + "/me?" + new URLSearchParams({fields:"user_id,username",access_token:prior.access_token}));
+          keepExisting = String(p.user_id) === String(session.id);
+        } catch { /* Existing session is no longer usable; keep the verified short session. */ }
+      }
+    }
+    if (!keepExisting) await saveConnection(row.owner, existing?.provider || "instagram:" + session.id, session);
+    await audit(row.owner, "instagram_auth_diagnosis", { profileVerified:true, tokenMode:session.tokenMode, keptExisting:keepExisting, warning:session.warning });
+    if (session.tokenMode === "short") {
+      const back = new URL(frontend);
+      back.searchParams.set("oauth_notice", keepExisting ? "장기 토큰 전환이 실패해 검증된 기존 연결을 유지했습니다. " + session.warning : session.warning);
+      back.hash = "settings";
+      return Response.redirect(back.toString(), 302);
+    }
   } else fail(404, "알 수 없는 연결");
   await audit(row.owner, "oauth_connected", { provider });
   return Response.redirect(frontend + "#settings", 302);
@@ -757,7 +749,7 @@ Deno.serve(async (req: Request) => {
       }
     }
     if (path === "/health" && req.method === "GET")
-      return json({ ok: true, version: 7, authRequired: true });
+      return json({ ok: true, version: 8, authRequired: true });
     if (path === "/jobs/run" && req.method === "POST")
       return await runJobs(req);
     const bearer = req.headers.get("authorization") || "";
@@ -897,7 +889,7 @@ Deno.serve(async (req: Request) => {
     if (path === "/connections" && req.method === "GET") {
       const gmail = await connection(u, "gmail"),
         accounts = await instagramAccounts(u);
-      const ig = accounts[0]?.summary;
+      const ig = accounts.find((a: any) => Number(a.summary?.expires) > Date.now())?.summary;
       return json({
         gmail: {
           configured:

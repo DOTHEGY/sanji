@@ -283,7 +283,7 @@ test("Edge function compiles and denies unauthenticated/disallowed-origin reques
         new Request("https://project.example" + prefix + "/health"),
       );
       assert.equal(health.status, 200);
-      assert.equal((await health.json()).version, 7);
+      assert.equal((await health.json()).version, 8);
       const callback = await handler(new Request("https://project.example" + prefix + "/oauth/instagram/callback"));
       assert.equal(callback.status, 302);
       const back = new URL(callback.headers.get("location"));
@@ -726,4 +726,24 @@ test("Instagram token exchange supports current data-array and legacy responses,
     assert.throws(() => parse(response), /유효한 토큰/);
   assert.throws(() => parse({access_token:"test-long-token"},true), /유효기간/);
   assert.throws(() => parse({access_token:"test-long-token",expires_in:-1},true), /유효기간/);
+});
+
+test("Instagram verifies short-token profile before long exchange and explicitly limits fallback sessions", async () => {
+  const compiled = esbuild.buildSync({ entryPoints: ["supabase/functions/_shared/instagram-session.ts"], bundle: true, platform: "node", format: "cjs", write: false });
+  const m = { exports: {} }; new Function("module", "exports", compiled.outputFiles[0].text)(m, m.exports);
+  const resolve = m.exports.resolveInstagramSession;
+  const profile = {id:"111",user_id:"222",username:"test-account"}, calls=[];
+  const temp = await resolve({data:[{access_token:"test-short"}]}, async (url) => {
+    calls.push(url); if (url.includes("/me?")) return profile;
+    throw Error("Unsupported request - method type: get");
+  }, "test-secret", "v24.0", 1000);
+  assert.equal(temp.tokenMode,"short"); assert.equal(temp.id,"222");
+  assert.equal(temp.expires,901000); assert.equal(temp.expiryKnown,false);
+  assert.match(temp.warning,/장기 인증은 실패/); assert.match(temp.warning,/15분/);
+  assert.ok(calls[0].includes("/me?")); assert.ok(calls[1].includes("/access_token?"));
+  let requests = 0;
+  await assert.rejects(() => resolve({access_token:"test-invalid"}, async () => { requests++; throw Error("invalid profile token"); }, "test-secret", "v24.0"), /invalid profile/);
+  assert.equal(requests,1);
+  const full = await resolve({access_token:"test-short"}, async (url) => url.includes("/me?") ? profile : {access_token:"test-long",expires_in:5183944}, "test-secret", "v24.0", 1000);
+  assert.equal(full.tokenMode,"long"); assert.equal(full.warning,""); assert.equal(full.expires,5183945000);
 });

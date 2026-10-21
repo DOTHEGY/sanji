@@ -8,6 +8,31 @@ function instagramTokenResponse(response, requireExpiry = false) {
   return token;
 }
 
+// supabase/functions/_shared/instagram-session.ts
+async function resolveInstagramSession(response, request, appSecret, version, time = Date.now()) {
+  const token = instagramTokenResponse(response);
+  const profile = await request("https://graph.instagram.com/" + version + "/me?" + new URLSearchParams({ fields: "id,user_id,username", access_token: token.access_token }), {}, "Instagram \uB2E8\uAE30 \uD1A0\uD070 \uACC4\uC815 \uAC80\uC99D");
+  if (!/^\d+$/.test(String(profile.user_id || profile.id || "")) || !profile.username)
+    throw new Error("Instagram \uACC4\uC815 ID\xB7\uC774\uB984\uC744 \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uAE30\uC874 \uC5F0\uACB0\uC740 \uC720\uC9C0\uB429\uB2C8\uB2E4.");
+  try {
+    const result = await request("https://graph.instagram.com/access_token?" + new URLSearchParams({ grant_type: "ig_exchange_token", client_secret: appSecret, access_token: token.access_token }), {}, "Instagram \uC7A5\uAE30 \uD1A0\uD070 \uAD50\uD658");
+    const long = instagramTokenResponse(result, true);
+    return { ...long, ...profile, id: String(profile.user_id || profile.id), expires: time + Number(long.expires_in) * 1e3, tokenMode: "long", warning: "", expiryKnown: true };
+  } catch (e) {
+    const reported = Number(token.expires_in);
+    const duration = Number.isFinite(reported) && reported > 0 ? Math.min(reported * 1e3, 15 * 60 * 1e3) : 15 * 60 * 1e3;
+    return {
+      ...token,
+      ...profile,
+      id: String(profile.user_id || profile.id),
+      expires: time + duration,
+      tokenMode: "short",
+      expiryKnown: Number.isFinite(reported) && reported > 0,
+      warning: "\uB2E8\uAE30 \uD1A0\uD070\uC73C\uB85C \uACC4\uC815 \uD655\uC778\uC740 \uC644\uB8CC\uB410\uC9C0\uB9CC \uC7A5\uAE30 \uC778\uC99D\uC740 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. \uC11C\uBE44\uC2A4 \uC784\uC2DC \uC138\uC158\uC740 \uCD5C\uB300 15\uBD84\uC774\uBA70 \uC2E4\uC81C \uD1A0\uD070\uC774 \uBA3C\uC800 \uB9CC\uB8CC\uB420 \uC218 \uC788\uC2B5\uB2C8\uB2E4. \uC7AC\uC778\uC99D\uC774 \uD544\uC694\uD569\uB2C8\uB2E4. " + String(e?.message || "\uC7A5\uAE30 \uD1A0\uD070 \uC624\uB958").slice(0, 350)
+    };
+  }
+}
+
 // supabase/functions/_shared/gmail-check.ts
 async function checkGmail(c, request, sendingEnabled) {
   const profile = await request("https://gmail.googleapis.com/gmail/v1/users/me/profile", {
@@ -339,7 +364,10 @@ async function saveConnection(u, p, data) {
         summary: p === "gmail" ? { email: data.email, connected: true } : {
           username: data.username,
           expires: data.expires,
-          connected: true
+          connected: true,
+          tokenMode: data.tokenMode || "long",
+          warning: data.warning || "",
+          expiryKnown: data.expiryKnown !== false
         }
       },
       { onConflict: "owner,provider" }
@@ -611,45 +639,33 @@ async function callback(req, url2, provider, base) {
         redirect_uri: base + "/oauth/instagram/callback"
       })
     }, "Instagram \uC778\uC99D \uCF54\uB4DC \uAD50\uD658");
-    let token;
+    let session;
     try {
-      token = instagramTokenResponse(tokenResponse);
+      session = await resolveInstagramSession(tokenResponse, remote, env("META_APP_SECRET"), env("META_GRAPH_VERSION") || "v24.0");
     } catch (e) {
-      fail(502, e.message);
+      fail(e instanceof HttpError ? e.status : 502, e.message);
     }
-    const longResponse = await remote(
-      "https://graph.instagram.com/access_token?" + new URLSearchParams({
-        grant_type: "ig_exchange_token",
-        client_secret: env("META_APP_SECRET"),
-        access_token: token.access_token
-      }),
-      {},
-      "Instagram \uC7A5\uAE30 \uD1A0\uD070 \uAD50\uD658"
-    );
-    let long;
-    try {
-      long = instagramTokenResponse(longResponse, true);
-    } catch (e) {
-      fail(502, e.message);
-    }
-    const profile = await remote(
-      "https://graph.instagram.com/" + (env("META_GRAPH_VERSION") || "v24.0") + "/me?" + new URLSearchParams({
-        fields: "id,user_id,username",
-        access_token: long.access_token
-      }),
-      {},
-      "Instagram \uD504\uB85C\uD544 \uC870\uD68C"
-    );
     const accounts = await instagramAccounts(row.owner);
-    const accountId = String(profile.user_id || profile.id || "");
-    const existing = accounts.find((a) => a.provider === "instagram:" + accountId || a.provider === "instagram" && a.summary?.username === profile.username);
-    if (!/^\d+$/.test(accountId)) fail(502, "Instagram \uACC4\uC815 ID\uB97C \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
-    await saveConnection(row.owner, existing?.provider || "instagram:" + accountId, {
-      ...long,
-      ...profile,
-      id: accountId,
-      expires: Date.now() + long.expires_in * 1e3
-    });
+    const existing = accounts.find((a) => a.provider === "instagram:" + session.id || a.provider === "instagram" && a.summary?.username === session.username);
+    let keepExisting = false;
+    if (existing && session.tokenMode === "short") {
+      const prior = await decrypt(existing.encrypted);
+      if (prior.tokenMode !== "short" && prior.expires > Date.now()) {
+        try {
+          const p = await remote("https://graph.instagram.com/" + (env("META_GRAPH_VERSION") || "v24.0") + "/me?" + new URLSearchParams({ fields: "user_id,username", access_token: prior.access_token }));
+          keepExisting = String(p.user_id) === String(session.id);
+        } catch {
+        }
+      }
+    }
+    if (!keepExisting) await saveConnection(row.owner, existing?.provider || "instagram:" + session.id, session);
+    await audit(row.owner, "instagram_auth_diagnosis", { profileVerified: true, tokenMode: session.tokenMode, keptExisting: keepExisting, warning: session.warning });
+    if (session.tokenMode === "short") {
+      const back = new URL(frontend);
+      back.searchParams.set("oauth_notice", keepExisting ? "\uC7A5\uAE30 \uD1A0\uD070 \uC804\uD658\uC774 \uC2E4\uD328\uD574 \uAC80\uC99D\uB41C \uAE30\uC874 \uC5F0\uACB0\uC744 \uC720\uC9C0\uD588\uC2B5\uB2C8\uB2E4. " + session.warning : session.warning);
+      back.hash = "settings";
+      return Response.redirect(back.toString(), 302);
+    }
   } else fail(404, "\uC54C \uC218 \uC5C6\uB294 \uC5F0\uACB0");
   await audit(row.owner, "oauth_connected", { provider });
   return Response.redirect(frontend + "#settings", 302);
@@ -864,7 +880,7 @@ Deno.serve(async (req) => {
       }
     }
     if (path === "/health" && req.method === "GET")
-      return json({ ok: true, version: 7, authRequired: true });
+      return json({ ok: true, version: 8, authRequired: true });
     if (path === "/jobs/run" && req.method === "POST")
       return await runJobs(req);
     const bearer = req.headers.get("authorization") || "";
@@ -988,7 +1004,7 @@ Deno.serve(async (req) => {
     }
     if (path === "/connections" && req.method === "GET") {
       const gmail = await connection(u, "gmail"), accounts = await instagramAccounts(u);
-      const ig = accounts[0]?.summary;
+      const ig = accounts.find((a) => Number(a.summary?.expires) > Date.now())?.summary;
       return json({
         gmail: {
           configured: !!env("GOOGLE_CLIENT_ID") && !!env("GOOGLE_CLIENT_SECRET"),
