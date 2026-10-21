@@ -740,17 +740,15 @@ test("concurrent approved requests reserve once; changed deal versions invalidat
       senderPhone: "연락처",
     });
     const u = h.app.locals.db.prepare("SELECT id FROM users").get().id;
-    h.app.locals.db
-      .prepare("INSERT INTO connections VALUES(?,?,?)")
-      .run(
-        u,
-        "gmail",
-        vault("unit-test-key-not-production").encrypt({
-          email: "sender@test.example",
-          access_token: "mock",
-          expires: Date.now() + 3600000,
-        }),
-      );
+    h.app.locals.db.prepare("INSERT INTO connections VALUES(?,?,?)").run(
+      u,
+      "gmail",
+      vault("unit-test-key-not-production").encrypt({
+        email: "sender@test.example",
+        access_token: "mock",
+        expires: Date.now() + 3600000,
+      }),
+    );
     const p1 = (await h.call("/drafts", "POST", draft(c.id))).data,
       p2 = (await h.call("/drafts", "POST", draft(c.id))).data;
     const rs = await Promise.all([
@@ -804,6 +802,115 @@ test("concurrent approved requests reserve once; changed deal versions invalidat
       409,
     );
   } finally {
+    await h.close();
+  }
+});
+
+test("copy editor keeps main template intact while AI changes intro only; scheduling requires approval", async () => {
+  const h = await harness();
+  let browser;
+  try {
+    await h.login();
+    const c = (await h.call("/candidate", "POST", brand())).data;
+    await h.call("/settings", "PUT", {
+      dailyLimit: 10,
+      senderName: "테스트 사업자",
+      senderAddress: "사업장 주소",
+      senderPhone: "사업 연락처",
+    });
+    const main =
+      "공통 본문은 변경하지 않습니다.\n{{제품명}} 제휴 조건을 문의드립니다.";
+    const template = (
+      await h.call("/template", "POST", {
+        name: "내 공통 카피",
+        channel: "이메일",
+        subject: "(광고) 공동구매 제휴 문의",
+        body: main,
+        signature: "내 서명",
+        aiEnabled: true,
+      })
+    ).data;
+    assert.equal(template.aiEnabled, true);
+    browser = await chromium.launch({
+      executablePath: process.env.CHROMIUM_PATH || "/usr/bin/chromium",
+      headless: true,
+      args: ["--no-sandbox"],
+    });
+    const p = await browser.newPage();
+    await p.goto(h.base + "/app/");
+    await p.waitForSelector("#auth-form");
+    await p.locator("[name=email]").fill("owner@example.com");
+    await p.locator("[name=password]").fill("only-test-password-12345");
+    await p.locator("#auth-form button").click();
+    await p.waitForSelector("#nav a");
+    await p.goto(h.base + "/app/#templates");
+    await p.getByRole("button", { name: "사용", exact: true }).click();
+    assert.equal(
+      await p.locator("#compose-form [name=body]").inputValue(),
+      main,
+    );
+    let personalized = 0,
+      scheduled = 0,
+      captured;
+    await p.route(h.base + "/api/personalize", async (r) => {
+      personalized++;
+      assert.deepEqual(r.request().postDataJSON(), { target: c.id });
+      await r.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          intro: "공개하신 아침 레시피 콘텐츠를 보고 연락드립니다.",
+          evidence: [
+            {
+              url: "https://test.example/public-recipe",
+              description: "공개 레시피",
+              checked: "2026-10-21",
+            },
+          ],
+        }),
+      });
+    });
+    await p.getByRole("button", { name: "AI 도입부 1~2줄 생성" }).click();
+    await p.waitForFunction(() =>
+      document.querySelector("[name=intro]").value.includes("레시피"),
+    );
+    assert.equal(personalized, 1);
+    assert.equal(
+      await p.locator("#compose-form [name=body]").inputValue(),
+      main,
+    );
+    await p.locator("[name=lawfulBasis]").fill("테스트용 사전 동의 확인 기록");
+    await p.getByRole("button", { name: "수신자별 최종 미리보기" }).click();
+    await p.waitForSelector("#send-approved");
+    assert.match(
+      await p.locator("#final-preview").textContent(),
+      /레시피 콘텐츠.*\n\n공통 본문은 변경하지 않습니다\./s,
+    );
+    await p.route(h.base + "/api/schedule", async (r) => {
+      scheduled++;
+      captured = r.request().postDataJSON();
+      await r.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "test-job",
+          run_at: new Date(Date.now() + 86400000).toISOString(),
+        }),
+      });
+    });
+    await p.getByRole("button", { name: "승인한 내용 예약 자동 발송" }).click();
+    assert.equal(scheduled, 0);
+    await p.locator("#send-approved").check();
+    await p.locator("#schedule-at").fill("2027-01-01T10:00");
+    await p.getByRole("button", { name: "승인한 내용 예약 자동 발송" }).click();
+    await p.waitForSelector("#modal:not([open])", { state: "attached" });
+    assert.equal(scheduled, 1);
+    assert.equal(captured.approved, true);
+    assert.ok(captured.draftId);
+    assert.ok(captured.hash);
+    assert.equal((await h.call("/state")).data.outbox.length, 0);
+    assert.equal((await h.call("/state")).data.templates[0].body, main);
+  } finally {
+    if (browser) await browser.close();
     await h.close();
   }
 });

@@ -102,7 +102,7 @@ function close() {
 }
 function err(e) {
   const el = $("#form-error");
-  if (el) {
+  if (el && $("#modal").open) {
     el.className = "error";
     el.textContent = e.message;
   } else toast(e.message);
@@ -328,7 +328,7 @@ function templatesPage() {
   $("#app").innerHTML =
     head(
       "직접 작성하는 제안 템플릿",
-      "사용자가 작성한 카피를 임의로 변경하거나 자동 발송하지 않습니다.",
+      "여기에 공통 카피를 저장하세요. AI는 제안 작성 화면에서 앞 1~2줄만 만들고 공통 본문은 그대로 둡니다.",
       button("＋ 템플릿 추가", "add-template", "", true),
     ) +
     `<div class="cards">${data.templates.map((t) => `<article class="panel">${tag(t.channel)}<h3>${esc(t.name)}</h3><p class="sub">${esc(t.subject)}</p><div class="message">${esc(t.body)}</div>${button("편집", "edit-template", t.id)} ${button("사용", "use-template", t.id)}</article>`).join("") || '<div class="panel empty">직접 작성한 메일·DM 카피를 저장하세요.</div>'}</div>`;
@@ -336,7 +336,7 @@ function templatesPage() {
 function templateForm(id = "") {
   const t = data.templates.find((t) => t.id === id) || { channel: "이메일" };
   modal(
-    `<h2>템플릿 편집</h2><form id="template-form" data-id="${esc(id)}">${field("name", "템플릿 이름", t.name)}${field("channel", "채널", t.channel, "text", ["이메일", "Instagram DM"])}${field("subject", "제목", t.subject)}<p class="fine">사용 가능 변수: {{회사명}}, {{브랜드명}}, {{제품명}}, {{크리에이터명}}, {{공동구매가}}, {{일정}}</p>${field("body", "직접 작성한 본문", t.body, "textarea")}${field("signature", "서명", t.signature, "textarea")}<button class="primary" type="submit">템플릿 저장</button></form>`,
+    `<h2>템플릿 편집</h2><form id="template-form" data-id="${esc(id)}">${field("name", "템플릿 이름", t.name)}${field("channel", "채널", t.channel, "text", ["이메일", "Instagram DM"])}${field("subject", "제목", t.subject)}<p class="fine">사용 가능 변수: {{회사명}}, {{브랜드명}}, {{제품명}}, {{크리에이터명}}, {{공동구매가}}, {{일정}}</p>${field("body", "공통 본문 카피 · AI 수정 없음", t.body, "textarea")}${field("aiEnabled", "수신자별 AI 도입부 1~2줄 제안 사용", t.aiEnabled ?? true, "checkbox")}${field("signature", "서명", t.signature, "textarea")}<button class="primary" type="submit">템플릿 저장</button></form>`,
   );
 }
 function compose(target = "", ds = [], templateId = "", replyTo = "") {
@@ -352,7 +352,7 @@ function compose(target = "", ds = [], templateId = "", replyTo = "") {
     ? data.candidates.filter((c) => c.id === target)
     : data.candidates;
   modal(
-    `<h2>${replyTo ? "대화에 직접 회신" : "제안 작성·수신자 승인"}</h2><p class="notice">실제 전송은 연결·서버 발송 허용·최종 승인 세 조건이 모두 필요합니다. 협의 중 상품과 미검증 이메일은 차단됩니다.</p><form id="compose-form" data-reply="${esc(replyTo)}"><div class="form-grid"><label class="field">수신자<select name="target">${targetList.map((c) => `<option value="${c.id}" ${c.id === target ? "selected" : ""}>${esc(c.name)} / ${esc(c.contact.email || c.handle || "연락처 미확인")}</option>`).join("")}</select></label>${field("channel", "채널", replyTo ? (data.threads.find((t) => t.id === replyTo).channel === "email" ? "이메일" : data.threads.find((t) => t.id === replyTo).channel === "instagram" ? "Instagram 회신" : "Instagram DM 수동") : t.channel === "Instagram DM" ? "Instagram DM 수동" : "이메일", "text", replyTo ? ["이메일", "Instagram 회신", "Instagram DM 수동"] : ["이메일", "Instagram DM 수동"])}<label class="field full">상품 1~3개 (Ctrl/Cmd로 복수 선택)<select name="dealIds" multiple size="4">${data.deals.map((d) => `<option value="${d.id}" ${ds.includes(d.id) ? "selected" : ""}>${esc(d.name)} · v${d.version} · ${esc(d.state)}</option>`).join("")}</select></label></div>${field("subject", "제목|광고성 이메일 제목은 (광고)로 시작해야 합니다.", t.subject)}<div class="actions">${["회사명", "브랜드명", "제품명", "크리에이터명", "공동구매가", "일정"].map((v) => button("＋ " + v, "insert-variable", v)).join("")}</div>${field("body", "본문", t.body, "textarea")}${field("signature", "서명", t.signature, "textarea")}${field("lawfulBasis", "발송 근거·동의 기록|공개 이메일만으로 광고성 정보 발송이 허용되는 것은 아닙니다. 확인한 동의 또는 적용 예외를 기록하세요.", "", "textarea")}${field("marketing", "광고성 정보에 해당함", true, "checkbox")}<label class="field">실제 첨부파일 (최대 5개·합계 5MB, 파일당 2MB)<input name="attachments" type="file" multiple></label><div class="actions"><button class="primary" type="submit">수신자별 최종 미리보기</button>${button("프로필 열기", "open-profile")}</div></form><div id="preview-area"></div>`,
+    `<h2>${replyTo ? "대화에 직접 회신" : "제안 작성·수신자 승인"}</h2><p class="notice">실제 전송은 연결·서버 발송 허용·최종 승인 세 조건이 모두 필요합니다. 협의 중 상품과 미검증 이메일은 차단됩니다.</p><form id="compose-form" data-reply="${esc(replyTo)}"><div class="form-grid"><label class="field">수신자<select name="target">${targetList.map((c) => `<option value="${c.id}" ${c.id === target ? "selected" : ""}>${esc(c.name)} / ${esc(c.contact.email || c.handle || "연락처 미확인")}</option>`).join("")}</select></label>${field("channel", "채널", replyTo ? (data.threads.find((t) => t.id === replyTo).channel === "email" ? "이메일" : data.threads.find((t) => t.id === replyTo).channel === "instagram" ? "Instagram 회신" : "Instagram DM 수동") : t.channel === "Instagram DM" ? "Instagram DM 수동" : "이메일", "text", replyTo ? ["이메일", "Instagram 회신", "Instagram DM 수동"] : ["이메일", "Instagram DM 수동"])}<label class="field full">상품 1~3개 (Ctrl/Cmd로 복수 선택)<select name="dealIds" multiple size="4">${data.deals.map((d) => `<option value="${d.id}" ${ds.includes(d.id) ? "selected" : ""}>${esc(d.name)} · v${d.version} · ${esc(d.state)}</option>`).join("")}</select></label></div>${field("subject", "제목|광고성 이메일 제목은 (광고)로 시작해야 합니다.", t.subject)}<div class="actions">${["회사명", "브랜드명", "제품명", "크리에이터명", "공동구매가", "일정"].map((v) => button("＋ " + v, "insert-variable", v)).join("")}</div>${field("intro", "개인화 도입부 1~2줄 · 직접 수정 가능", "", "textarea")}<div class="actions">${!replyTo && t.aiEnabled !== false ? button("AI 도입부 1~2줄 생성", "personalize") : ""}</div><div id="intro-evidence" class="fine">공개 콘텐츠 근거가 있어야 AI 도입부를 제안할 수 있습니다. 공통 본문·가격·일정은 AI가 바꾸지 않습니다.</div>${field("body", "공통 본문 카피 · 직접 작성한 원문", t.body, "textarea")}${field("signature", "서명", t.signature, "textarea")}${field("lawfulBasis", "발송 근거·동의 기록|공개 이메일만으로 광고성 정보 발송이 허용되는 것은 아닙니다. 확인한 동의 또는 적용 예외를 기록하세요.", "", "textarea")}${field("marketing", "광고성 정보에 해당함", true, "checkbox")}<label class="field">실제 첨부파일 (최대 5개·합계 5MB, 파일당 2MB)<input name="attachments" type="file" multiple></label><div class="actions"><button class="primary" type="submit">수신자별 최종 미리보기</button>${button("프로필 열기", "open-profile")}</div></form><div id="preview-area"></div>`,
   );
 }
 async function preparePreview(form) {
@@ -378,7 +378,10 @@ async function preparePreview(form) {
           ? "instagram"
           : "manual_dm",
     subject: f.get("subject"),
-    body: f.get("body"),
+    body:
+      (String(f.get("intro") || "").trim()
+        ? String(f.get("intro")).trim() + "\n\n"
+        : "") + f.get("body"),
     signature: f.get("signature"),
     lawfulBasis: f.get("lawfulBasis"),
     marketing: f.has("marketing"),
@@ -386,7 +389,7 @@ async function preparePreview(form) {
     ...(replyTo ? { replyTo } : {}),
   });
   $("#preview-area").innerHTML =
-    `<h3>최종 수신자·내용</h3><div class="preview" id="final-preview">${esc(`수신: ${preview.target} / ${preview.email || "Instagram 수동 또는 수신 대화"}\n채널: ${preview.channel}\n상품 버전: ${preview.dealVersions.map((x) => x.id + " v" + x.version).join(", ") || "없음"}\n제목: ${preview.subject}\n\n${preview.body}\n\n첨부: ${preview.attachments.map((a) => a.name + " (" + a.size + " bytes)").join(", ") || "없음"}`)}</div><p class="fine">15분 내 승인해야 합니다. 수정하면 다시 미리보기를 만드세요.</p><label class="field"><span><input id="send-approved" type="checkbox"> 위 수신자·내용·조건 버전·첨부파일을 확인하고 승인합니다.</span></label>${preview.channel === "manual_dm" ? '<label class="field"><span><input id="manually-sent" type="checkbox"> Instagram에서 직접 발송을 완료했습니다.</span></label>' : ""}<div class="actions">${button("문구 복사", "copy-preview")}${button(preview.channel === "manual_dm" ? "수동 발송 결과 기록" : "승인한 내용 실제 발송", "dispatch", "", true)}</div><div class="notice">${preview.channel === "email" && !connections.gmail.enabled ? "현재 실제 메일 발송은 서버에서 꺼져 있습니다. " : ""}접수·전달·열람 상태를 혼동하지 않습니다. 자동 재시도는 하지 않습니다.</div>`;
+    `<h3>최종 수신자·내용</h3><div class="preview" id="final-preview">${esc(`수신: ${preview.target} / ${preview.email || "Instagram 수동 또는 수신 대화"}\n채널: ${preview.channel}\n상품 버전: ${preview.dealVersions.map((x) => x.id + " v" + x.version).join(", ") || "없음"}\n제목: ${preview.subject}\n\n${preview.body}\n\n첨부: ${preview.attachments.map((a) => a.name + " (" + a.size + " bytes)").join(", ") || "없음"}`)}</div><p class="fine">15분 내 승인해야 합니다. 수정하면 다시 미리보기를 만드세요.</p><label class="field"><span><input id="send-approved" type="checkbox"> 위 수신자·내용·조건 버전·첨부파일을 확인하고 승인합니다.</span></label>${preview.channel === "manual_dm" ? '<label class="field"><span><input id="manually-sent" type="checkbox"> Instagram에서 직접 발송을 완료했습니다.</span></label>' : ""}<div class="actions">${preview.channel === "email" ? `<label class="field">예약 시간 (기기 시간 기준)<input id="schedule-at" type="datetime-local"></label>${button("승인한 내용 예약 자동 발송", "schedule")}` : ""}${button("문구 복사", "copy-preview")}${button(preview.channel === "manual_dm" ? "수동 발송 결과 기록" : "승인한 내용 실제 발송", "dispatch", "", true)}</div><div class="notice">${preview.channel === "email" && !connections.gmail.enabled ? "현재 실제 메일 발송은 서버에서 꺼져 있습니다. " : ""}접수·전달·열람 상태를 혼동하지 않습니다. 자동 재시도는 하지 않습니다.</div>`;
   $("#preview-area").scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 function inboxPage() {
@@ -440,13 +443,17 @@ function showThread(id) {
         : ""
     }<form id="thread-form" data-id="${t.id}" class="form-grid">${field("owner", "담당자", t.owner)}${field("due", "후속 연락일", t.due, "date")}${field("next", "다음 행동·메모", t.next)}${field("classification", "회신 분류", t.classification, "text", ["미분류", "자동 응답", "관심 회신", "단순 안내", "거절", "수신 거부", "수락", "공동구매 확정"])}<button type="submit">관리 정보 저장</button></form>${t.messages.map((m) => `<div class="message ${m.out ? "out" : ""}">${tag(m.out ? "발신" : m.automatic ? "자동 응답" : "사람 회신 / 직접 확인 필요")}<small class="fine">${esc(m.at)}</small><br>${esc(m.text)}${m.hasAttachments ? '<p class="fine">첨부가 있습니다. 원본 Gmail에서 확인하세요.</p>' : ""}</div>`).join("")}${t.target ? button("직접 회신 작성", "reply", t.id, true) : '<div class="notice">수신 계정을 후보와 연결한 후 답장할 수 있습니다.</div>'}`;
 }
+function jobTable() {
+  const jobs = data.jobs || [];
+  return `<div class="table-scroll"><table><thead><tr><th>예약 시각</th><th>상태</th><th>처리 결과</th><th></th></tr></thead><tbody>${jobs.map((j) => `<tr><td>${esc(new Date(j.run_at).toLocaleString("ko-KR"))}</td><td>${tag(j.status)}</td><td>${esc(j.result?.error || j.result?.note || "전달·열람 미확인")}</td><td>${j.status === "queued" ? button("예약 취소", "cancel-job", j.id) : ""}</td></tr>`).join("") || '<tr><td colspan="4">승인된 예약이 없습니다.</td></tr>'}</tbody></table></div>`;
+}
 function settingsPage() {
   $("#app").innerHTML =
     head(
       "운영 설정·공식 계정 연결",
       "외부 서비스 비밀번호를 받지 않습니다. OAuth 토큰은 서버에서 암호화해 저장합니다.",
     ) +
-    `<div class="grid"><div class="panel"><h2>Gmail / Google Workspace</h2><p class="notice">${connections.gmail.connected ? esc(connections.gmail.email) + " 연결됨" : "아직 연결되지 않았습니다."}<br>공식 OAuth 앱 설정 ${connections.gmail.configured ? "완료" : "필요"} · 실제 발송 ${connections.gmail.enabled ? "사용자 승인 후 허용" : "차단 중"}</p>${button("Google 공식 로그인", "connect-gmail", "", true)} ${button("연결 해제", "disconnect", "gmail")}<p class="fine">gmail.send / gmail.readonly 권한. 운영 계정 동의·검증이 필요합니다. 동기화는 등록 대상과 최근 90일 대화만 가져옵니다.</p></div><div class="panel"><h2>Instagram 프로페셔널 계정</h2><p class="notice">${connections.instagram.connected ? esc(connections.instagram.username) + " 연결됨" : "미연결"} · 앱 설정 ${connections.instagram.configured ? "완료" : "필요"}<br>신규 선제 DM 자동화 불가. 사용자가 먼저 보낸 대화는 웹훅으로 수신하며 24시간 이내 텍스트 회신만 제공합니다.</p>${button("Meta 공식 인증", "connect-instagram", "", true)} ${button("연결 해제", "disconnect", "instagram")}<p class="fine">공식 인증·권한 심사·웹훅 설정이 필요합니다. 계정 아이디만으로 로그인하지 않습니다.</p></div></div><div class="panel"><h2>발신자 정보·일일 제한</h2><form id="settings-form" class="form-grid" style="margin-top:20px">${field("senderName", "사업자·발신자명", data.settings.senderName)}${field("senderAddress", "사업장 주소", data.settings.senderAddress)}${field("senderPhone", "발신자 연락처", data.settings.senderPhone)}${field("dailyLimit", "일일 발송 제한 (UTC 기준, 1~100)", data.settings.dailyLimit || 20, "number")}<div class="full"><p class="notice">수신 거부 안내는 이메일 하단에 자동 포함됩니다. 영업 메일은 기본적으로 광고성 정보로 처리합니다. 무료 회신 수신 거부, 동의 근거·발신자 표시·야간 제한은 운영 전에 전문가와 확인하세요. 발송 스위치는 서버 환경 변수로만 활성화합니다.</p><button type="submit" class="primary">운영 설정 저장</button></div></form><h3>수신 거부·거절 차단 목록</h3>${data.suppression.map((s) => `<div class="task">${esc(s.identity)} ${tag(s.reason, "orange")}</div>`).join("") || '<p class="fine">차단 기록 없음</p>'}<h3>오류·발송 로그</h3>${outboxTable()}${button("감사 기록 조회", "audit")}</div><div class="notice">검색 API: ${connections.search.configured ? "연결됨" : "Brave Search API 키 미설정"}. Instagram 정책은 <a href="https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api/" target="_blank" rel="noopener">공식 문서</a>를 확인하세요. 수신·전달·매출 수치는 확인한 값만 표시합니다. AI 초안은 미연동이며 자동 생성·발송하지 않습니다.</div>`;
+    `<div class="panel"><h2>서버 함수·AI·자동 발송 연결</h2><p class="notice">workspace Edge Function을 배포한 후 Gmail·AI를 연결하세요. AI 개인화 ${connections.ai?.configured ? "설정됨" : "미설정"} · 예약 실행기 ${connections.automation?.configured ? "토큰 설정됨 (Cron 설정 별도 확인)" : "미설정"}</p><div class="actions"><a href="https://dothegy.github.io/sanji/connect/" target="_blank" rel="noopener">함수 전체 복사·배포 안내 ↗</a>${button("함수 연결 확인", "health-check")}</div></div><div class="grid"><div class="panel"><h2>Gmail / Google Workspace</h2><p class="notice">${connections.gmail.connected ? esc(connections.gmail.email) + " 연결됨" : "아직 연결되지 않았습니다."}<br>공식 OAuth 앱 설정 ${connections.gmail.configured ? "완료" : "필요"} · 실제 발송 ${connections.gmail.enabled ? "사용자 승인 후 허용" : "차단 중"}</p>${button("Google 공식 로그인", "connect-gmail", "", true)} ${button("연결 해제", "disconnect", "gmail")}<p class="fine">gmail.send / gmail.readonly 권한. 운영 계정 동의·검증이 필요합니다. 동기화는 등록 대상과 최근 90일 대화만 가져옵니다.</p></div><div class="panel"><h2>Instagram 프로페셔널 계정</h2><p class="notice">${connections.instagram.connected ? esc(connections.instagram.username) + " 연결됨" : "미연결"} · 앱 설정 ${connections.instagram.configured ? "완료" : "필요"}<br>신규 선제 DM 자동화 불가. 사용자가 먼저 보낸 대화는 웹훅으로 수신하며 24시간 이내 텍스트 회신만 제공합니다.</p>${button("Meta 공식 인증", "connect-instagram", "", true)} ${button("연결 해제", "disconnect", "instagram")}<p class="fine">공식 인증·권한 심사·웹훅 설정이 필요합니다. 계정 아이디만으로 로그인하지 않습니다.</p></div></div><div class="panel"><h2>발신자 정보·일일 제한</h2><form id="settings-form" class="form-grid" style="margin-top:20px">${field("senderName", "사업자·발신자명", data.settings.senderName)}${field("senderAddress", "사업장 주소", data.settings.senderAddress)}${field("senderPhone", "발신자 연락처", data.settings.senderPhone)}${field("dailyLimit", "일일 발송 제한 (UTC 기준, 1~100)", data.settings.dailyLimit || 20, "number")}<div class="full"><p class="notice">수신 거부 안내는 이메일 하단에 자동 포함됩니다. 영업 메일은 기본적으로 광고성 정보로 처리합니다. 무료 회신 수신 거부, 동의 근거·발신자 표시·야간 제한은 운영 전에 전문가와 확인하세요. 발송 스위치는 서버 환경 변수로만 활성화합니다.</p><button type="submit" class="primary">운영 설정 저장</button></div></form><h3>수신 거부·거절 차단 목록</h3>${data.suppression.map((s) => `<div class="task">${esc(s.identity)} ${tag(s.reason, "orange")}</div>`).join("") || '<p class="fine">차단 기록 없음</p>'}<h3>오류·발송 로그</h3>${outboxTable()}<h3>승인된 예약 자동 발송</h3>${jobTable()}${button("감사 기록 조회", "audit")}</div><div class="notice">검색 API: ${connections.search.configured ? "연결됨" : "Brave Search API 키 미설정"}. Instagram 정책은 <a href="https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api/" target="_blank" rel="noopener">공식 문서</a>를 확인하세요. 수신·전달·매출 수치는 확인한 값만 표시합니다. AI는 공통 카피 앞의 도입부만 제안합니다. 승인된 예약만 Cron 실행기가 자동 처리하며 미승인 초안은 발송하지 않습니다.</div>`;
 }
 const pages = {
   dashboard,
@@ -543,6 +550,7 @@ document.addEventListener("submit", async (e) => {
       const old = data.templates.find((t) => t.id === fid);
       await api("/template" + (fid ? "/" + fid : ""), fid ? "PUT" : "POST", {
         ...f,
+        aiEnabled: f.aiEnabled === "on",
         ...(old ? { version: old.version } : {}),
       });
     } else if (form.id === "settings-form") {
@@ -646,6 +654,53 @@ const actions = {
     close();
     await reload();
     toast(r.note);
+  },
+  personalize: async () => {
+    const target = $("#compose-form [name=target]").value;
+    if (!target) return toast("수신자를 먼저 선택하세요.");
+    const r = await api("/personalize", "POST", { target });
+    $("#compose-form [name=intro]").value = r.intro;
+    invalidatePreview();
+    $("#intro-evidence").innerHTML =
+      "AI 제안 · 최종 검토 필요<br>" +
+      r.evidence
+        .map(
+          (e) =>
+            `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.description)}</a> · ${esc(e.checked)}`,
+        )
+        .join("<br>");
+    toast("도입부만 생성했습니다. 공통 본문은 변경하지 않았습니다.");
+  },
+  schedule: async () => {
+    if (!preview || !$("#send-approved")?.checked)
+      return toast("최종 수신자·내용을 먼저 승인하세요.");
+    const value = $("#schedule-at")?.value;
+    if (!value) return toast("예약 시간을 선택하세요.");
+    const r = await api("/schedule", "POST", {
+      draftId: preview.id,
+      hash: preview.hash,
+      approved: true,
+      runAt: new Date(value).toISOString(),
+    });
+    close();
+    await reload();
+    toast(
+      "승인한 내용으로 예약했습니다. 예약 시각: " +
+        new Date(r.run_at).toLocaleString("ko-KR"),
+    );
+  },
+  "cancel-job": async (id) => {
+    await api("/jobs/" + id, "DELETE");
+    await reload();
+    toast("예약을 취소했습니다.");
+  },
+  "health-check": async () => {
+    const r = await api("/health");
+    toast(
+      r.ok
+        ? "workspace 함수 연결 정상 · 버전 " + r.version
+        : "함수 상태를 확인하세요.",
+    );
   },
   "connect-gmail": async () =>
     location.assign((await api("/oauth/gmail", "POST", {})).url),

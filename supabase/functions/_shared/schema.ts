@@ -102,6 +102,7 @@ const deal = z.object({
   state: z.enum(["협의 중", "확정"]).default("협의 중"),
 });
 const template = z.object({
+  aiEnabled: z.boolean().default(true),
   name: short.min(1),
   channel: z.enum(["이메일", "Instagram DM"]),
   subject: short,

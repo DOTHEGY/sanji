@@ -69,7 +69,7 @@ async function edge(path, method, body) {
     });
   } catch {
     throw error(
-      "서버 기능이 아직 배포되지 않았거나 연결할 수 없습니다. Supabase Edge Function 배포 상태를 확인하세요.",
+      "workspace 함수에 연결할 수 없습니다. 연동 설정 → 함수 전체 복사·배포 안내에서 배포하고 JWT 설정을 확인하세요.",
       503,
     );
   }
@@ -131,6 +131,8 @@ export async function workspaceApi(path, method = "GET", body) {
         ...summaries.instagram,
       },
       search: { configured: false },
+      ai: { configured: false },
+      automation: { configured: false },
     };
   }
   await member();
@@ -151,6 +153,16 @@ export async function workspaceApi(path, method = "GET", body) {
       ),
       result(client.from("sanji_suppression").select("identity,reason")),
     ]);
+    const jobsResult = await client
+      .from("sanji_jobs")
+      .select("id,draft_id,status,run_at,attempts,result,approved_at")
+      .order("run_at", { ascending: false })
+      .limit(200);
+    if (
+      jobsResult.error &&
+      !["PGRST205", "42P01"].includes(jobsResult.error.code)
+    )
+      throw error("예약 목록 조회에 실패했습니다.");
     const records = rows.map((r) => ({ ...unpack(r), _kind: r.kind }));
     return {
       candidates: records.filter((r) => r._kind === "candidate"),
@@ -158,6 +170,7 @@ export async function workspaceApi(path, method = "GET", body) {
       templates: records.filter((r) => r._kind === "template"),
       threads: records.filter((r) => r._kind === "thread"),
       outbox,
+      jobs: jobsResult.data || [],
       suppression,
       settings: records.find((r) => r._kind === "settings") || {
         dailyLimit: 20,
@@ -205,6 +218,10 @@ export async function workspaceApi(path, method = "GET", body) {
         }),
       ),
     );
+  if (path.startsWith("/jobs/") && method === "DELETE") {
+    await result(client.rpc("sanji_cancel_job", { p_id: path.split("/")[2] }));
+    return { ok: true };
+  }
   if (path === "/matching") {
     const rows = await result(
         client
