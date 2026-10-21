@@ -1,3 +1,13 @@
+// supabase/functions/_shared/instagram-accounts.ts
+function selectInstagramAccount(accounts, thread) {
+  if (thread.connectionKey)
+    return accounts.find((a) => a.provider === thread.connectionKey) || null;
+  return accounts.length === 1 ? accounts[0] : null;
+}
+function sameInstagramConversation(thread, provider, senderId) {
+  return thread.channel === "instagram" && thread.senderId === senderId && (thread.connectionKey === provider || !thread.connectionKey && provider === "instagram");
+}
+
 // supabase/functions/_shared/function-route.ts
 function functionRoute(requestUrl, projectUrl) {
   const url2 = new URL(requestUrl), parts = url2.pathname.split("/").filter(Boolean);
@@ -253,6 +263,15 @@ async function connection(u, p) {
   );
   return row ? await decrypt(row.encrypted) : null;
 }
+async function instagramAccounts(u) {
+  return await query(sb.from("sanji_connections").select("provider,summary,encrypted").eq("owner", u).or("provider.eq.instagram,provider.like.instagram:%"));
+}
+async function instagramForThread(u, t) {
+  const accounts = await instagramAccounts(u);
+  const row = selectInstagramAccount(accounts, t);
+  if (!row) fail(409, "\uC774 \uB300\uD654\uC758 \uC218\uC2E0 \uACC4\uC815\uC744 \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uD574\uB2F9 \uACC4\uC815\uC744 \uC7AC\uC5F0\uACB0\uD558\uAC70\uB098 \uC0C8 \uC218\uC2E0 \uB300\uD654\uC5D0\uC11C \uD68C\uC2E0\uD558\uC138\uC694.");
+  return { key: row.provider, data: await decrypt(row.encrypted) };
+}
 async function saveConnection(u, p, data) {
   await query(
     sb.from("sanji_connections").upsert(
@@ -434,7 +453,7 @@ async function webhook(req, url2) {
     fail(403, "\uC6F9\uD6C5 \uC11C\uBA85 \uBD88\uC77C\uCE58");
   const body = JSON.parse(new TextDecoder().decode(bytes));
   const connections = await query(
-    sb.from("sanji_connections").select("owner,encrypted").eq("provider", "instagram")
+    sb.from("sanji_connections").select("owner,provider,encrypted").or("provider.eq.instagram,provider.like.instagram:%")
   );
   for (const entry of body.entry || [])
     for (const event of entry.messaging || []) {
@@ -447,10 +466,12 @@ async function webhook(req, url2) {
         const c = await decrypt(row.encrypted);
         if (String(c.id) !== String(entry.id)) continue;
         const old = (await records(row.owner, "thread")).find(
-          (t2) => t2.channel === "instagram" && t2.senderId === String(event.sender.id)
+          (t2) => sameInstagramConversation(t2, row.provider, String(event.sender.id))
         );
         const t = old || {
           channel: "instagram",
+          connectionKey: row.provider,
+          accountUsername: c.username,
           target: "",
           senderId: String(event.sender.id),
           subject: "Instagram \uC218\uC2E0 \uB300\uD654",
@@ -460,6 +481,8 @@ async function webhook(req, url2) {
           classification: "\uBBF8\uBD84\uB958",
           messages: []
         };
+        t.connectionKey = row.provider;
+        t.accountUsername = c.username;
         t.messages.push({
           id: event.message.mid,
           out: false,
@@ -535,13 +558,18 @@ async function callback(req, url2, provider, base) {
     );
     const profile = await remote(
       "https://graph.instagram.com/" + (env("META_GRAPH_VERSION") || "v24.0") + "/me?" + new URLSearchParams({
-        fields: "id,username",
+        fields: "id,user_id,username",
         access_token: long.access_token
       })
     );
-    await saveConnection(row.owner, "instagram", {
+    const accounts = await instagramAccounts(row.owner);
+    const accountId = String(profile.user_id || profile.id || "");
+    const existing = accounts.find((a) => a.provider === "instagram:" + accountId || a.provider === "instagram" && a.summary?.username === profile.username);
+    if (!/^\d+$/.test(accountId)) fail(502, "Instagram \uACC4\uC815 ID\uB97C \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+    await saveConnection(row.owner, existing?.provider || "instagram:" + accountId, {
       ...long,
       ...profile,
+      id: accountId,
       expires: Date.now() + long.expires_in * 1e3
     });
   } else fail(404, "\uC54C \uC218 \uC5C6\uB294 \uC5F0\uACB0");
@@ -585,7 +613,9 @@ async function sendDraft(u, draftId, b, jobId) {
       fail(403, "\uB300\uD654 \uC2DC\uAC04 \uB610\uB294 \uC218\uC2E0\uC790 \uD655\uC778 \uD544\uC694");
     if (Buffer.byteLength(d.body) > 1e3 || d.attachments.length)
       fail(400, "\uD604\uC7AC \uD68C\uC2E0\uC740 1000\uBC14\uC774\uD2B8 \uC774\uD558 \uD14D\uC2A4\uD2B8\uB9CC \uC9C0\uC6D0\uD569\uB2C8\uB2E4.");
-    ig = await connection(u, "instagram");
+    const account = await instagramForThread(u, t);
+    if (d.connectionKey !== account.key) fail(409, "\uBC1C\uC2E0 \uACC4\uC815\uC774 \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uCD5C\uC885 \uBBF8\uB9AC\uBCF4\uAE30\uB97C \uB2E4\uC2DC \uC2B9\uC778\uD558\uC138\uC694.");
+    ig = account.data;
     if (!ig || ig.expires < Date.now()) fail(503, "Meta \uC7AC\uC5F0\uACB0 \uD544\uC694");
   }
   const reservation = await query(
@@ -751,7 +781,7 @@ Deno.serve(async (req) => {
     if (/^\/oauth\/(gmail|instagram)\/callback$/.test(path))
       return await callback(req, url2, path.split("/")[2], base);
     if (path === "/health" && req.method === "GET")
-      return json({ ok: true, version: 3, authRequired: true });
+      return json({ ok: true, version: 4, authRequired: true });
     if (path === "/jobs/run" && req.method === "POST")
       return await runJobs(req);
     const bearer = req.headers.get("authorization") || "";
@@ -863,7 +893,8 @@ Deno.serve(async (req) => {
       return json(Array.isArray(r) ? r[0] : r, 201);
     }
     if (path === "/connections" && req.method === "GET") {
-      const gmail = await connection(u, "gmail"), ig = await connection(u, "instagram");
+      const gmail = await connection(u, "gmail"), accounts = await instagramAccounts(u);
+      const ig = accounts[0]?.summary;
       return json({
         gmail: {
           configured: !!env("GOOGLE_CLIENT_ID") && !!env("GOOGLE_CLIENT_SECRET"),
@@ -875,6 +906,7 @@ Deno.serve(async (req) => {
           configured: !!env("META_APP_ID") && !!env("META_APP_SECRET"),
           connected: !!ig,
           username: ig?.username || "",
+          accounts: accounts.map((a) => ({ key: a.provider, ...a.summary })),
           enabled: env("INSTAGRAM_SENDING_ENABLED") === "true"
         },
         search: { configured: !!env("BRAVE_SEARCH_API_KEY") },
@@ -927,6 +959,7 @@ Deno.serve(async (req) => {
         ).toString("base64url"),
         code_challenge_method: "S256"
       }) : new URLSearchParams({
+        force_authentication: "1",
         client_id: env("META_APP_ID"),
         redirect_uri: base + "/oauth/instagram/callback",
         response_type: "code",
@@ -1112,11 +1145,16 @@ ${settings.optOut}` : "");
         if (t.target !== c.id || t.channel !== inputData.channel)
           fail(400, "\uD68C\uC2E0 \uCC44\uB110\xB7\uC218\uC2E0\uC790 \uBD88\uC77C\uCE58");
         const last = t.messages.filter((m) => !m.out).at(-1);
+        const igAccount = inputData.channel === "instagram" ? await instagramForThread(u, t) : null;
         reply = {
           providerThread: t.providerId,
           inReplyTo: last?.messageId,
           references: last?.references,
-          senderId: t.senderId
+          senderId: t.senderId,
+          ...inputData.channel === "instagram" ? {
+            connectionKey: igAccount.key,
+            accountUsername: igAccount.data.username
+          } : {}
         };
         if (inputData.channel === "instagram" && (!t.lastInbound || Date.now() - t.lastInbound > 864e5))
           fail(403, "24\uC2DC\uAC04 \uBA54\uC2DC\uC9D5 \uC2DC\uAC04\uC774 \uB9CC\uB8CC\uB410\uC2B5\uB2C8\uB2E4.");
@@ -1155,6 +1193,7 @@ ${settings.optOut}` : "");
           target: c.name,
           email: c.contact.email,
           channel: d.channel,
+          accountUsername: d.accountUsername,
           subject,
           body,
           dealVersions: d.dealVersions,

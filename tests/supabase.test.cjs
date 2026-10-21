@@ -283,7 +283,7 @@ test("Edge function compiles and denies unauthenticated/disallowed-origin reques
         new Request("https://project.example" + prefix + "/health"),
       );
       assert.equal(health.status, 200);
-      assert.equal((await health.json()).version, 3);
+      assert.equal((await health.json()).version, 4);
       assert.equal(
         (
           await handler(
@@ -639,4 +639,20 @@ test("deployment diagnostics distinguish missing function from JWT rejection in 
     if (browser) await browser.close();
     await new Promise((r) => server.close(r));
   }
+});
+
+test("Instagram replies retain the receiving account; legacy ambiguous and removed accounts fail closed", async () => {
+  const compiled = esbuild.buildSync({ entryPoints: ["supabase/functions/_shared/instagram-accounts.ts"], bundle: true, platform: "node", format: "cjs", write: false });
+  const module = { exports: {} };
+  new Function("module", "exports", compiled.outputFiles[0].text)(module, module.exports);
+  const { selectInstagramAccount: pick, sameInstagramConversation: same } = module.exports;
+  const a = { provider: "instagram:111" }, b = { provider: "instagram:222" };
+  assert.equal(pick([a,b], { connectionKey: a.provider }), a);
+  assert.equal(pick([b], { connectionKey: a.provider }), null);
+  assert.equal(pick([a,b], {}), null);
+  assert.equal(pick([a], {}), a);
+  const t = { channel: "instagram", connectionKey: a.provider, senderId: "customer" };
+  assert.equal(same(t, a.provider, "customer"), true);
+  assert.equal(same(t, b.provider, "customer"), false);
+  assert.equal(same(t, a.provider, "other"), false);
 });

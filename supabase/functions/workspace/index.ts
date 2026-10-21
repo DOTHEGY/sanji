@@ -1,3 +1,4 @@
+import { selectInstagramAccount, sameInstagramConversation } from "../_shared/instagram-accounts.ts";
 import { functionRoute } from "../_shared/function-route.ts";
 import { publicContext, validateIntro } from "../_shared/personalization.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
@@ -90,6 +91,16 @@ async function connection(u: string, p: string) {
       .maybeSingle(),
   );
   return row ? await decrypt(row.encrypted) : null;
+}
+async function instagramAccounts(u: string) {
+  return await query(sb.from("sanji_connections").select("provider,summary,encrypted")
+    .eq("owner", u).or("provider.eq.instagram,provider.like.instagram:%"));
+}
+async function instagramForThread(u: string, t: any) {
+  const accounts = await instagramAccounts(u);
+  const row = selectInstagramAccount(accounts, t);
+  if (!row) fail(409, "이 대화의 수신 계정을 확인할 수 없습니다. 해당 계정을 재연결하거나 새 수신 대화에서 회신하세요.");
+  return { key: row.provider, data: await decrypt(row.encrypted) };
 }
 async function saveConnection(u: string, p: string, data: any) {
   await query(
@@ -313,8 +324,8 @@ async function webhook(req: Request, url: URL) {
   const connections = await query(
     sb
       .from("sanji_connections")
-      .select("owner,encrypted")
-      .eq("provider", "instagram"),
+      .select("owner,provider,encrypted")
+      .or("provider.eq.instagram,provider.like.instagram:%"),
   );
   for (const entry of body.entry || [])
     for (const event of entry.messaging || []) {
@@ -330,10 +341,12 @@ async function webhook(req: Request, url: URL) {
         if (String(c.id) !== String(entry.id)) continue;
         const old = (await records(row.owner, "thread")).find(
           (t: any) =>
-            t.channel === "instagram" && t.senderId === String(event.sender.id),
+            sameInstagramConversation(t, row.provider, String(event.sender.id)),
         );
         const t = old || {
           channel: "instagram",
+          connectionKey: row.provider,
+          accountUsername: c.username,
           target: "",
           senderId: String(event.sender.id),
           subject: "Instagram 수신 대화",
@@ -343,6 +356,8 @@ async function webhook(req: Request, url: URL) {
           classification: "미분류",
           messages: [],
         };
+        t.connectionKey = row.provider;
+        t.accountUsername = c.username;
         t.messages.push({
           id: event.message.mid,
           out: false,
@@ -436,13 +451,18 @@ async function callback(
         (env("META_GRAPH_VERSION") || "v24.0") +
         "/me?" +
         new URLSearchParams({
-          fields: "id,username",
+          fields: "id,user_id,username",
           access_token: long.access_token,
         }),
     );
-    await saveConnection(row.owner, "instagram", {
+    const accounts = await instagramAccounts(row.owner);
+    const accountId = String(profile.user_id || profile.id || "");
+    const existing = accounts.find((a: any) => a.provider === "instagram:" + accountId || (a.provider === "instagram" && a.summary?.username === profile.username));
+    if (!/^\d+$/.test(accountId)) fail(502, "Instagram 계정 ID를 확인할 수 없습니다.");
+    await saveConnection(row.owner, existing?.provider || "instagram:" + accountId, {
       ...long,
       ...profile,
+      id: accountId,
       expires: Date.now() + long.expires_in * 1000,
     });
   } else fail(404, "알 수 없는 연결");
@@ -508,7 +528,9 @@ async function sendDraft(u: string, draftId: string, b: any, jobId?: string) {
       fail(403, "대화 시간 또는 수신자 확인 필요");
     if (Buffer.byteLength(d.body) > 1000 || d.attachments.length)
       fail(400, "현재 회신은 1000바이트 이하 텍스트만 지원합니다.");
-    ig = await connection(u, "instagram");
+    const account = await instagramForThread(u, t);
+    if (d.connectionKey !== account.key) fail(409, "발신 계정이 변경되었습니다. 최종 미리보기를 다시 승인하세요.");
+    ig = account.data;
     if (!ig || ig.expires < Date.now()) fail(503, "Meta 재연결 필요");
   }
   const reservation = await query(
@@ -715,7 +737,7 @@ Deno.serve(async (req: Request) => {
     if (/^\/oauth\/(gmail|instagram)\/callback$/.test(path))
       return await callback(req, url, path.split("/")[2], base);
     if (path === "/health" && req.method === "GET")
-      return json({ ok: true, version: 3, authRequired: true });
+      return json({ ok: true, version: 4, authRequired: true });
     if (path === "/jobs/run" && req.method === "POST")
       return await runJobs(req);
     const bearer = req.headers.get("authorization") || "";
@@ -843,7 +865,8 @@ Deno.serve(async (req: Request) => {
     }
     if (path === "/connections" && req.method === "GET") {
       const gmail = await connection(u, "gmail"),
-        ig = await connection(u, "instagram");
+        accounts = await instagramAccounts(u);
+      const ig = accounts[0]?.summary;
       return json({
         gmail: {
           configured:
@@ -856,6 +879,7 @@ Deno.serve(async (req: Request) => {
           configured: !!env("META_APP_ID") && !!env("META_APP_SECRET"),
           connected: !!ig,
           username: ig?.username || "",
+          accounts: accounts.map((a: any) => ({ key: a.provider, ...a.summary })),
           enabled: env("INSTAGRAM_SENDING_ENABLED") === "true",
         },
         search: { configured: !!env("BRAVE_SEARCH_API_KEY") },
@@ -922,6 +946,7 @@ Deno.serve(async (req: Request) => {
               code_challenge_method: "S256",
             })
           : new URLSearchParams({
+              force_authentication: "1",
               client_id: env("META_APP_ID"),
               redirect_uri: base + "/oauth/instagram/callback",
               response_type: "code",
@@ -1167,11 +1192,16 @@ Deno.serve(async (req: Request) => {
         if (t.target !== c.id || t.channel !== inputData.channel)
           fail(400, "회신 채널·수신자 불일치");
         const last = t.messages.filter((m: any) => !m.out).at(-1);
+        const igAccount = inputData.channel === "instagram" ? await instagramForThread(u, t) : null;
         reply = {
           providerThread: t.providerId,
           inReplyTo: last?.messageId,
           references: last?.references,
           senderId: t.senderId,
+          ...(inputData.channel === "instagram" ? {
+            connectionKey: igAccount.key,
+            accountUsername: igAccount.data.username,
+          } : {}),
         };
         if (
           inputData.channel === "instagram" &&
@@ -1218,6 +1248,7 @@ Deno.serve(async (req: Request) => {
           target: c.name,
           email: c.contact.email,
           channel: d.channel,
+          accountUsername: d.accountUsername,
           subject,
           body,
           dealVersions: d.dealVersions,
