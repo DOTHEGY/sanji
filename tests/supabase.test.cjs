@@ -830,7 +830,7 @@ test("Brand workflow combines discovery and registered brands, previews exact co
     if(p==="/connections")return res.json({gmail:{connected:true,enabled:true},instagram:{connected:false},search:{configured:false},ai:{configured:false}});
     if(p==="/discovery")return res.json({settings:{enabled:true,target:30,keywords:[]},leads:[],usage:{emails:1,processed:3,calls:3},activity:[{name:"확인한 업체",emailCount:1,pages:2,checked:new Date().toISOString()}],engine:{status:"sources_exhausted",label:"대기열 소진 · 신규 소스 보강 필요",pending:0}});
     if(p==="/drafts") {drafted.push(req.body);const c=brands.find(c=>c.id===req.body.target);return res.json({id:"draft-"+c.id,hash:"hash-"+c.id,target:c.name,email:c.contact.email,subject:req.body.subject.replace("{{브랜드명}}",c.name),body:req.body.body+"\n"+req.body.signature,attachments:[]});}
-    if(p==="/schedule") {scheduled.push(req.body);return res.json({run_at:req.body.runAt});}
+    if(p==="/schedule") {scheduled.push(req.body);if(req.body.draftId === "draft-brand-1")return res.status(409).json({error:"이미 예약한 수신자"});return res.json({run_at:req.body.runAt});}
     if(p.endsWith("/send")){sends++;return res.status(500).json({error:"never send in this test"});}
     return res.status(404).json({error:p});
   });
@@ -862,11 +862,15 @@ test("Brand workflow combines discovery and registered brands, previews exact co
     await page.locator('[name=bulk-approve]').check();
     await page.locator('#bulk-compose-form [name=body]').fill(state.templates[0].body+" 수정");
     assert.equal(await page.locator('[name=bulk-approve]').count(),0);
+    await page.locator('[name=bulk-target]').nth(1).check();
+    await page.locator('[name="intro-brand-1"]').fill("두 번째 제품의 확인된 특징. 확인된 내용 적합성.");
     await page.locator('#bulk-compose-form button[type=submit]').click();await page.waitForSelector('[name=bulk-approve]');
-    await page.locator('[name=bulk-approve]').check();
+    await page.locator('[name=bulk-approve]').nth(0).check();
+    await page.locator('[name=bulk-approve]').nth(1).check();
     const future=new Date(Date.now()+86400000);await page.locator('#bulk-run-at').fill(future.toISOString().slice(0,16));
     await page.locator('[data-action="bulk-schedule"]').click();await page.waitForFunction(()=>document.querySelector('[id^="bulk-result-"]').textContent.includes("예약 완료"));
-    assert.equal(scheduled.length,1);assert.equal(scheduled[0].approved,true);assert.equal(scheduled[0].draftId,"draft-brand-0");assert.equal(sends,0);
+    await page.waitForFunction(()=>document.querySelector("#bulk-result-1").textContent.includes("예약 실패"));
+    assert.equal(scheduled.length,2);assert.equal(scheduled[0].approved,true);assert.equal(scheduled[0].draftId,"draft-brand-0");assert.equal(sends,0);
     assert.equal(await page.locator('[name=bulk-approve]:disabled').count(),1);assert.deepEqual(errors,[]);
   } finally {if(browser)await browser.close();await new Promise(r=>server.close(r));}
 });

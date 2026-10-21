@@ -480,18 +480,21 @@ function discoveryProgress(r) {
   <div class="notice" role="status"><strong>${esc(r.engine?.label || "수집 현황 확인 중")}</strong>${r.engine?.current ? " · " + esc(r.engine.current) : ""}<br>최근 수집 완료: ${esc(localTime(r.engine?.lastCompleted))} · 다음 실행 예정: ${esc(localTime(r.engine?.nextRun))}<br><small>화면은 30초마다 현황을 갱신합니다. 서버 수집은 5분 간격입니다. 홈페이지 후보 대기열을 확인하며 검색 API는 필요하지 않습니다. 대기열이 소진되면 별도 웹 조사로 소스를 보강해야 합니다. 하루 30개는 목표이며 확보 보장이 아닙니다.</small>${r.usage.last_error ? "<p class=error>최근 수집 오류: " + esc(r.usage.last_error) + "</p>" : ""}</div>
   <details class="panel" open><summary>최근 수집 진행 내역</summary>${(r.activity || []).map(a => `<div class="task"><strong>${esc(a.name)}</strong> · ${a.emailCount ? "메일 후보 " + a.emailCount + "개" : "메일 미확보"}<small>${esc(localTime(a.checked))} · 확인 ${a.pages}페이지</small>${a.error ? `<p class="error">${esc(a.error)}</p>` : ""}</div>`).join("") || '<p class="fine">아직 처리한 업체가 없습니다.</p>'}</details>`;
 }
+function discoveryCards(r) {
+  const rows = r.leads.filter(l => !discoveryOnlyEmails || l.data.contacts?.length);
+  return `<div class="cards">${rows.map(l => `<article class="panel">${tag(l.status === "imported" ? "검토 후 등록됨" : l.data.contacts?.length ? "공식 공개 메일 후보 · 소유 관계 검토 전" : l.status === "new" ? "수집 대기" : "메일 미확보")}<h3>${esc(l.data.name)}</h3><p>${esc(l.data.product || "상품 미선정")}<br>${esc(l.data.channel || "")} · 제품 법적 분류·판매 권한 미확인</p>${l.data.website ? `<a href="${esc(l.data.website)}" target="_blank" rel="noopener">홈페이지 후보 ↗</a>` : ""}<p class="fine">발견 출처: ${l.data.source ? `<a href="${esc(l.data.source)}" target="_blank" rel="noopener">원본 보기</a>` : "미확인"} · ${esc(l.data.checked || "")}</p>${l.data.error ? `<p class="error">${esc(l.data.error)}</p>` : ""}${(l.data.contacts || []).map(c => `<div class="message"><strong>${esc(c.email)}</strong>${tag(c.purpose || "용도 미확인")}<p class="fine">${esc(c.ownership || "소유 관계 검토 필요")}</p><p>${esc(c.context)}</p><a href="${esc(c.source)}" target="_blank" rel="noopener">이메일 공식 출처 ↗</a> · ${esc(c.checked)}</div>`).join("")}${l.data.contacts?.length && l.status !== "imported" ? `<form id="discovery-import-${l.id}" data-discovery-import="true" data-id="${l.id}">${field("company", "확인한 이메일 소유 법인명", l.data.company || "")}<label class="field">등록할 이메일<select name="email">${l.data.contacts.map(c => `<option>${esc(c.email)}</option>`).join("")}</select></label>${field("approved", "공식 사이트 소유 회사와 제안 대상 회사가 같고 해당 회사가 공식 공개한 이메일임을 확인했습니다", false, "checkbox")}<button type="submit">검토한 이메일로 브랜드 등록</button></form>` : ""}${!l.data.contacts?.length && l.status !== "new" ? `<form id="discovery-requeue-${l.id}" data-discovery-requeue="true" data-id="${l.id}">${field("url", "확인한 공식 홈페이지 URL로 재수집", l.data.website || "", "url")}<button type="submit">URL 보완 후 대기열에 넣기</button></form>` : ""}<p class="fine">${l.data.excludedCount || 0}개 주소 제외. 이메일 미확보 업체는 실적에 포함되지 않습니다.</p></article>`).join("") || '<div class="panel empty">아직 조건을 충족한 이메일 후보가 없습니다. 홈페이지 후보를 순서대로 확인하고 있습니다. 진행 현황에서 대기·실패 여부를 확인하세요.</div>'}</div>`;
+}
 async function discoveryPage() {
   clearTimeout(discoveryRefresh);
   $("#app").innerHTML = head("브랜드 발굴·이메일 영업", "이메일 수집 → 출처·소유 관계 검토 → 브랜드 등록 → 메일 미리보기 → 승인한 건 일괄 예약", button("진행 현황 새로고침", "discovery-refresh")) + '<div class="panel">수집 현황 확인 중…</div>';
   try {
     const r = await api("/discovery"); discoveryView = r;
-    const rows = r.leads.filter(l => !discoveryOnlyEmails || l.data.contacts?.length);
     $("#app").innerHTML = head("브랜드 발굴·이메일 영업", "이메일 수집 → 소유 관계 검토 → 브랜드 등록 → 메일 미리보기 → 승인한 건 일괄 예약", button("진행 현황 새로고침", "discovery-refresh")) +
       `<div class="actions">${button("발굴·수집 현황", "brand-tab", "discovery", brandTab === "discovery")}${button("등록 브랜드·메일 작성", "brand-tab", "saved", brandTab === "saved")}${button("일괄 메일 작성·미리보기", "bulk-compose", "", true)}</div><div id="discovery-progress">${discoveryProgress(r)}</div>` +
-      (brandTab === "saved" ? '<div class="panel"><h2>등록 후 이렇게 진행하세요</h2><p>브랜드의 제품명·이메일을 확인한 뒤 ‘메일 작성·미리보기’를 누르세요. 공통 카피는 <a href="#templates">템플릿</a>에서 편집하고, 개인화 1~2줄은 수신자별로 입력합니다. 최종 내용을 승인하면 예약 실행기가 발송하고, 답장은 <a href="#inbox">통합 대화함</a>에서 확인·회신합니다.</p></div><div id="brand-saved"></div><div class="panel"><h2>승인된 메일 예약 현황</h2>'+jobTable()+'</div>' :
+      (brandTab === "saved" ? '<div class="panel"><h2>등록 후 이렇게 진행하세요</h2><p>브랜드의 제품명·이메일을 확인한 뒤 ‘메일 작성·미리보기’를 누르세요. 공통 카피는 <a href="#templates">템플릿</a>에서 편집하고, 개인화 1~2줄은 수신자별로 입력합니다. 최종 내용을 승인하면 예약 실행기가 발송하고, 답장은 <a href="#inbox">통합 대화함</a>에서 확인·회신합니다.</p></div><div id="brand-saved"></div><div class="panel" id="brand-jobs"><h2>승인된 메일 예약 현황</h2>'+jobTable()+'</div>' :
       `<details class="panel"><summary>수집 설정·보조 기능</summary><form id="discovery-settings" class="form-grid">${field("target", "하루 신규 이메일 후보 목표", r.settings.target, "number")}${field("enabled", "5분 간격 자동 수집", r.settings.enabled, "checkbox")}<input name="keywords" type="hidden" value="${esc(r.settings.keywords.join("\n"))}"><button type="submit">설정 저장</button></form>${button("지금 다음 업체 수집", "discovery-run")}<details><summary>직접 홈페이지 추가 (보조 기능)</summary><form id="discovery-seed" class="form-grid">${field("name", "회사·브랜드명", "")}${field("url", "홈페이지 후보 HTTPS URL", "", "url")}<button type="submit">수집 대기열에 추가</button></form></details><p class="fine">대표·일반 문의·고객센터 메일도 찾고 용도를 구분합니다. 이메일 추측·차단 우회·자동 문의폼 제출은 하지 않습니다. AI 호출 없이 사이트당 최대 5페이지를 확인합니다.</p></details>` +
       `<div class="actions">${button(discoveryOnlyEmails ? "메일 미확보·대기 업체도 보기" : "이메일 있는 업체만 보기", "discovery-filter")}${button("이메일 후보 목록 복사", "discovery-copy")}</div>` +
-      `<div class="cards">${rows.map(l => `<article class="panel">${tag(l.status === "imported" ? "검토 후 등록됨" : l.data.contacts?.length ? "공식 공개 메일 후보 · 소유 관계 검토 전" : l.status === "new" ? "수집 대기" : "메일 미확보")}<h3>${esc(l.data.name)}</h3><p>${esc(l.data.product || "상품 미선정")}<br>${esc(l.data.channel || "")} · 제품 법적 분류·판매 권한 미확인</p>${l.data.website ? `<a href="${esc(l.data.website)}" target="_blank" rel="noopener">홈페이지 후보 ↗</a>` : ""}<p class="fine">발견 출처: ${l.data.source ? `<a href="${esc(l.data.source)}" target="_blank" rel="noopener">원본 보기</a>` : "미확인"} · ${esc(l.data.checked || "")}</p>${l.data.error ? `<p class="error">${esc(l.data.error)}</p>` : ""}${(l.data.contacts || []).map(c => `<div class="message"><strong>${esc(c.email)}</strong>${tag(c.purpose || "용도 미확인")}<p class="fine">${esc(c.ownership || "소유 관계 검토 필요")}</p><p>${esc(c.context)}</p><a href="${esc(c.source)}" target="_blank" rel="noopener">이메일 공식 출처 ↗</a> · ${esc(c.checked)}</div>`).join("")}${l.data.contacts?.length && l.status !== "imported" ? `<form id="discovery-import-${l.id}" data-discovery-import="true" data-id="${l.id}">${field("company", "확인한 이메일 소유 법인명", l.data.company || "")}<label class="field">등록할 이메일<select name="email">${l.data.contacts.map(c => `<option>${esc(c.email)}</option>`).join("")}</select></label>${field("approved", "공식 사이트 소유 회사와 제안 대상 회사가 같고 해당 회사가 공식 공개한 이메일임을 확인했습니다", false, "checkbox")}<button type="submit">검토한 이메일로 브랜드 등록</button></form>` : ""}${!l.data.contacts?.length && l.status !== "new" ? `<form id="discovery-requeue-${l.id}" data-discovery-requeue="true" data-id="${l.id}">${field("url", "확인한 공식 홈페이지 URL로 재수집", l.data.website || "", "url")}<button type="submit">URL 보완 후 대기열에 넣기</button></form>` : ""}<p class="fine">${l.data.excludedCount || 0}개 주소 제외. 이메일 미확보 업체는 실적에 포함되지 않습니다.</p></article>`).join("") || '<div class="panel empty">아직 조건을 충족한 이메일 후보가 없습니다. 홈페이지 후보를 순서대로 확인하고 있습니다. 진행 현황에서 대기·실패 여부를 확인하세요.</div>'}</div>`);
+      `<div id="discovery-results">${discoveryCards(r)}</div>`);
     if (brandTab === "saved") candidatesPage("brand", true);
     scheduleDiscoveryRefresh();
   } catch (e) { if (e.status === 404) { candidatesPage("brand"); return; } $("#app").innerHTML = head("브랜드 발굴 연결 확인", "") + `<div class="error">${esc(e.message)}</div>`; }
@@ -500,7 +503,13 @@ function scheduleDiscoveryRefresh() {
   clearTimeout(discoveryRefresh);
   discoveryRefresh = setTimeout(async () => {
     if (!me || !["brands", "discovery"].includes(location.hash.slice(1))) return;
-    try { const r = await api("/discovery"); discoveryView = r; if ($("#discovery-progress")) $("#discovery-progress").innerHTML = discoveryProgress(r); }
+    try {
+      const r = await api("/discovery"), changed = JSON.stringify(discoveryView?.leads) !== JSON.stringify(r.leads);
+      const editing = $("#modal").open || document.activeElement?.closest("form");
+      if ($("#discovery-progress")) $("#discovery-progress").innerHTML = discoveryProgress(r);
+      if (changed && !editing && $("#discovery-results")) { $("#discovery-results").innerHTML = discoveryCards(r); discoveryView = r; }
+      if (brandTab === "saved" && !editing) { data = await api("/state"); if ($("#brand-jobs")) $("#brand-jobs").innerHTML = '<h2>승인된 메일 예약 현황</h2>' + jobTable(); }
+    }
     catch (e) { if ($("#discovery-progress")) $("#discovery-progress").innerHTML += `<p class="error">현황 갱신 실패: ${esc(e.message)}</p>`; }
     scheduleDiscoveryRefresh();
   }, 30000);
@@ -524,7 +533,7 @@ function applyBulkTemplate() {
 }
 function invalidateBulk() {
   bulkPreviews = [];
-  if ($("#bulk-previews")) $("#bulk-previews").innerHTML = '<p class="fine">수신자·내용 변경 시 미리보기와 승인을 다시 진행하세요.</p>';
+  if ($("#bulk-previews")) $("#bulk-previews").innerHTML = '<p class="fine">수신자·내용 변경 시 미리보기와 승인을 다시 진행하세요. 이미 완료한 예약은 자동 취소되지 않으며 등록 브랜드의 예약 현황에서 취소할 수 있습니다.</p>';
 }
 async function bulkPrepare(form) {
   invalidateBulk();
