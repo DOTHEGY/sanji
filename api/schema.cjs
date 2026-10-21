@@ -103,6 +103,7 @@ const deal = z.object({
 });
 const template = z.object({
   aiEnabled: z.boolean().default(true),
+  personalizationGuide: z.string().max(2000).default(""),
   name: short.min(1),
   channel: z.enum(["이메일", "Instagram DM"]),
   subject: short,

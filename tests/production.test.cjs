@@ -854,7 +854,7 @@ test("copy editor keeps main template intact while AI changes intro only; schedu
       captured;
     await p.route(h.base + "/api/personalize", async (r) => {
       personalized++;
-      assert.deepEqual(r.request().postDataJSON(), { target: c.id });
+      assert.deepEqual(r.request().postDataJSON(), { target: c.id, templateId: template.id });
       await r.fulfill({
         contentType: "application/json",
         body: JSON.stringify({

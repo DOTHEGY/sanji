@@ -19,6 +19,7 @@ export function publicContext(c: any) {
     );
   return {
     name: c.name,
+    product: c.product || "",
     kind: c.kind,
     topics: (c.topics || []).slice(0, 8),
     evidence,

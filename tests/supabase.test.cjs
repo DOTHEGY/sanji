@@ -283,7 +283,7 @@ test("Edge function compiles and denies unauthenticated/disallowed-origin reques
         new Request("https://project.example" + prefix + "/health"),
       );
       assert.equal(health.status, 200);
-      assert.equal((await health.json()).version, 4);
+      assert.equal((await health.json()).version, 5);
       assert.equal(
         (
           await handler(
@@ -655,4 +655,45 @@ test("Instagram replies retain the receiving account; legacy ambiguous and remov
   assert.equal(same(t, a.provider, "customer"), true);
   assert.equal(same(t, b.provider, "customer"), false);
   assert.equal(same(t, a.provider, "other"), false);
+});
+
+test("OAuth expiry distinguishes missing, consumed and expired requests and renders escaped recovery page", () => {
+  const compiled = esbuild.buildSync({ entryPoints: ["supabase/functions/_shared/oauth-status.ts"], bundle: true, platform: "node", format: "cjs", write: false });
+  const m = { exports: {} }; new Function("module", "exports", compiled.outputFiles[0].text)(m, m.exports);
+  const { oauthStateProblem: problem, oauthLifetimeMs: ttl, oauthErrorPage: page } = m.exports;
+  assert.equal(ttl, 1800000);
+  assert.match(problem("", null), /state/);
+  assert.match(problem("used", null), /이미 처리/);
+  assert.match(problem("old", {expires: new Date(0).toISOString()}, ttl), /30분/);
+  assert.match(problem("bad", {expires: "bad"}), /30분/);
+  assert.equal(problem("valid", {expires: new Date(ttl).toISOString()}, 0), "");
+  assert.equal(page("<script>bad</script>", "https://app.example/").includes("<script>"), false);
+  assert.match(page("expired", "https://app.example/"), /https:\/\/app.example\/#settings/);
+});
+
+test("Gmail health checks only account and granted scopes, never invokes send or returns tokens", async () => {
+  const compiled = esbuild.buildSync({ entryPoints: ["supabase/functions/_shared/gmail-check.ts"], bundle: true, platform: "node", format: "cjs", write: false });
+  const m = { exports: {} }; new Function("module", "exports", compiled.outputFiles[0].text)(m, m.exports);
+  const urls = [];
+  const result = await m.exports.checkGmail({ access_token: "private-test-token", email: "sender@example.test" }, async (url) => {
+    urls.push(url);
+    return url.includes("/profile") ? {emailAddress: "sender@example.test"} : {scope: "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly"};
+  }, false);
+  assert.equal(result.accountMatches, true); assert.equal(result.sendPermission, true); assert.equal(result.readPermission, true);
+  assert.equal(result.sendingEnabled, false); assert.equal(result.emailSent, false);
+  assert.equal(urls.length, 2); assert.equal(urls.some(u => u.includes("/send")), false);
+  assert.equal(JSON.stringify(result).includes("private-test-token"), false);
+  const missing = await m.exports.checkGmail({email: "a"}, async () => ({}), false);
+  assert.equal(missing.sendPermission, false); assert.equal(missing.accountMatches, false);
+});
+
+test("Personalization fills only the requested inline slot, preserving the surrounding user copy", () => {
+  const source = fs.readFileSync("private/ui/app.js", "utf8");
+  const start = source.indexOf("function assemblePersonalization("), end = source.indexOf("\n}\n", start) + 2;
+  const assemble = new Function(source.slice(start,end) + ";return assemblePersonalization;")();
+  const original = "안녕하세요, {{브랜드명}} 담당자님.\n고정 제안 문구\n\n{{개인화}}\n\n회사 소개 원문";
+  assert.equal(assemble(original, "특징 근거 한 문장.\n적합성 근거 한 문장."), original.replace("{{개인화}}", "특징 근거 한 문장.\n적합성 근거 한 문장."));
+  assert.throws(() => assemble(original, ""), /생성하거나 직접 입력/);
+  assert.equal(assemble("기존 카피", "도입부"), "도입부\n\n기존 카피");
+  assert.equal(assemble("기존 카피", ""), "기존 카피");
 });
