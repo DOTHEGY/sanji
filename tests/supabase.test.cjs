@@ -884,3 +884,26 @@ test("Discovery works without search API keys and reports exhausted sources inst
   const r=await service.handle("/discovery","GET","owner",async()=>({}));assert.equal(r.engine.status,"sources_exhausted");assert.equal(r.engine.nextRun,null);assert.equal(r.engine.mode,"homepage_queue");
   const result=await service.handle("/discovery/run","POST","owner",async()=>({}));assert.equal(result.status,"sources_exhausted");assert.equal(JSON.stringify(result).includes("네이버"),false);
 });
+
+test("Footer parsing recognizes linked corporate official sites and keeps customer mail separate from privacy contacts",()=>{
+ const {parseOfficialPage}=discoveryHelpers();
+ const r=parseOfficialPage('<div class="site footer"><p>고객센터 cs3900&#64;brand.co.kr</p><p>개인정보보호책임자 protect@brand.co.kr</p><a href="https://company.brand.co.kr">브랜드 오피셜</a></div>',"https://www.brand.co.kr/","2026-10-21");
+ assert.equal(r.contacts.length,1);assert.equal(r.contacts[0].location,"footer");assert.equal(r.links[0].type,"company");
+});
+
+test("Footer discovery follows an explicitly linked shop without a search key, decodes emails and preserves user supplied leads",async()=>{
+ const compiled=esbuild.buildSync({entryPoints:["supabase/functions/_shared/discovery-service.ts"],bundle:true,platform:"node",format:"cjs",write:false});const m={exports:{}};new Function("module","exports",compiled.outputFiles[0].text)(m,m.exports);
+ const lead={id:"lead",owner:"owner",status:"new",created:new Date().toISOString(),data:{name:"테스트 식품",website:"https://www.brand.co.kr/",contacts:[{email:"submitted@brand.co.kr",source:"https://www.google.com/search?q=brand",discoveryMethod:"user_provided",checked:new Date().toISOString()}]}};
+ const tables={sanji_discovery_config:[{owner:"owner",enabled:true,target:30,keywords:[]}],sanji_discovery_leads:[lead],sanji_discovery_usage:[{owner:"owner",day:"2026-10-21",calls:1,added:0,processed:0,emails:0}]};
+ class Q {constructor(table){this.table=table;this.filters=[];}select(){return this;}eq(k,v){this.filters.push([k,v]);return this;}order(){return this;}limit(){return this;}maybeSingle(){this.single=true;return this;}update(value){this.value=value;return this;}exec(){let rows=tables[this.table].filter(r=>this.filters.every(([k,v])=>r[k]===v));if(this.value)rows.forEach(r=>Object.assign(r,structuredClone(this.value)));return structuredClone(this.single?rows[0]||null:rows);}then(ok,bad){return Promise.resolve({data:this.exec(),error:null}).then(ok,bad);}}
+ const sb={from:t=>new Q(t),rpc:()=>({exec:()=>tables.sanji_discovery_usage[0]})},seen=[],oldFetch=global.fetch,oldDeno=global.Deno;
+ global.Deno={resolveDns:async()=>["8.8.8.8"]};
+ global.fetch=async(value)=>{const u=String(value);seen.push(u);if(u.endsWith("/robots.txt"))return new Response("User-agent: *\nDisallow:",{headers:{"content-type":"text/plain"}});if(u==="https://www.brand.co.kr/")return new Response('<footer><p>대표 이메일 office@brand.co.kr</p><select><option value=https://shop.brand.co.kr/>온라인쇼핑몰(공식몰)</option></select><a href=https://www.unrelated.co.kr/>관계사</a></footer><script>fake@brand.co.kr</script>',{headers:{"content-type":"text/html"}});if(u==="https://shop.brand.co.kr/")return new Response('<footer><p>고객센터 <a href=mailto:cs3900%40brand.co.kr>cs3900&#64;brand.co.kr</a></p><p>개인정보보호책임자 privacy@brand.co.kr</p></footer>',{headers:{"content-type":"text/html"}});throw Error("Unexpected URL "+u);};
+ try{
+  const service=m.exports.discoveryService({sb,query:async q=>q.exec(),audit:async()=>{},putRecord:async()=>{}});
+  const r=await service.handle("/discovery/run","POST","owner",async()=>({}));assert.equal(r.status,"processed");assert.equal(r.emailCandidatesAdded,2);
+  assert.ok(seen.includes("https://shop.brand.co.kr/"));assert.equal(seen.some(u=>u.includes("unrelated")),false);
+  const c=lead.data.contacts.find(c=>c.email==="cs3900@brand.co.kr");assert.ok(c);assert.equal(c.location,"footer");assert.equal(c.purpose,"고객센터");assert.equal(c.verified,false);assert.equal(c.linkedFrom,"https://www.brand.co.kr/");
+  assert.ok(lead.data.contacts.some(c=>c.email==="submitted@brand.co.kr"));assert.equal(lead.data.contacts.some(c=>c.email==="privacy@brand.co.kr"||c.email==="fake@brand.co.kr"),false);assert.equal(lead.data.pages,2);assert.equal(lead.data.sourceAttempts.length,2);
+ }finally{global.fetch=oldFetch;global.Deno=oldDeno;}
+});

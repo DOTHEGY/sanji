@@ -30,20 +30,41 @@ export function discoveryService(deps:any){
  }
  async function crawl(website:string){
   const base=publicUrl(website);
-  if(marketplace(base.toString()))throw Error("쿠팡·스마트스토어 등 플랫폼은 발견 출처로만 사용합니다. 공식 회사 홈페이지를 입력하세요.");
-  const robots=await publicFetch(base.origin+"/robots.txt",100000);
-  if(!robotsAllowed(robots.text,base.pathname))throw Error("robots.txt에서 수집이 제한된 경로입니다.");
-  const home=await publicFetch(base.toString());
-  const checked=new Date().toISOString();const first=parseOfficialPage(home.text,home.url,checked);
-  const results=[first];let count=1;
-  for(const link of first.links as any[]){
-   if(count>=5)break;
-   let next;try{next=publicUrl(link.url);}catch{continue;}
-   if(next.origin!==new URL(home.url).origin||!robotsAllowed(robots.text,next.pathname)||/login|logout|signup|cart|order|privacy|recruit|terms/i.test(next.pathname))continue;
-   try{const page=await publicFetch(next.toString());results.push(parseOfficialPage(page.text,page.url,checked));count++;}catch{/* Keep successful sources; blocked pages are not retried. */}
+  if(marketplace(base.toString()))throw Error("플랫폼 운영사 메일을 브랜드 메일로 수집하지 않습니다. 회사·자사몰 URL을 확인하세요.");
+  const robotCache=new Map<string,string>(),attempts:any[]=[],results:any[]=[],visited=new Set<string>();
+  const checked=new Date().toISOString();
+  async function read(value:string,linkedFrom=""){
+   const url=publicUrl(value);visited.add(url.toString());
+   try{
+    if(!robotCache.has(url.origin)){const r=await publicFetch(url.origin+"/robots.txt",100000);robotCache.set(url.origin,r.text);}
+    if(!robotsAllowed(robotCache.get(url.origin)||"",url.pathname))throw Error("robots.txt에서 수집이 제한된 경로입니다.");
+    const page=await publicFetch(url.toString()),parsed=parseOfficialPage(page.text,page.url,checked);
+    const contacts=parsed.contacts.map((c:any)=>({...c,discoveryMethod:"public_page",linkedFrom,sourceRelation:linkedFrom?"홈페이지에서 연결된 페이지 · 동일 회사 소유 관계 검토 전":"홈페이지 후보 · 소유 관계 검토 전"}));
+    results.push({...parsed,contacts});attempts.push({url:page.url,linkedFrom,checked,emailCount:contacts.length,status:"checked"});
+    return parsed;
+   }catch(e){attempts.push({url:url.toString(),linkedFrom,checked,status:"failed",error:String(e.message||"페이지 확인 실패").slice(0,300)});return null;}
+  }
+  const first=await read(base.toString());
+  if(!first)return {contacts:[],excludedCount:0,inquiryLinks:[],checked,pages:0,sourceAttempts:attempts,error:attempts[0]?.error||"홈페이지 확인 실패",officialVerified:false};
+  // Follow explicitly linked stores, including unquoted href and family-site option values.
+  // A link is evidence of a relationship, never proof of legal ownership or permission to contact.
+  const homeOrigin=base.origin,extraOrigins=new Set<string>();
+  const queue=[...first.links.filter((l:any)=>["shop","company"].includes(l.type)),...first.links.filter((l:any)=>!["shop","company"].includes(l.type))];
+  while(queue.length&&attempts.length<5){
+   const link:any=queue.shift();let next;try{next=publicUrl(link.url);}catch{continue;}
+   if(visited.has(next.toString())||marketplace(next.toString())||/login|logout|signup|cart|order|privacy|recruit|terms/i.test(next.pathname))continue;
+   if(next.origin!==homeOrigin){
+    if(!extraOrigins.has(next.origin)&&(!["shop","company"].includes(link.type)||extraOrigins.size>=1))continue;
+    extraOrigins.add(next.origin);
+   }
+   const page=await read(next.toString(),link.linkedFrom||website);
+   if(page&&next.origin!==homeOrigin){
+    const local=page.links.filter((l:any)=>{try{return new URL(l.url).origin===next.origin&&l.type!=="shop";}catch{return false;}});
+    queue.push(...local);
+   }
   }
   const contacts=Array.from(new Map(results.flatMap(p=>p.contacts).map(c=>[c.email.toLowerCase(),c])).values());
-  return {contacts,excludedCount:results.reduce((n,p)=>n+p.rejected.length,0),inquiryLinks:results.flatMap(p=>p.links).filter((l:any)=>/제휴|도매|입점|공동구매/.test(l.label)).slice(0,5),checked,pages:count,officialVerified:false,reviewNote:"공식 사이트에 공개된 이메일 후보입니다. 대표·일반 문의·고객센터도 포함하며 용도를 구분합니다. 회사 소유 관계 최종 확인 전이며 발송되지 않습니다."};
+  return {contacts,excludedCount:results.reduce((n,p)=>n+p.rejected.length,0),inquiryLinks:results.flatMap(p=>p.links).filter((l:any)=>/제휴|도매|입점|공동구매/.test(l.label)).slice(0,5),checked,pages:results.length,sourceAttempts:attempts,error:"",officialVerified:false,reviewNote:"홈페이지·연결된 자사몰 후보의 푸터·공개 사업용 메일을 확인했습니다. 이메일 출처와 연결 경로를 남기며 동일 법인 소유 관계는 별도 확인해야 합니다."};
  }
  async function config(u:string){return await query(sb.from("sanji_discovery_config").select("*").eq("owner",u).maybeSingle()) || {...defaults,owner:u};}
  async function cycle(u:string){
@@ -61,12 +82,16 @@ export function discoveryService(deps:any){
      if(!data.website)throw Error("홈페이지 후보 주소가 없어 수집하지 못했습니다.");
      data.crawlStarted=new Date().toISOString();
      await query(sb.from("sanji_discovery_leads").update({data,updated:data.crawlStarted}).eq("owner",u).eq("id",lead.id));
-     Object.assign(data,await crawl(data.website));
+     const priorContacts=data.contacts||[];
+     const crawled=await crawl(data.website);
+     Object.assign(data,crawled);
+     data.contacts=Array.from(new Map([...priorContacts,...crawled.contacts].map((c:any)=>[c.email.toLowerCase(),c])).values());
+     if(crawled.error)error=crawled.error;
      // Count each public business email once across the entire workspace.
      const previous=await query(sb.from("sanji_discovery_leads").select("data").eq("owner",u));
      const known=new Set(previous.flatMap((r:any)=>(r.data.contacts||[]).map((c:any)=>c.email.toLowerCase())));
      emails=data.contacts.filter((c:any)=>!known.has(c.email.toLowerCase())).length;
-     data.error="";
+     data.error=crawled.error||"";
     }catch(e){data.error=String(e.message||"수집 실패").slice(0,400);error=data.error;data.contacts=data.contacts||[];data.checked=new Date().toISOString();}
     await query(sb.from("sanji_discovery_leads").update({data,status:"review",updated:new Date().toISOString()}).eq("owner",u).eq("id",lead.id));processed=1;
    }

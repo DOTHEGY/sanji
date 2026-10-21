@@ -37,32 +37,63 @@ function publicIp(ip) {
   const a = ip.split(".").map(Number);
   return a.length === 4 && a.every((n) => Number.isInteger(n) && n >= 0 && n <= 255) && ![0, 10, 127].includes(a[0]) && a[0] < 224 && !(a[0] === 169 && a[1] === 254) && !(a[0] === 172 && a[1] >= 16 && a[1] <= 31) && !(a[0] === 192 && (a[1] === 168 || a[1] === 0 && [0, 2].includes(a[2]))) && !(a[0] === 198 && [18, 19, 51].includes(a[1])) && !(a[0] === 203 && a[1] === 0 && a[2] === 113) && !(a[0] === 100 && a[1] >= 64 && a[1] <= 127);
 }
+function decodeHtml(value) {
+  return value.replace(/&#(x[0-9a-f]+|[0-9]+);?/gi, (_, n) => {
+    const point = n[0].toLowerCase() === "x" ? parseInt(n.slice(1), 16) : parseInt(n, 10);
+    return point > 0 && point <= 1114111 ? String.fromCodePoint(point) : "";
+  }).replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&quot;/gi, '"').replace(/&apos;|&#39;/gi, "'").replace(/&commat;/gi, "@").replace(/&period;/gi, ".");
+}
 function plainHtml(html) {
-  return html.replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;|&#160;/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/\s+/g, " ").trim();
+  return decodeHtml(html.replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi, " ").replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+}
+function attribute(tag, name) {
+  const match = new RegExp("(?:^|\\s)" + name + `\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i").exec(tag);
+  return match ? decodeHtml(match[1] ?? match[2] ?? match[3] ?? "") : "";
 }
 function parseOfficialPage(html, source, checked) {
-  const text2 = plainHtml(html), host = publicUrl(source).hostname.replace(/^www\./, "");
-  const emails = Array.from(/* @__PURE__ */ new Set([...text2.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [], ...Array.from(html.matchAll(/href=["']mailto:([^?"']+)/gi), (m) => m[1])])).slice(0, 30);
+  const visible = html.replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi, " ");
+  const text2 = plainHtml(visible), host = publicUrl(source).hostname.replace(/^www\./, "");
+  const footerStart = visible.search(/<(?:footer\b|(?:div|section)\b[^>]*(?:id|class)\s*=\s*["'][^"']*footer)/i);
+  const footerHtml = footerStart >= 0 ? visible.slice(footerStart) : "";
+  const footerText = plainHtml(footerHtml);
+  const mailto = Array.from(visible.matchAll(/<a\b([^>]*)>/gi), (m) => attribute(m[1], "href")).filter((v) => /^mailto:/i.test(v)).map((v) => {
+    try {
+      return decodeURIComponent(v.replace(/^mailto:/i, "").split("?")[0]);
+    } catch {
+      return "";
+    }
+  });
+  const emails = Array.from(/* @__PURE__ */ new Set([...footerText.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [], ...text2.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [], ...mailto])).filter((v) => /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(v)).slice(0, 30);
+  const blocks = visible.replace(/<\/(?:p|li|address|dd|dt|td|div)>|<br\b[^>]*>/gi, "\n").split("\n").map(plainHtml).filter(Boolean);
   const contacts = [], rejected = [];
   for (const email of emails) {
-    const at = text2.indexOf(email), context = at < 0 ? "" : text2.slice(Math.max(0, at - 100), at + email.length + 100);
-    const domain = email.split("@")[1]?.toLowerCase(), ownerMatch = domain === host || (host.endsWith("." + domain) || domain.endsWith("." + host));
-    const unrelated = /^(user|example|test|sample|noreply|no-reply|privacy|hr|recruit)@/i.test(email) || /개인정보(?:보호책임|관리|담당|\s*문의)|정보보호(?:책임|담당)|채용|인사담당/.test(context);
+    const at = text2.toLowerCase().indexOf(email.toLowerCase()), context = at < 0 ? "" : text2.slice(Math.max(0, at - 100), at + email.length + 100);
+    const block = blocks.filter((v) => v.toLowerCase().includes(email.toLowerCase())).sort((a, b) => a.length - b.length)[0] || email;
+    const domain = email.split("@")[1]?.toLowerCase(), ownerMatch = domain === host || host.endsWith("." + domain) || domain.endsWith("." + host);
+    const unrelated = /^(user|example|test|sample|noreply|no-reply|privacy|hr|recruit|recruitment|jobs|career|security|dpo|techsupport|abuse)@/i.test(email) || /개인정보(?:보호책임|관리|담당|\s*문의)|정보보호(?:책임|담당)|채용|인사담당/.test(block) && !/(고객센터|대표\s*(?:메일|이메일)|제휴\s*(?:문의|메일))/.test(block);
     const platformMail = /@(coupang\.com|navercorp\.com|cafe24\.com|cafe24corp\.com|gmarket\.co\.kr)$/i.test(email) && !ownerMatch;
     if (unrelated || platformMail) {
       rejected.push({ email, reason: unrelated ? "\uC608\uC2DC\xB7\uC218\uC2E0\uBD88\uAC00\xB7\uAC1C\uC778\uC815\uBCF4\xB7\uCC44\uC6A9 \uC6A9\uB3C4" : "\uD50C\uB7AB\uD3FC \uC6B4\uC601\uC0AC \uC774\uBA54\uC77C\uC774\uBA70 \uC81C\uC548 \uB300\uC0C1 \uD68C\uC0AC\uC640 \uB2E4\uB984", source });
       continue;
     }
-    const purpose = /제휴|입점|도매|공동구매|영업|파트너|b2b|business|partnership/i.test(context) ? "\uC0AC\uC5C5 \uC81C\uD734" : /고객센터|고객문의|customer|support/i.test(context) || /^(cs|help|support)@/i.test(email) ? "\uACE0\uAC1D\uC13C\uD130" : "\uB300\uD45C\xB7\uC77C\uBC18 \uBB38\uC758 / \uC138\uBD80 \uC6A9\uB3C4 \uBBF8\uD655\uC778";
-    contacts.push({ email, source, checked, purpose, context, domainMatch: ownerMatch, ownership: ownerMatch ? "\uB3C4\uBA54\uC778 \uC77C\uCE58 \xB7 \uBC95\uC778 \uD655\uC778 \uD544\uC694" : "\uD68C\uC0AC \uC18C\uC720 \uAD00\uACC4 \uD655\uC778 \uD544\uC694", verified: false });
+    const purpose = /^(cs[0-9]*|help|support)@/i.test(email) || /고객센터|고객문의|customer|support/i.test(block) ? "\uACE0\uAC1D\uC13C\uD130" : /제휴|입점|도매|공동구매|영업|파트너|b2b|business|partnership/i.test(block) ? "\uC0AC\uC5C5 \uC81C\uD734" : "\uB300\uD45C\xB7\uC77C\uBC18 \uBB38\uC758 / \uC138\uBD80 \uC6A9\uB3C4 \uBBF8\uD655\uC778";
+    contacts.push({ email, source, checked, purpose, context: block.length < 500 ? block : context, location: footerText.includes(email) ? "footer" : mailto.includes(email) ? "mailto" : "body", domainMatch: ownerMatch, ownership: ownerMatch ? "\uB3C4\uBA54\uC778 \uC77C\uCE58 \xB7 \uBC95\uC778 \uD655\uC778 \uD544\uC694" : "\uD68C\uC0AC \uC18C\uC720 \uAD00\uACC4 \uD655\uC778 \uD544\uC694", verified: false });
   }
-  const links = Array.from(html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)).map((m) => {
+  const found = [];
+  for (const m of visible.matchAll(/<(a|option)\b([^>]*)>([\s\S]*?)<\/\1>/gi)) {
+    const value = attribute(m[2], m[1].toLowerCase() === "option" ? "value" : "href"), label = plainHtml(m[3]);
+    if (!value || /^(javascript:|mailto:|tel:|#)/i.test(value)) continue;
+    const shop = /공식몰|자사몰|온라인\s*쇼핑몰|온라인몰|브랜드몰|쇼핑몰|공식\s*(?:스토어|샵)|몰(?:$|[)）])/i.test(label);
+    const company = /회사\s*소개|기업\s*소개|기업\s*홈페이지|회사\s*홈페이지|공식\s*(?:홈페이지|사이트|웹)|오피셜|official\s*(?:site|website)/i.test(label);
+    const contact2 = /제휴|입점|도매|공동구매|문의|고객센터|고객상담|contact|partner|business|회사\s*소개|about/i.test(label + " " + value);
+    if (!shop && !contact2 && !company) continue;
     try {
-      return { url: publicUrl(new URL(m[1], source).toString()).toString(), label: plainHtml(m[2]) };
+      const url2 = publicUrl(new URL(value, source).toString()).toString();
+      if (!marketplace(url2)) found.push({ url: url2, label, type: shop ? "shop" : company ? "company" : "contact", linkedFrom: source });
     } catch {
-      return null;
     }
-  }).filter((a) => a && /제휴|입점|도매|공동구매|문의|contact|partner|business|회사소개|about/i.test(a.label));
+  }
+  const links = Array.from(new Map(found.map((l) => [l.url, l])).values());
   return { contacts, rejected, links, text: text2.slice(-8e3) };
 }
 function robotsAllowed(robots, path) {
@@ -134,32 +165,59 @@ function discoveryService(deps) {
   }
   async function crawl(website) {
     const base = publicUrl(website);
-    if (marketplace(base.toString())) throw Error("\uCFE0\uD321\xB7\uC2A4\uB9C8\uD2B8\uC2A4\uD1A0\uC5B4 \uB4F1 \uD50C\uB7AB\uD3FC\uC740 \uBC1C\uACAC \uCD9C\uCC98\uB85C\uB9CC \uC0AC\uC6A9\uD569\uB2C8\uB2E4. \uACF5\uC2DD \uD68C\uC0AC \uD648\uD398\uC774\uC9C0\uB97C \uC785\uB825\uD558\uC138\uC694.");
-    const robots = await publicFetch(base.origin + "/robots.txt", 1e5);
-    if (!robotsAllowed(robots.text, base.pathname)) throw Error("robots.txt\uC5D0\uC11C \uC218\uC9D1\uC774 \uC81C\uD55C\uB41C \uACBD\uB85C\uC785\uB2C8\uB2E4.");
-    const home = await publicFetch(base.toString());
+    if (marketplace(base.toString())) throw Error("\uD50C\uB7AB\uD3FC \uC6B4\uC601\uC0AC \uBA54\uC77C\uC744 \uBE0C\uB79C\uB4DC \uBA54\uC77C\uB85C \uC218\uC9D1\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. \uD68C\uC0AC\xB7\uC790\uC0AC\uBAB0 URL\uC744 \uD655\uC778\uD558\uC138\uC694.");
+    const robotCache = /* @__PURE__ */ new Map(), attempts = [], results = [], visited = /* @__PURE__ */ new Set();
     const checked = (/* @__PURE__ */ new Date()).toISOString();
-    const first = parseOfficialPage(home.text, home.url, checked);
-    const results = [first];
-    let count = 1;
-    for (const link of first.links) {
-      if (count >= 5) break;
+    async function read(value, linkedFrom = "") {
+      const url2 = publicUrl(value);
+      visited.add(url2.toString());
+      try {
+        if (!robotCache.has(url2.origin)) {
+          const r = await publicFetch(url2.origin + "/robots.txt", 1e5);
+          robotCache.set(url2.origin, r.text);
+        }
+        if (!robotsAllowed(robotCache.get(url2.origin) || "", url2.pathname)) throw Error("robots.txt\uC5D0\uC11C \uC218\uC9D1\uC774 \uC81C\uD55C\uB41C \uACBD\uB85C\uC785\uB2C8\uB2E4.");
+        const page = await publicFetch(url2.toString()), parsed = parseOfficialPage(page.text, page.url, checked);
+        const contacts2 = parsed.contacts.map((c) => ({ ...c, discoveryMethod: "public_page", linkedFrom, sourceRelation: linkedFrom ? "\uD648\uD398\uC774\uC9C0\uC5D0\uC11C \uC5F0\uACB0\uB41C \uD398\uC774\uC9C0 \xB7 \uB3D9\uC77C \uD68C\uC0AC \uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804" : "\uD648\uD398\uC774\uC9C0 \uD6C4\uBCF4 \xB7 \uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804" }));
+        results.push({ ...parsed, contacts: contacts2 });
+        attempts.push({ url: page.url, linkedFrom, checked, emailCount: contacts2.length, status: "checked" });
+        return parsed;
+      } catch (e) {
+        attempts.push({ url: url2.toString(), linkedFrom, checked, status: "failed", error: String(e.message || "\uD398\uC774\uC9C0 \uD655\uC778 \uC2E4\uD328").slice(0, 300) });
+        return null;
+      }
+    }
+    const first = await read(base.toString());
+    if (!first) return { contacts: [], excludedCount: 0, inquiryLinks: [], checked, pages: 0, sourceAttempts: attempts, error: attempts[0]?.error || "\uD648\uD398\uC774\uC9C0 \uD655\uC778 \uC2E4\uD328", officialVerified: false };
+    const homeOrigin = base.origin, extraOrigins = /* @__PURE__ */ new Set();
+    const queue = [...first.links.filter((l) => ["shop", "company"].includes(l.type)), ...first.links.filter((l) => !["shop", "company"].includes(l.type))];
+    while (queue.length && attempts.length < 5) {
+      const link = queue.shift();
       let next;
       try {
         next = publicUrl(link.url);
       } catch {
         continue;
       }
-      if (next.origin !== new URL(home.url).origin || !robotsAllowed(robots.text, next.pathname) || /login|logout|signup|cart|order|privacy|recruit|terms/i.test(next.pathname)) continue;
-      try {
-        const page = await publicFetch(next.toString());
-        results.push(parseOfficialPage(page.text, page.url, checked));
-        count++;
-      } catch {
+      if (visited.has(next.toString()) || marketplace(next.toString()) || /login|logout|signup|cart|order|privacy|recruit|terms/i.test(next.pathname)) continue;
+      if (next.origin !== homeOrigin) {
+        if (!extraOrigins.has(next.origin) && (!["shop", "company"].includes(link.type) || extraOrigins.size >= 1)) continue;
+        extraOrigins.add(next.origin);
+      }
+      const page = await read(next.toString(), link.linkedFrom || website);
+      if (page && next.origin !== homeOrigin) {
+        const local = page.links.filter((l) => {
+          try {
+            return new URL(l.url).origin === next.origin && l.type !== "shop";
+          } catch {
+            return false;
+          }
+        });
+        queue.push(...local);
       }
     }
     const contacts = Array.from(new Map(results.flatMap((p) => p.contacts).map((c) => [c.email.toLowerCase(), c])).values());
-    return { contacts, excludedCount: results.reduce((n, p) => n + p.rejected.length, 0), inquiryLinks: results.flatMap((p) => p.links).filter((l) => /제휴|도매|입점|공동구매/.test(l.label)).slice(0, 5), checked, pages: count, officialVerified: false, reviewNote: "\uACF5\uC2DD \uC0AC\uC774\uD2B8\uC5D0 \uACF5\uAC1C\uB41C \uC774\uBA54\uC77C \uD6C4\uBCF4\uC785\uB2C8\uB2E4. \uB300\uD45C\xB7\uC77C\uBC18 \uBB38\uC758\xB7\uACE0\uAC1D\uC13C\uD130\uB3C4 \uD3EC\uD568\uD558\uBA70 \uC6A9\uB3C4\uB97C \uAD6C\uBD84\uD569\uB2C8\uB2E4. \uD68C\uC0AC \uC18C\uC720 \uAD00\uACC4 \uCD5C\uC885 \uD655\uC778 \uC804\uC774\uBA70 \uBC1C\uC1A1\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4." };
+    return { contacts, excludedCount: results.reduce((n, p) => n + p.rejected.length, 0), inquiryLinks: results.flatMap((p) => p.links).filter((l) => /제휴|도매|입점|공동구매/.test(l.label)).slice(0, 5), checked, pages: results.length, sourceAttempts: attempts, error: "", officialVerified: false, reviewNote: "\uD648\uD398\uC774\uC9C0\xB7\uC5F0\uACB0\uB41C \uC790\uC0AC\uBAB0 \uD6C4\uBCF4\uC758 \uD478\uD130\xB7\uACF5\uAC1C \uC0AC\uC5C5\uC6A9 \uBA54\uC77C\uC744 \uD655\uC778\uD588\uC2B5\uB2C8\uB2E4. \uC774\uBA54\uC77C \uCD9C\uCC98\uC640 \uC5F0\uACB0 \uACBD\uB85C\uB97C \uB0A8\uAE30\uBA70 \uB3D9\uC77C \uBC95\uC778 \uC18C\uC720 \uAD00\uACC4\uB294 \uBCC4\uB3C4 \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4." };
   }
   async function config(u) {
     return await query2(sb2.from("sanji_discovery_config").select("*").eq("owner", u).maybeSingle()) || { ...defaults, owner: u };
@@ -180,11 +238,15 @@ function discoveryService(deps) {
           if (!data.website) throw Error("\uD648\uD398\uC774\uC9C0 \uD6C4\uBCF4 \uC8FC\uC18C\uAC00 \uC5C6\uC5B4 \uC218\uC9D1\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
           data.crawlStarted = (/* @__PURE__ */ new Date()).toISOString();
           await query2(sb2.from("sanji_discovery_leads").update({ data, updated: data.crawlStarted }).eq("owner", u).eq("id", lead.id));
-          Object.assign(data, await crawl(data.website));
+          const priorContacts = data.contacts || [];
+          const crawled = await crawl(data.website);
+          Object.assign(data, crawled);
+          data.contacts = Array.from(new Map([...priorContacts, ...crawled.contacts].map((c) => [c.email.toLowerCase(), c])).values());
+          if (crawled.error) error = crawled.error;
           const previous = await query2(sb2.from("sanji_discovery_leads").select("data").eq("owner", u));
           const known = new Set(previous.flatMap((r) => (r.data.contacts || []).map((c) => c.email.toLowerCase())));
           emails = data.contacts.filter((c) => !known.has(c.email.toLowerCase())).length;
-          data.error = "";
+          data.error = crawled.error || "";
         } catch (e) {
           data.error = String(e.message || "\uC218\uC9D1 \uC2E4\uD328").slice(0, 400);
           error = data.error;
