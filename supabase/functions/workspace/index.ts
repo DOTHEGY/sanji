@@ -92,24 +92,22 @@ async function connection(u: string, p: string) {
 }
 async function saveConnection(u: string, p: string, data: any) {
   await query(
-    sb
-      .from("sanji_connections")
-      .upsert(
-        {
-          owner: u,
-          provider: p,
-          encrypted: await encrypt(data),
-          summary:
-            p === "gmail"
-              ? { email: data.email, connected: true }
-              : {
-                  username: data.username,
-                  expires: data.expires,
-                  connected: true,
-                },
-        },
-        { onConflict: "owner,provider" },
-      ),
+    sb.from("sanji_connections").upsert(
+      {
+        owner: u,
+        provider: p,
+        encrypted: await encrypt(data),
+        summary:
+          p === "gmail"
+            ? { email: data.email, connected: true }
+            : {
+                username: data.username,
+                expires: data.expires,
+                connected: true,
+              },
+      },
+      { onConflict: "owner,provider" },
+    ),
   );
 }
 async function remote(url: string, options: any = {}) {
@@ -526,15 +524,13 @@ Deno.serve(async (req: Request) => {
           crypto.getRandomValues(new Uint8Array(32)),
         ).toString("base64url");
       await query(
-        sb
-          .from("sanji_oauth_states")
-          .insert({
-            state: await digest(state),
-            owner: u,
-            provider,
-            verifier,
-            expires: new Date(Date.now() + 600000).toISOString(),
-          }),
+        sb.from("sanji_oauth_states").insert({
+          state: await digest(state),
+          owner: u,
+          provider,
+          verifier,
+          expires: new Date(Date.now() + 600000).toISOString(),
+        }),
       );
       const params =
         provider === "gmail"
@@ -706,16 +702,14 @@ Deno.serve(async (req: Request) => {
           if (optout) {
             for (const identity of identities(c))
               await query(
-                sb
-                  .from("sanji_suppression")
-                  .upsert(
-                    {
-                      owner: u,
-                      identity,
-                      reason: "수신 메일의 수신 거부 요청",
-                    },
-                    { onConflict: "owner,identity" },
-                  ),
+                sb.from("sanji_suppression").upsert(
+                  {
+                    owner: u,
+                    identity,
+                    reason: "수신 메일의 수신 거부 요청",
+                  },
+                  { onConflict: "owner,identity" },
+                ),
               );
             await putRecord(
               u,
@@ -918,7 +912,7 @@ Deno.serve(async (req: Request) => {
         ig = await connection(u, "instagram");
         if (!ig || ig.expires < Date.now()) fail(503, "Meta 재연결 필요");
       }
-      const out = await query(
+      const reservation = await query(
         sb.rpc("sanji_reserve_dispatch", {
           p_owner: u,
           p_draft: row.id,
@@ -936,6 +930,9 @@ Deno.serve(async (req: Request) => {
           ),
         }),
       );
+      const out = Array.isArray(reservation) ? reservation[0] : reservation;
+      if (!out?.id)
+        fail(500, "발송 예약 결과가 없습니다. 실제 전송하지 않았습니다.");
       let response: any = {},
         status = "manual_recorded";
       try {

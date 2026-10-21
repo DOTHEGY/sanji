@@ -8,12 +8,16 @@ export const client = createClient(supabaseUrl, supabaseKey, {
     flowType: "pkce",
   },
 });
-const unpack = (r) => ({
-  ...(r.data || {}),
-  id: r.id,
-  version: r.version,
-  updated: r.updated,
-});
+const unpack = (value) => {
+  const r = Array.isArray(value) ? value[0] : value;
+  if (!r) throw new Error("저장 결과가 없습니다.");
+  return {
+    ...(r.data || {}),
+    id: r.id,
+    version: r.version,
+    updated: r.updated,
+  };
+};
 function error(message, status = 400) {
   const e = new Error(message);
   e.status = status;

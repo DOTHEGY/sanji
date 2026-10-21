@@ -855,7 +855,7 @@ ${settings.optOut}` : "");
         ig = await connection(u, "instagram");
         if (!ig || ig.expires < Date.now()) fail(503, "Meta \uC7AC\uC5F0\uACB0 \uD544\uC694");
       }
-      const out = await query(
+      const reservation = await query(
         sb.rpc("sanji_reserve_dispatch", {
           p_owner: u,
           p_draft: row.id,
@@ -865,6 +865,9 @@ ${settings.optOut}` : "");
           )
         })
       );
+      const out = Array.isArray(reservation) ? reservation[0] : reservation;
+      if (!out?.id)
+        fail(500, "\uBC1C\uC1A1 \uC608\uC57D \uACB0\uACFC\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4. \uC2E4\uC81C \uC804\uC1A1\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
       let response = {}, status = "manual_recorded";
       try {
         if (d.channel === "email") {
