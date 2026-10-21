@@ -1,3 +1,17 @@
+// supabase/functions/_shared/function-route.ts
+function functionRoute(requestUrl, projectUrl) {
+  const url2 = new URL(requestUrl), parts = url2.pathname.split("/").filter(Boolean);
+  const offset = parts[0] === "functions" && parts[1] === "v1" ? 2 : 0;
+  const name = parts[offset];
+  if (!name || !/^[A-Za-z0-9_-]+$/.test(name))
+    throw new Error("Invalid function route");
+  return {
+    name,
+    path: "/" + parts.slice(offset + 1).join("/"),
+    base: projectUrl.replace(/\/$/, "") + "/functions/v1/" + name
+  };
+}
+
 // supabase/functions/_shared/personalization.ts
 function publicContext(c) {
   const evidence = (c.evidence || []).filter(
@@ -165,7 +179,6 @@ var sb = createClient(env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY"), {
 });
 var origin = env("APP_ORIGIN") || "https://dothegy.github.io";
 var frontend = env("APP_FRONTEND_URL") || origin + "/sanji/workspace/";
-var base = env("SUPABASE_URL") + "/functions/v1/workspace";
 var cors = {
   "Access-Control-Allow-Origin": origin,
   "Access-Control-Allow-Headers": "authorization,apikey,content-type,x-client-info",
@@ -463,7 +476,7 @@ async function webhook(req, url2) {
     }
   return new Response("EVENT_RECEIVED");
 }
-async function callback(req, url2, provider) {
+async function callback(req, url2, provider, base) {
   const state = url2.searchParams.get("state") || "";
   const row = await query(
     sb.from("sanji_oauth_states").select("*").eq("state", await digest(state)).eq("provider", provider).maybeSingle()
@@ -728,7 +741,7 @@ async function runJobs(req) {
   }
 }
 Deno.serve(async (req) => {
-  const url2 = new URL(req.url), path = url2.pathname.replace(/^\/(?:functions\/v1\/)?workspace/, "");
+  const url2 = new URL(req.url), { path, base } = functionRoute(req.url, env("SUPABASE_URL"));
   try {
     if (req.headers.get("origin") && req.headers.get("origin") !== origin)
       fail(403, "\uD5C8\uC6A9\uB418\uC9C0 \uC54A\uC740 \uCD9C\uCC98");
@@ -736,9 +749,9 @@ Deno.serve(async (req) => {
       return new Response(null, { status: 204, headers: cors });
     if (path === "/instagram/webhook") return await webhook(req, url2);
     if (/^\/oauth\/(gmail|instagram)\/callback$/.test(path))
-      return await callback(req, url2, path.split("/")[2]);
+      return await callback(req, url2, path.split("/")[2], base);
     if (path === "/health" && req.method === "GET")
-      return json({ ok: true, version: 2, authRequired: true });
+      return json({ ok: true, version: 3, authRequired: true });
     if (path === "/jobs/run" && req.method === "POST")
       return await runJobs(req);
     const bearer = req.headers.get("authorization") || "";

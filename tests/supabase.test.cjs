@@ -273,7 +273,17 @@ test("Edge function compiles and denies unauthenticated/disallowed-origin reques
       ).status,
       503,
     );
-    for (const prefix of ["/workspace", "/functions/v1/workspace"])
+    for (const prefix of [
+      "/workspace",
+      "/functions/v1/workspace",
+      "/bright-function",
+      "/functions/v1/bright-function",
+    ]) {
+      const health = await handler(
+        new Request("https://project.example" + prefix + "/health"),
+      );
+      assert.equal(health.status, 200);
+      assert.equal((await health.json()).version, 3);
       assert.equal(
         (
           await handler(
@@ -282,6 +292,7 @@ test("Edge function compiles and denies unauthenticated/disallowed-origin reques
         ).status,
         401,
       );
+    }
     assert.equal(
       (
         await handler(
@@ -562,4 +573,70 @@ test("AI intro uses public evidence only and rejects sensitive claims, invented 
       ),
     /1~2문장/,
   );
+});
+
+test("deployment diagnostics distinguish missing function from JWT rejection in the browser", async () => {
+  const express = require("express"),
+    app = express();
+  app.use(express.static("public"));
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise((r) => server.on("listening", r));
+  let browser;
+  try {
+    browser = await chromium.launch({
+      executablePath: process.env.CHROMIUM_PATH || "/usr/bin/chromium",
+      args: ["--no-sandbox"],
+    });
+    const page = await browser.newPage();
+    let status = 404,
+      body = { code: "NOT_FOUND", message: "Requested function was not found" };
+    await page.route(
+      "https://ofasbfpeapbdcotnptvz.supabase.co/functions/v1/bright-function/health",
+      (r) =>
+        r.fulfill({
+          status,
+          headers: {
+            "access-control-allow-origin": "*",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(body),
+        }),
+    );
+    await page.goto("http://127.0.0.1:" + server.address().port + "/connect/");
+    await page.getByRole("button", { name: "배포 상태 확인" }).click();
+    await page.waitForFunction(() =>
+      document
+        .querySelector("#status")
+        .textContent.includes("함수를 찾을 수 없습니다(404)"),
+    );
+    status = 401;
+    body = { error: "로그인이 필요합니다." };
+    await page.getByRole("button", { name: "배포 상태 확인" }).click();
+    await page.waitForFunction(() =>
+      document
+        .querySelector("#status")
+        .textContent.includes("함수는 실행되지만"),
+    );
+    status = 401;
+    body = { code: 401, message: "Missing authorization header" };
+    await page.getByRole("button", { name: "배포 상태 확인" }).click();
+    await page.waitForFunction(() =>
+      document.querySelector("#status").textContent.includes("401로 차단"),
+    );
+    status = 503;
+    body = { code: "BOOT_ERROR", message: "Worker failed to boot" };
+    await page.getByRole("button", { name: "배포 상태 확인" }).click();
+    await page.waitForFunction(() =>
+      document.querySelector("#status").textContent.includes("BOOT_ERROR"),
+    );
+    status = 200;
+    body = { ok: true, version: 2 };
+    await page.getByRole("button", { name: "배포 상태 확인" }).click();
+    await page.waitForFunction(() =>
+      document.querySelector("#status").textContent.includes("함수 연결 정상"),
+    );
+  } finally {
+    if (browser) await browser.close();
+    await new Promise((r) => server.close(r));
+  }
 });

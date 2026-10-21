@@ -33,3 +33,5 @@ fs.copyFileSync(
   "supabase/dashboard/workspace.ts",
   "public/connect/workspace.ts",
 );
+
+fs.copyFileSync("web/edge-diagnostics.js", "public/connect/diagnostics.js");

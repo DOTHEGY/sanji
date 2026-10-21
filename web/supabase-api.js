@@ -1,5 +1,10 @@
+import { probeEdge, classifyEdgeResponse } from "./edge-diagnostics.js";
 import { createClient } from "@supabase/supabase-js";
-import { supabaseUrl, supabaseKey } from "./supabase-config.js";
+import {
+  supabaseUrl,
+  supabaseKey,
+  edgeFunctionUrl,
+} from "./supabase-config.js";
 export const client = createClient(supabaseUrl, supabaseKey, {
   auth: {
     persistSession: true,
@@ -58,7 +63,7 @@ async function edge(path, method, body) {
   const session = await member();
   let response;
   try {
-    response = await fetch(supabaseUrl + "/functions/v1/workspace" + path, {
+    response = await fetch(edgeFunctionUrl + path, {
       method,
       headers: {
         apikey: supabaseKey,
@@ -68,15 +73,23 @@ async function edge(path, method, body) {
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
   } catch {
+    const diagnosis = await probeEdge(edgeFunctionUrl);
     throw error(
-      "workspace 함수에 연결할 수 없습니다. 연동 설정 → 함수 전체 복사·배포 안내에서 배포하고 JWT 설정을 확인하세요.",
-      503,
+      diagnosis.kind === "ready"
+        ? "서버 상태 확인은 정상이나 인증 요청의 CORS 연결이 실패했습니다. APP_ORIGIN과 함수 로그를 확인하세요."
+        : diagnosis.message,
+      diagnosis.status || 503,
     );
   }
   const data = await response
     .json()
     .catch(() => ({ error: "서버 응답을 읽지 못했습니다." }));
   if (!response.ok) {
+    if (data.code === "NOT_FOUND" || data.code === "BOOT_ERROR")
+      throw error(
+        classifyEdgeResponse(response.status, data, edgeFunctionUrl).message,
+        response.status,
+      );
     const e = error(
       data.error || data.message || "외부 연동 기능 준비가 필요합니다.",
       response.status,

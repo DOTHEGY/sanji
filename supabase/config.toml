@@ -1,5 +1,6 @@
 project_id = "ofasbfpeapbdcotnptvz"
-[functions.workspace]
+[functions.bright-function]
+entrypoint = "./functions/workspace/index.ts"
 # Publishable keys are not JWTs. The function validates bearer user tokens with Auth,
 # enforces membership itself, and verifies provider callbacks/webhook signatures.
 verify_jwt = false

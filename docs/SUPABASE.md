@@ -5,7 +5,7 @@
 ## 현재 확인
 
 - 제공한 publishable key로 `/auth/v1/settings` HTTP 200, 이메일 인증 사용 가능을 확인했습니다.
-- 최근 진단에서 `sanji_members` 테이블 존재(메타데이터 HTTP 200)를 확인했습니다. 개별 계정의 멤버십이나 로그인 성공을 확인한 것은 아닙니다. 추가 예약 테이블 sanji_jobs는 미생성(PGRST205), workspace 함수는 미배포(404)였습니다. 공개 키는 SQL 실행·함수 배포 권한을 주지 않습니다.
+- 최근 진단에서 `sanji_members` 테이블 존재(메타데이터 HTTP 200)를 확인했습니다. 개별 계정의 멤버십이나 로그인 성공을 확인한 것은 아닙니다. 추가 예약 테이블 sanji_jobs는 미생성(PGRST205)이었습니다. 이후 실제 배포 이름이 bright-function임을 확인해 앱 주소를 수정했습니다. 공개 키는 SQL 실행·함수 배포 권한을 주지 않습니다.
 - 운영 로그인 URL: https://dothegy.github.io/sanji/workspace/
 - 운영 자료는 Supabase Postgres에 저장합니다. 가상 데이터는 초기화하지 않습니다. 인증+관리자 멤버십+RLS를 모두 통과해야 읽을 수 있습니다.
 - SQL은 PostgreSQL 엔진(PGlite)에서 실행·재실행·관리자 권한·RLS·버전 이력·중복·발송 예약을 테스트했습니다. 실제 프로젝트에 적용된 것은 아닙니다.
@@ -29,12 +29,12 @@ CLI를 사용할 경우:
 npx supabase login
 npx supabase link --project-ref ofasbfpeapbdcotnptvz
 npx supabase db push
-npx supabase functions deploy workspace --no-verify-jwt
+npx supabase functions deploy bright-function --no-verify-jwt
 ```
 
 Dashboard에서 이미 SQL을 적용했다면 CLI의 db push는 생략하세요. 함수는 config.toml에 따라 JWT gateway 검증을 비활성화하지만 **함수 내부에서 Supabase Auth getUser와 멤버십을 매 요청 검증**합니다. 공개 OAuth callback은 일회성 state+PKCE(Google), Meta 웹훅은 HMAC 서명을 검증합니다. publishable key를 JWT로 오인하지 않도록 구성한 것입니다.
 
-CLI 없이도 Dashboard → Edge Functions → Deploy a new function → Via Editor에서 `workspace` 이름으로 생성하고 `supabase/dashboard/workspace.ts` 전체 내용을 붙여넣어 배포할 수 있습니다. 이 파일은 로컬 schema import까지 포함한 단일 파일입니다. Function 설정의 legacy JWT verification은 꺼야 하며, 앱 코드의 인증 검사는 제거하지 마세요.
+Dashboard → Edge Functions에서 기존 `bright-function`을 선택한 뒤 Code / Edit code에서 `supabase/dashboard/workspace.ts` 전체 내용을 붙여넣어 같은 함수를 업데이트할 수 있습니다. 코드 파일명은 workspace.ts여도 배포 함수명은 bright-function으로 유지합니다. 이 파일은 로컬 schema import까지 포함한 단일 파일입니다. Function 설정의 legacy JWT verification은 꺼야 하며, 앱 코드의 인증 검사는 제거하지 마세요.
 
 Edge Function의 Secrets에 다음을 입력합니다(채팅이나 GitHub에 비밀 값을 올리지 마세요).
 
@@ -56,7 +56,7 @@ SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY는 Edge runtime의 기본 서버 환경�
 
 Google Cloud에서 Gmail API를 켜고 OAuth 동의 화면·웹 애플리케이션 클라이언트를 만듭니다. 승인된 리디렉션 URI:
 
-`https://ofasbfpeapbdcotnptvz.supabase.co/functions/v1/workspace/oauth/gmail/callback`
+`https://ofasbfpeapbdcotnptvz.supabase.co/functions/v1/bright-function/oauth/gmail/callback`
 
 권한은 gmail.send / gmail.readonly입니다. 외부 테스트 앱은 본인 Gmail을 테스트 사용자로 추가해야 하며 외부 운영 공개에는 Google 검증·경우에 따른 제한 범위 보안 평가가 필요합니다. 테스트 토큰 수명·쿼터는 계정 설정에 따라 확인하세요. 연결 설정의 Google 공식 로그인 버튼으로 인증합니다. 이 앱의 로그인과 Gmail OAuth는 별도입니다.
 
@@ -67,10 +67,10 @@ Google Cloud에서 Gmail API를 켜고 OAuth 동의 화면·웹 애플리케이�
 ## 4. Instagram
 
 리디렉션 URI:
-`https://ofasbfpeapbdcotnptvz.supabase.co/functions/v1/workspace/oauth/instagram/callback`
+`https://ofasbfpeapbdcotnptvz.supabase.co/functions/v1/bright-function/oauth/instagram/callback`
 
 웹훅:
-`https://ofasbfpeapbdcotnptvz.supabase.co/functions/v1/workspace/instagram/webhook`
+`https://ofasbfpeapbdcotnptvz.supabase.co/functions/v1/bright-function/instagram/webhook`
 
 프로페셔널 계정, instagram_business_basic / instagram_business_manage_messages 및 적용되는 심사·Advanced Access가 필요합니다. 상대가 시작한 대화만 수신하고, 후보와 계정의 관계를 사용자가 직접 확인해 연결한 후 24시간 이내 텍스트 회신을 지원합니다. 신규 선제 DM은 문구 복사·프로필 열기·직접 발송 후 결과 기록입니다. 임의 계정 로그인·무단 대량 DM은 구현하지 않습니다. 토큰 자동 갱신·과거 전체 대화 가져오기·DM 첨부는 미구현입니다.
 
@@ -84,7 +84,7 @@ SQL은 프로젝트 관리자만 실행합니다. 실제 회사 목록·연락�
 
 ## 서버 연결 오류·카피·예약 자동 발송 (추가 기능)
 
-현재 `workspace` 요청은 404 `Requested function was not found`로 확인되었습니다. 공개 키로 이 함수를 배포할 수는 없습니다. https://dothegy.github.io/sanji/connect/ 에서 단일 파일 전체 복사, Dashboard 배포, Secrets, 예약 SQL과 Cron 설정을 진행하세요. 이 페이지에는 실제 시크릿이 들어 있지 않습니다. 인증된 화면의 연동 설정에서도 같은 안내를 열 수 있습니다.
+실제 배포된 함수 이름은 `bright-function`입니다. 이전 앱 주소는 workspace였고, 이전 함수 코드도 workspace라는 이름을 고정해 서로 연결되지 않았습니다. 최신 코드는 배포 함수 이름을 자동으로 해석하며 상태 확인은 버전 3을 반환합니다. 같은 bright-function의 코드만 최신 버전으로 교체하세요. 공개 키로 이 함수를 배포할 수는 없습니다. https://dothegy.github.io/sanji/connect/ 에서 단일 파일 전체 복사, Dashboard 배포, Secrets, 예약 SQL과 Cron 설정을 진행하세요. 이 페이지에는 실제 시크릿이 들어 있지 않습니다. 인증된 화면의 연동 설정에서도 같은 안내를 열 수 있습니다.
 
 ### 카피 입력과 AI 도입부
 
@@ -100,7 +100,7 @@ Edge Secrets에 **AI_API_KEY** (OpenAI API 키), 선택적으로 **AI_MODEL** (�
 
 Gmail OAuth 연결과 실제 발송 별도 승인 후 EMAIL_SENDING_ENABLED=true가 되어야 예약을 등록할 수 있습니다. 제안 작성 → 최종 미리보기 → 수신자·본문·조건·첨부 승인 체크 → 예약 시간 → **승인한 내용 예약 자동 발송**을 누릅니다. 화면 입력 시간은 기기 시간대를 사용하며, 서버는 광고성 이메일을 한국시간 08~21시로 제한합니다. 예약 가능 범위는 30일입니다. 승인한 미리보기와 해시를 고정하고 실행 시 AI를 다시 호출하거나 카피를 바꾸지 않습니다. 예약 후 후보·상품 버전이 달라지면 발송을 중단하고 재승인을 요구합니다.
 
-`JOB_RUNNER_TOKEN`을 32자 이상의 별도 임의 문자열로 설정하고 Supabase Cron에서 매분 `POST /functions/v1/workspace/jobs/run`을 호출합니다. 요청 헤더 x-job-token에 동일한 값을 넣습니다. 토큰을 공개 SQL·GitHub·채팅에 저장하지 마세요. 토큰만 설정하고 Cron을 만들지 않으면 자동 실행되지 않습니다. Cron 등록은 사용자 프로젝트 관리 권한이 필요합니다. 무료/유료 실행 한도는 현재 플랜에서 확인해야 합니다.
+`JOB_RUNNER_TOKEN`을 32자 이상의 별도 임의 문자열로 설정하고 Supabase Cron에서 매분 `POST /functions/v1/bright-function/jobs/run`을 호출합니다. 요청 헤더 x-job-token에 동일한 값을 넣습니다. 토큰을 공개 SQL·GitHub·채팅에 저장하지 마세요. 토큰만 설정하고 Cron을 만들지 않으면 자동 실행되지 않습니다. Cron 등록은 사용자 프로젝트 관리 권한이 필요합니다. 무료/유료 실행 한도는 현재 플랜에서 확인해야 합니다.
 
 한 번 호출에 최대 1건을 claim해 처리합니다. 중복 Cron 호출에서도 이미 처리 중인 작업은 재선택하지 않습니다. 성공은 제공자 접수이며 실제 전달/열람이 아닙니다. 처리 실패·불확실·중단된 processing 작업은 자동으로 재시도하지 않습니다. 처리 중 장기 정지/실패는 연동 설정의 예약 목록과 Supabase 로그, Gmail 보낸편지함을 확인하고 직접 판단해야 합니다. 미처리 예약은 서비스 안에서 취소할 수 있습니다. 일일 제한·수신 거부·조건 버전·사업 시간 검사는 실행 시 다시 적용합니다. 예약된 수신자·본문을 바꾸려면 취소 후 새 미리보기로 승인해야 합니다.
 

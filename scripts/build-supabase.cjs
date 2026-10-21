@@ -48,6 +48,12 @@ html = html.replace(
   "로그인 후 실제 영업 자료를 안전하게 관리하세요.",
   "Supabase 운영 연결 · 가상 데이터 없음 · 관리자 로그인 필요",
 );
+const assetHash = require("node:crypto")
+  .createHash("sha256")
+  .update(fs.readFileSync("public/workspace/app.js"))
+  .digest("hex")
+  .slice(0, 12);
+html = html.replace('src="./app.js"', 'src="./app.js?v=' + assetHash + '"');
 fs.writeFileSync("public/workspace/index.html", html);
 fs.copyFileSync("private/ui/style.css", "public/workspace/style.css");
 console.log("Supabase workspace built: public/workspace/");

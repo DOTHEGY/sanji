@@ -1,3 +1,4 @@
+import { functionRoute } from "../_shared/function-route.ts";
 import { publicContext, validateIntro } from "../_shared/personalization.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { Buffer } from "node:buffer";
@@ -8,7 +9,6 @@ const sb = createClient(env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY"), {
 });
 const origin = env("APP_ORIGIN") || "https://dothegy.github.io";
 const frontend = env("APP_FRONTEND_URL") || origin + "/sanji/workspace/";
-const base = env("SUPABASE_URL") + "/functions/v1/workspace";
 const cors = {
   "Access-Control-Allow-Origin": origin,
   "Access-Control-Allow-Headers":
@@ -359,7 +359,12 @@ async function webhook(req: Request, url: URL) {
     }
   return new Response("EVENT_RECEIVED");
 }
-async function callback(req: Request, url: URL, provider: string) {
+async function callback(
+  req: Request,
+  url: URL,
+  provider: string,
+  base: string,
+) {
   const state = url.searchParams.get("state") || "";
   const row = await query(
     sb
@@ -700,7 +705,7 @@ async function runJobs(req: Request) {
 }
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url),
-    path = url.pathname.replace(/^\/(?:functions\/v1\/)?workspace/, "");
+    { path, base } = functionRoute(req.url, env("SUPABASE_URL"));
   try {
     if (req.headers.get("origin") && req.headers.get("origin") !== origin)
       fail(403, "허용되지 않은 출처");
@@ -708,9 +713,9 @@ Deno.serve(async (req: Request) => {
       return new Response(null, { status: 204, headers: cors });
     if (path === "/instagram/webhook") return await webhook(req, url);
     if (/^\/oauth\/(gmail|instagram)\/callback$/.test(path))
-      return await callback(req, url, path.split("/")[2]);
+      return await callback(req, url, path.split("/")[2], base);
     if (path === "/health" && req.method === "GET")
-      return json({ ok: true, version: 2, authRequired: true });
+      return json({ ok: true, version: 3, authRequired: true });
     if (path === "/jobs/run" && req.method === "POST")
       return await runJobs(req);
     const bearer = req.headers.get("authorization") || "";
