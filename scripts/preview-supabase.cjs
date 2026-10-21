@@ -1,0 +1,1 @@
+const express=require('express');const app=express();app.use(express.static(require('node:path').resolve(__dirname,'../public')));app.listen(process.env.PORT||3000,'0.0.0.0',()=>console.log('Supabase frontend preview ready. Open /workspace/. No local business database is used.'));

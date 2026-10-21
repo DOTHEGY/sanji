@@ -1,5 +1,7 @@
 # 산지 · 공동구매 영업 워크스페이스
 
+현재 권장 운영 경로는 **Supabase Auth + Postgres + Edge Functions**입니다. [Supabase 설정 안내](docs/SUPABASE.md)를 따르세요. 공개 운영 로그인: https://dothegy.github.io/sanji/workspace/ . 아래 Node/SQLite·Render 구성은 대체 배포 경로로 유지합니다.
+
 브랜드·유통사 발굴부터 상품 딜·크리에이터 매칭·승인 제안·답장까지 관리하는 Node.js 24 / SQLite 웹서비스입니다.
 
 - **공개 체험:** https://dothegy.github.io/sanji/ — 가상 데이터 데모, 실제 발송 없음

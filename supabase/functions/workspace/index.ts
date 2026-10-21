@@ -1,0 +1,1080 @@
+import { createClient } from "npm:@supabase/supabase-js@2";
+import { Buffer } from "node:buffer";
+import { draft as draftSchema } from "../_shared/schema.ts";
+const env = (name: string) => Deno.env.get(name) || "";
+const sb = createClient(env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY"), {
+  auth: { persistSession: false, autoRefreshToken: false },
+});
+const origin = env("APP_ORIGIN") || "https://dothegy.github.io";
+const frontend = env("APP_FRONTEND_URL") || origin + "/sanji/workspace/";
+const base = env("SUPABASE_URL") + "/functions/v1/workspace";
+const cors = {
+  "Access-Control-Allow-Origin": origin,
+  "Access-Control-Allow-Headers":
+    "authorization,apikey,content-type,x-client-info",
+  "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
+  Vary: "Origin",
+  "Cache-Control": "no-store",
+};
+const now = () => new Date().toISOString(),
+  uuid = () => crypto.randomUUID();
+class HttpError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+const fail = (s: number, m: string): never => {
+  throw new HttpError(s, m);
+};
+function json(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { ...cors, "Content-Type": "application/json" },
+  });
+}
+async function query(p: any) {
+  const { data, error } = await p;
+  if (error)
+    throw new HttpError(error.code === "23505" ? 409 : 400, error.message);
+  return data;
+}
+const digest = async (s: string) =>
+  Buffer.from(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)),
+  ).toString("hex");
+async function key() {
+  if (!env("TOKEN_ENCRYPTION_KEY"))
+    fail(503, "서버 토큰 암호화 키 설정이 필요합니다.");
+  return await crypto.subtle.importKey(
+    "raw",
+    await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(env("TOKEN_ENCRYPTION_KEY")),
+    ),
+    "AES-GCM",
+    false,
+    ["encrypt", "decrypt"],
+  );
+}
+async function encrypt(v: unknown) {
+  const iv = crypto.getRandomValues(new Uint8Array(12)),
+    b = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv },
+      await key(),
+      new TextEncoder().encode(JSON.stringify(v)),
+    );
+  return Buffer.concat([Buffer.from(iv), Buffer.from(b)]).toString("base64");
+}
+async function decrypt(v: string) {
+  const b = Buffer.from(v, "base64");
+  return JSON.parse(
+    new TextDecoder().decode(
+      await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: b.subarray(0, 12) },
+        await key(),
+        b.subarray(12),
+      ),
+    ),
+  );
+}
+async function connection(u: string, p: string) {
+  const row = await query(
+    sb
+      .from("sanji_connections")
+      .select("*")
+      .eq("owner", u)
+      .eq("provider", p)
+      .maybeSingle(),
+  );
+  return row ? await decrypt(row.encrypted) : null;
+}
+async function saveConnection(u: string, p: string, data: any) {
+  await query(
+    sb
+      .from("sanji_connections")
+      .upsert(
+        {
+          owner: u,
+          provider: p,
+          encrypted: await encrypt(data),
+          summary:
+            p === "gmail"
+              ? { email: data.email, connected: true }
+              : {
+                  username: data.username,
+                  expires: data.expires,
+                  connected: true,
+                },
+        },
+        { onConflict: "owner,provider" },
+      ),
+  );
+}
+async function remote(url: string, options: any = {}) {
+  const r = await fetch(url, {
+      ...options,
+      signal: AbortSignal.timeout(20000),
+    }),
+    d = await r.json().catch(() => ({}));
+  if (!r.ok)
+    throw new HttpError(r.status, "외부 제공자 요청 실패 (" + r.status + ")");
+  return d;
+}
+async function owned(u: string, id: string, kind?: string) {
+  let q = sb.from("sanji_records").select("*").eq("owner", u).eq("id", id);
+  if (kind) q = q.eq("kind", kind);
+  const r = await query(q.maybeSingle());
+  if (!r) fail(404, "항목을 찾을 수 없습니다.");
+  return { ...r.data, id: r.id, version: r.version, updated: r.updated };
+}
+async function records(u: string, kind: string) {
+  return (
+    await query(
+      sb.from("sanji_records").select("*").eq("owner", u).eq("kind", kind),
+    )
+  ).map((r: any) => ({
+    ...r.data,
+    id: r.id,
+    version: r.version,
+    updated: r.updated,
+  }));
+}
+async function audit(u: string, action: string, data: any = {}) {
+  await query(sb.from("sanji_audit").insert({ owner: u, action, data }));
+}
+function identities(c: any) {
+  return [
+    c.contact?.email?.toLowerCase(),
+    c.companyKey && "company:" + c.companyKey.toLowerCase(),
+    c.handle && "instagram:" + c.handle.toLowerCase(),
+    c.profile,
+  ].filter(Boolean);
+}
+async function isBlocked(u: string, c: any) {
+  if (["거절", "수신 거부"].includes(c.status)) return true;
+  const ids = identities(c);
+  if (!ids.length) return false;
+  return (
+    (
+      await query(
+        sb
+          .from("sanji_suppression")
+          .select("identity")
+          .eq("owner", u)
+          .in("identity", ids),
+      )
+    ).length > 0
+  );
+}
+async function putRecord(u: string, kind: string, data: any, id?: string) {
+  const clean = { ...data };
+  delete clean.id;
+  delete clean.version;
+  delete clean.updated;
+  const row = id
+    ? { data: clean, version: data.version + 1, updated: now() }
+    : { owner: u, kind, data: clean };
+  return id
+    ? await query(
+        sb
+          .from("sanji_records")
+          .update(row)
+          .eq("id", id)
+          .eq("owner", u)
+          .select()
+          .single(),
+      )
+    : await query(sb.from("sanji_records").insert(row).select().single());
+}
+async function gmailToken(u: string) {
+  const c = await connection(u, "gmail");
+  if (!c) fail(503, "Gmail을 먼저 연결하세요.");
+  if (c.expires > Date.now() + 60000) return c;
+  const r = await remote("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    body: new URLSearchParams({
+      client_id: env("GOOGLE_CLIENT_ID"),
+      client_secret: env("GOOGLE_CLIENT_SECRET"),
+      refresh_token: c.refresh_token,
+      grant_type: "refresh_token",
+    }),
+  });
+  const updated = { ...c, ...r, expires: Date.now() + r.expires_in * 1000 };
+  await saveConnection(u, "gmail", updated);
+  return updated;
+}
+function messageIds(v: string) {
+  return (String(v || "").match(/<[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~@-]+>/g) || [])
+    .slice(-20)
+    .join(" ");
+}
+function mime(d: any, from: string) {
+  const lines = [
+    `From: ${from}`,
+    `To: ${d.email}`,
+    `Subject: =?UTF-8?B?${Buffer.from(d.subject).toString("base64")}?=`,
+    `Message-ID: <${d.messageId}@sanji.local>`,
+    "MIME-Version: 1.0",
+  ];
+  if (d.inReplyTo)
+    lines.push(
+      "In-Reply-To: " + messageIds(d.inReplyTo),
+      "References: " + messageIds(d.references) + " " + messageIds(d.inReplyTo),
+    );
+  const attachments = d.attachments || [];
+  if (!attachments.length)
+    return Buffer.from(
+      [
+        ...lines,
+        "Content-Type: text/plain; charset=UTF-8",
+        "Content-Transfer-Encoding: base64",
+        "",
+        Buffer.from(d.body).toString("base64"),
+      ].join("\r\n"),
+    ).toString("base64url");
+  const boundary = "sanji_" + uuid();
+  lines.push(
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
+    "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    Buffer.from(d.body).toString("base64"),
+  );
+  for (const a of attachments)
+    lines.push(
+      `--${boundary}`,
+      "Content-Type: application/octet-stream",
+      `Content-Disposition: attachment; filename*=UTF-8''${encodeURIComponent(a.name)}`,
+      "Content-Transfer-Encoding: base64",
+      "",
+      a.content.match(/.{1,76}/g)?.join("\r\n") || "",
+    );
+  lines.push(`--${boundary}--`);
+  return Buffer.from(lines.join("\r\n")).toString("base64url");
+}
+function textBody(p: any): string {
+  if (p.mimeType === "text/plain" && p.body?.data)
+    return Buffer.from(p.body.data, "base64url").toString();
+  return (p.parts || []).map(textBody).filter(Boolean).join("\n");
+}
+function render(text: string, c: any, deals: any[], brandNames: string[]) {
+  const vars: any = {
+    회사명: c.company || "미확인",
+    브랜드명: c.kind === "크리에이터" ? brandNames.join(" / ") : c.name,
+    제품명: deals.length
+      ? deals.map((d) => d.name).join(" / ")
+      : c.product || "미확인",
+    크리에이터명: c.kind === "크리에이터" ? c.name : "해당 없음",
+    공동구매가:
+      deals
+        .map((d) =>
+          d.price == null ? "미협의" : d.price.toLocaleString() + "원",
+        )
+        .join(" / ") || "미확인",
+    일정: deals.map((d) => d.schedule).join(" / ") || "미확인",
+  };
+  return text.replace(/\{\{(.*?)\}\}/g, (_, v) => vars[v] ?? "{{" + v + "}}");
+}
+async function webhook(req: Request, url: URL) {
+  if (req.method === "GET") {
+    if (
+      env("META_VERIFY_TOKEN") &&
+      url.searchParams.get("hub.mode") === "subscribe" &&
+      url.searchParams.get("hub.verify_token") === env("META_VERIFY_TOKEN")
+    )
+      return new Response(url.searchParams.get("hub.challenge"));
+    fail(403, "웹훅 검증 실패");
+  }
+  if (!env("META_APP_SECRET")) fail(503, "Meta 설정이 필요합니다.");
+  const bytes = await req.arrayBuffer();
+  if (bytes.byteLength > 1048576) fail(413, "요청 크기 초과");
+  const k = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(env("META_APP_SECRET")),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"],
+    ),
+    signature = req.headers.get("x-hub-signature-256") || "";
+  if (
+    !/^sha256=[0-9a-f]{64}$/.test(signature) ||
+    !(await crypto.subtle.verify(
+      "HMAC",
+      k,
+      Buffer.from(signature.slice(7), "hex"),
+      bytes,
+    ))
+  )
+    fail(403, "웹훅 서명 불일치");
+  const body = JSON.parse(new TextDecoder().decode(bytes));
+  const connections = await query(
+    sb
+      .from("sanji_connections")
+      .select("owner,encrypted")
+      .eq("provider", "instagram"),
+  );
+  for (const entry of body.entry || [])
+    for (const event of entry.messaging || []) {
+      if (!event.message?.mid || event.message?.is_echo || !event.sender?.id)
+        continue;
+      const { error } = await sb
+        .from("sanji_webhook_events")
+        .insert({ id: event.message.mid });
+      if (error?.code === "23505") continue;
+      if (error) fail(500, "웹훅 기록 실패");
+      for (const row of connections) {
+        const c = await decrypt(row.encrypted);
+        if (String(c.id) !== String(entry.id)) continue;
+        const old = (await records(row.owner, "thread")).find(
+          (t: any) =>
+            t.channel === "instagram" && t.senderId === String(event.sender.id),
+        );
+        const t = old || {
+          channel: "instagram",
+          target: "",
+          senderId: String(event.sender.id),
+          subject: "Instagram 수신 대화",
+          owner: "",
+          next: "공개 계정과 후보 관계 확인 필요",
+          due: "",
+          classification: "미분류",
+          messages: [],
+        };
+        t.messages.push({
+          id: event.message.mid,
+          out: false,
+          text: event.message.text || "[첨부 메시지]",
+          at: new Date(Number(event.timestamp) || Date.now()).toISOString(),
+          automatic: false,
+        });
+        t.lastInbound = Math.max(
+          t.lastInbound || 0,
+          Math.min(Date.now(), Number(event.timestamp) || 0),
+        );
+        await putRecord(row.owner, "thread", t, t.id);
+      }
+    }
+  return new Response("EVENT_RECEIVED");
+}
+async function callback(req: Request, url: URL, provider: string) {
+  const state = url.searchParams.get("state") || "";
+  const row = await query(
+    sb
+      .from("sanji_oauth_states")
+      .select("*")
+      .eq("state", await digest(state))
+      .eq("provider", provider)
+      .maybeSingle(),
+  );
+  if (!row || Date.parse(row.expires) < Date.now())
+    fail(403, "인증 상태가 만료됐습니다.");
+  const consumed = await query(
+    sb
+      .from("sanji_oauth_states")
+      .delete()
+      .eq("state", row.state)
+      .select("state"),
+  );
+  if (!consumed.length) fail(403, "이미 사용된 인증 상태");
+  const code = url.searchParams.get("code");
+  if (!code) fail(400, "공식 인증이 취소되었습니다.");
+  if (provider === "gmail") {
+    const token = await remote("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      body: new URLSearchParams({
+        client_id: env("GOOGLE_CLIENT_ID"),
+        client_secret: env("GOOGLE_CLIENT_SECRET"),
+        code,
+        grant_type: "authorization_code",
+        redirect_uri: base + "/oauth/gmail/callback",
+        code_verifier: row.verifier,
+      }),
+    });
+    const profile = await remote(
+      "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+      { headers: { Authorization: "Bearer " + token.access_token } },
+    );
+    if (!token.refresh_token)
+      fail(
+        400,
+        "오프라인 갱신 권한이 필요합니다. Google 앱 권한 해제 후 다시 연결하세요.",
+      );
+    await saveConnection(row.owner, "gmail", {
+      ...token,
+      email: profile.emailAddress,
+      expires: Date.now() + token.expires_in * 1000,
+    });
+  } else if (provider === "instagram") {
+    const token = await remote("https://api.instagram.com/oauth/access_token", {
+      method: "POST",
+      body: new URLSearchParams({
+        client_id: env("META_APP_ID"),
+        client_secret: env("META_APP_SECRET"),
+        code,
+        grant_type: "authorization_code",
+        redirect_uri: base + "/oauth/instagram/callback",
+      }),
+    });
+    const long = await remote(
+      "https://graph.instagram.com/access_token?" +
+        new URLSearchParams({
+          grant_type: "ig_exchange_token",
+          client_secret: env("META_APP_SECRET"),
+          access_token: token.access_token,
+        }),
+    );
+    const profile = await remote(
+      "https://graph.instagram.com/" +
+        (env("META_GRAPH_VERSION") || "v24.0") +
+        "/me?" +
+        new URLSearchParams({
+          fields: "id,username",
+          access_token: long.access_token,
+        }),
+    );
+    await saveConnection(row.owner, "instagram", {
+      ...long,
+      ...profile,
+      expires: Date.now() + long.expires_in * 1000,
+    });
+  } else fail(404, "알 수 없는 연결");
+  await audit(row.owner, "oauth_connected", { provider });
+  return Response.redirect(frontend + "#settings", 302);
+}
+Deno.serve(async (req: Request) => {
+  const url = new URL(req.url),
+    path = url.pathname.replace(/^\/(?:functions\/v1\/)?workspace/, "");
+  try {
+    if (req.headers.get("origin") && req.headers.get("origin") !== origin)
+      fail(403, "허용되지 않은 출처");
+    if (req.method === "OPTIONS")
+      return new Response(null, { status: 204, headers: cors });
+    if (path === "/instagram/webhook") return await webhook(req, url);
+    if (/^\/oauth\/(gmail|instagram)\/callback$/.test(path))
+      return await callback(req, url, path.split("/")[2]);
+    const bearer = req.headers.get("authorization") || "";
+    if (!bearer.startsWith("Bearer ")) fail(401, "로그인이 필요합니다.");
+    const {
+      data: { user },
+      error,
+    } = await sb.auth.getUser(bearer.slice(7));
+    if (error || !user) fail(401, "로그인 세션을 확인하세요.");
+    const member = await query(
+      sb
+        .from("sanji_members")
+        .select("user_id")
+        .eq("user_id", user.id)
+        .maybeSingle(),
+    );
+    if (!member) fail(403, "관리자 접근 권한이 없습니다.");
+    const u = user.id;
+    const input = async () => {
+      const text = await req.text();
+      if (Buffer.byteLength(text) > 10 * 1024 * 1024)
+        fail(413, "요청 크기 초과");
+      return text ? JSON.parse(text) : {};
+    };
+    if (path === "/connections" && req.method === "GET") {
+      const gmail = await connection(u, "gmail"),
+        ig = await connection(u, "instagram");
+      return json({
+        gmail: {
+          configured:
+            !!env("GOOGLE_CLIENT_ID") && !!env("GOOGLE_CLIENT_SECRET"),
+          connected: !!gmail,
+          email: gmail?.email || "",
+          enabled: env("EMAIL_SENDING_ENABLED") === "true",
+        },
+        instagram: {
+          configured: !!env("META_APP_ID") && !!env("META_APP_SECRET"),
+          connected: !!ig,
+          username: ig?.username || "",
+          enabled: env("INSTAGRAM_SENDING_ENABLED") === "true",
+        },
+        search: { configured: !!env("BRAVE_SEARCH_API_KEY") },
+      });
+    }
+    if (path.startsWith("/connections/") && req.method === "DELETE") {
+      await query(
+        sb
+          .from("sanji_connections")
+          .delete()
+          .eq("owner", u)
+          .eq("provider", path.split("/")[2]),
+      );
+      await audit(u, "connection_removed");
+      return json({ ok: true });
+    }
+    if (path.startsWith("/oauth/") && req.method === "POST") {
+      await key();
+      const provider = path.split("/")[2];
+      if (
+        (provider === "gmail" &&
+          (!env("GOOGLE_CLIENT_ID") || !env("GOOGLE_CLIENT_SECRET"))) ||
+        (provider === "instagram" &&
+          (!env("META_APP_ID") || !env("META_APP_SECRET")))
+      )
+        fail(503, "공식 OAuth 앱 설정이 필요합니다.");
+      if (!["gmail", "instagram"].includes(provider))
+        fail(404, "알 수 없는 연결");
+      const state = uuid() + uuid(),
+        verifier = Buffer.from(
+          crypto.getRandomValues(new Uint8Array(32)),
+        ).toString("base64url");
+      await query(
+        sb
+          .from("sanji_oauth_states")
+          .insert({
+            state: await digest(state),
+            owner: u,
+            provider,
+            verifier,
+            expires: new Date(Date.now() + 600000).toISOString(),
+          }),
+      );
+      const params =
+        provider === "gmail"
+          ? new URLSearchParams({
+              client_id: env("GOOGLE_CLIENT_ID"),
+              redirect_uri: base + "/oauth/gmail/callback",
+              response_type: "code",
+              scope:
+                "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly",
+              access_type: "offline",
+              prompt: "consent",
+              state,
+              code_challenge: Buffer.from(
+                await crypto.subtle.digest(
+                  "SHA-256",
+                  new TextEncoder().encode(verifier),
+                ),
+              ).toString("base64url"),
+              code_challenge_method: "S256",
+            })
+          : new URLSearchParams({
+              client_id: env("META_APP_ID"),
+              redirect_uri: base + "/oauth/instagram/callback",
+              response_type: "code",
+              scope:
+                "instagram_business_basic,instagram_business_manage_messages",
+              state,
+            });
+      return json({
+        url:
+          (provider === "gmail"
+            ? "https://accounts.google.com/o/oauth2/v2/auth?"
+            : "https://www.instagram.com/oauth/authorize?") + params,
+      });
+    }
+    if (path === "/search" && req.method === "GET") {
+      const q = (url.searchParams.get("q") || "").slice(0, 200);
+      if (q.length < 2) fail(400, "검색어를 2자 이상 입력하세요.");
+      if (!env("BRAVE_SEARCH_API_KEY"))
+        return json(
+          {
+            error: "검색 API 키가 연결되지 않았습니다.",
+            searchUrl:
+              "https://www.google.com/search?q=" + encodeURIComponent(q),
+          },
+          503,
+        );
+      const r = await remote(
+        "https://api.search.brave.com/res/v1/web/search?" +
+          new URLSearchParams({
+            q:
+              q +
+              (url.searchParams.get("type") === "creator"
+                ? " site:instagram.com 건강식품 공동구매"
+                : " 공식 홈페이지 제휴 도매 문의"),
+            count: "10",
+            country: "KR",
+            search_lang: "ko",
+          }),
+        { headers: { "X-Subscription-Token": env("BRAVE_SEARCH_API_KEY") } },
+      );
+      return json({
+        results: (r.web?.results || []).map((x: any) => ({
+          title: x.title,
+          url: x.url,
+          description: x.description,
+          checked: now(),
+          verification: "검색 결과 · 연락처/소유 관계 검증 전",
+        })),
+      });
+    }
+    if (path === "/instagram/link-thread" && req.method === "POST") {
+      const b = await input(),
+        t = await owned(u, b.thread, "thread"),
+        c = await owned(u, b.target, "candidate");
+      if (
+        t.channel !== "instagram" ||
+        c.kind !== "크리에이터" ||
+        t.version !== b.version
+      )
+        fail(409, "대화 유형 또는 버전을 확인하세요.");
+      await putRecord(u, "thread", { ...t, target: c.id }, t.id);
+      return json({ ok: true });
+    }
+    if (path === "/gmail/sync" && req.method === "POST") {
+      const g = await gmailToken(u),
+        headers = { Authorization: "Bearer " + g.access_token },
+        targets = (await records(u, "candidate")).filter(
+          (c: any) => c.contact.email,
+        );
+      let imported = 0,
+        partial = targets.length > 30;
+      for (const c of targets.slice(0, 30)) {
+        const r = await remote(
+          "https://gmail.googleapis.com/gmail/v1/users/me/threads?" +
+            new URLSearchParams({
+              q: `{from:${c.contact.email} to:${c.contact.email}} newer_than:90d`,
+              maxResults: "20",
+            }),
+          { headers },
+        );
+        if (r.nextPageToken) partial = true;
+        for (const entry of r.threads || []) {
+          const remoteThread = await remote(
+            "https://gmail.googleapis.com/gmail/v1/users/me/threads/" +
+              encodeURIComponent(entry.id) +
+              "?format=full",
+            { headers },
+          );
+          const messages = remoteThread.messages
+            .map((m: any) => {
+              const h = Object.fromEntries(
+                (m.payload.headers || []).map((h: any) => [
+                  h.name.toLowerCase(),
+                  h.value,
+                ]),
+              );
+              return {
+                id: m.id,
+                messageId: h["message-id"] || "",
+                references: h.references || "",
+                subject: h.subject || "",
+                from: h.from || "",
+                out: (h.from || "")
+                  .toLowerCase()
+                  .includes(g.email.toLowerCase()),
+                text: textBody(m.payload) || m.snippet || "[본문 미지원]",
+                at: new Date(Number(m.internalDate)).toISOString(),
+                automatic:
+                  (!!h["auto-submitted"] && h["auto-submitted"] !== "no") ||
+                  /auto_reply|auto-replied|bulk/i.test(h.precedence || ""),
+              };
+            })
+            .sort((a: any, b: any) => a.at.localeCompare(b.at));
+          const old = (await records(u, "thread")).find(
+              (t: any) => t.providerId === entry.id && t.channel === "email",
+            ),
+            inbound = messages.filter((m: any) => !m.out),
+            optout = inbound.some(
+              (m: any) =>
+                !m.automatic &&
+                /수신\s*거부(합니다|할게|해\s*주세요|요청합니다)|^\s*수신\s*거부[.!]?\s*$|unsubscribe\s+me|please\s+(unsubscribe|stop)|연락.{0,8}(중단해|그만해|하지\s*마)/im.test(
+                  m.text,
+                ),
+            );
+          await putRecord(
+            u,
+            "thread",
+            {
+              ...old,
+              target: c.id,
+              channel: "email",
+              providerId: entry.id,
+              subject: messages[0]?.subject || "(제목 없음)",
+              owner: old?.owner || "",
+              next: old?.next || "",
+              due: old?.due || "",
+              classification: optout
+                ? "수신 거부"
+                : old?.classification ||
+                  (inbound.length && inbound.every((m: any) => m.automatic)
+                    ? "자동 응답"
+                    : "미분류"),
+              messages,
+              synced: now(),
+            },
+            old?.id,
+          );
+          if (optout) {
+            for (const identity of identities(c))
+              await query(
+                sb
+                  .from("sanji_suppression")
+                  .upsert(
+                    {
+                      owner: u,
+                      identity,
+                      reason: "수신 메일의 수신 거부 요청",
+                    },
+                    { onConflict: "owner,identity" },
+                  ),
+              );
+            await putRecord(
+              u,
+              "candidate",
+              { ...(await owned(u, c.id, "candidate")), status: "수신 거부" },
+              c.id,
+            );
+          } else if (
+            inbound.length &&
+            !["거절", "수신 거부"].includes(c.status)
+          )
+            await putRecord(
+              u,
+              "candidate",
+              { ...(await owned(u, c.id, "candidate")), status: "회신" },
+              c.id,
+            );
+          imported++;
+        }
+      }
+      await audit(u, "gmail_synced", { imported });
+      return json({ imported, partial });
+    }
+    if (path === "/drafts" && req.method === "POST") {
+      const inputData = draftSchema.parse(await input()),
+        c = await owned(u, inputData.target, "candidate");
+      if (await isBlocked(u, c)) fail(403, "거절·수신 거부 대상");
+      if (
+        inputData.channel === "email" &&
+        (!c.contact.verified || !c.contact.email)
+      )
+        fail(400, "공식 연락처 확인이 필요합니다.");
+      const deals = await Promise.all(
+        inputData.dealIds.map((id: string) => owned(u, id, "deal")),
+      );
+      if (deals.some((d: any) => d.state !== "확정"))
+        fail(400, "협의 중 상품은 제안할 수 없습니다.");
+      if (c.kind === "크리에이터" && !inputData.replyTo && !deals.length)
+        fail(400, "상품 1~3개를 선택하세요.");
+      const settings = (await records(u, "settings"))[0];
+      if (
+        inputData.channel === "email" &&
+        (!settings?.senderName ||
+          !settings.senderAddress ||
+          !settings.senderPhone)
+      )
+        fail(400, "발신자 정보를 먼저 등록하세요.");
+      const brandNames = await Promise.all(
+        deals.map(
+          async (d: any) => (await owned(u, d.brand, "candidate")).name,
+        ),
+      );
+      const subject = render(inputData.subject, c, deals, brandNames),
+        body =
+          render(inputData.body, c, deals, brandNames) +
+          "\n\n" +
+          inputData.signature +
+          (inputData.channel === "email"
+            ? `\n\n${settings.senderName}\n${settings.senderAddress}\n${settings.senderPhone}\n${settings.optOut}`
+            : "");
+      if (/\{\{/.test(subject + body)) fail(400, "미해결 변수가 있습니다.");
+      if (
+        /치료|예방|완치|항암|효능.{0,4}보장|혈당.{0,5}(낮|개선)/.test(
+          subject + body,
+        )
+      )
+        fail(400, "미확인 효능·질병 표현을 수정하세요.");
+      if (
+        inputData.marketing &&
+        inputData.channel === "email" &&
+        !subject.startsWith("(광고)")
+      )
+        fail(400, "광고성 이메일 제목은 (광고)로 시작해야 합니다.");
+      if (
+        inputData.attachments.reduce(
+          (n: number, a: any) => n + Buffer.from(a.content, "base64").length,
+          0,
+        ) >
+        5 * 1024 * 1024
+      )
+        fail(400, "첨부 합계는 5MB 이하입니다.");
+      let reply: any = {};
+      if (inputData.replyTo) {
+        const t = await owned(u, inputData.replyTo, "thread");
+        if (t.target !== c.id || t.channel !== inputData.channel)
+          fail(400, "회신 채널·수신자 불일치");
+        const last = t.messages.filter((m: any) => !m.out).at(-1);
+        reply = {
+          providerThread: t.providerId,
+          inReplyTo: last?.messageId,
+          references: last?.references,
+          senderId: t.senderId,
+        };
+        if (
+          inputData.channel === "instagram" &&
+          (!t.lastInbound || Date.now() - t.lastInbound > 86400000)
+        )
+          fail(403, "24시간 메시징 시간이 만료됐습니다.");
+      } else if (inputData.channel === "instagram")
+        fail(403, "신규 선제 DM은 지원하지 않습니다.");
+      const d = {
+          ...inputData,
+          ...reply,
+          subject,
+          body,
+          email: c.contact.email,
+          targetName: c.name,
+          targetVersion: c.version,
+          dealVersions: deals.map((d: any) => ({
+            id: d.id,
+            version: d.version,
+          })),
+          messageId: uuid(),
+          attachmentSummary: inputData.attachments.map((a: any) => ({
+            name: a.name,
+            size: Buffer.from(a.content, "base64").length,
+          })),
+        },
+        hash = await digest(JSON.stringify(d));
+      const stored = await query(
+        sb
+          .from("sanji_drafts")
+          .insert({
+            owner: u,
+            data: d,
+            hash,
+            expires: new Date(Date.now() + 900000).toISOString(),
+          })
+          .select("id")
+          .single(),
+      );
+      return json(
+        {
+          id: stored.id,
+          hash,
+          target: c.name,
+          email: c.contact.email,
+          channel: d.channel,
+          subject,
+          body,
+          dealVersions: d.dealVersions,
+          attachments: d.attachmentSummary,
+          expiresIn: 900,
+        },
+        201,
+      );
+    }
+    const send = path.match(/^\/drafts\/([a-f0-9-]+)\/send$/);
+    if (send && req.method === "POST") {
+      const b = await input();
+      if (!b.approved || typeof b.hash !== "string")
+        fail(400, "최종 승인 필요");
+      const row = await query(
+        sb
+          .from("sanji_drafts")
+          .select("*")
+          .eq("id", send[1])
+          .eq("owner", u)
+          .maybeSingle(),
+      );
+      if (
+        !row ||
+        row.used ||
+        Date.parse(row.expires) < Date.now() ||
+        row.hash !== b.hash
+      )
+        fail(409, "미리보기가 만료되었거나 변경됐습니다.");
+      const d = row.data;
+      if (d.marketing && d.channel !== "manual_dm") {
+        const hour = Number(
+          new Intl.DateTimeFormat("en-GB", {
+            timeZone: "Asia/Seoul",
+            hour: "2-digit",
+            hourCycle: "h23",
+          }).format(new Date()),
+        );
+        if (hour < 8 || hour >= 21)
+          fail(403, "한국시간 08~21시 사이에만 발송할 수 있습니다.");
+      }
+      if (
+        (d.channel === "email" && env("EMAIL_SENDING_ENABLED") !== "true") ||
+        (d.channel === "instagram" &&
+          env("INSTAGRAM_SENDING_ENABLED") !== "true")
+      )
+        fail(403, "관리자가 실제 발송을 아직 허용하지 않았습니다.");
+      if (d.channel === "manual_dm" && !b.manuallySent)
+        fail(400, "직접 발송 완료 결과만 기록하세요.");
+      let gmail, ig;
+      if (d.channel === "email") gmail = await gmailToken(u);
+      if (d.channel === "instagram") {
+        const t = await owned(u, d.replyTo, "thread");
+        if (
+          !t.lastInbound ||
+          Date.now() - t.lastInbound > 86400000 ||
+          !t.senderId
+        )
+          fail(403, "대화 시간 또는 수신자 확인 필요");
+        if (Buffer.byteLength(d.body) > 1000 || d.attachments.length)
+          fail(400, "현재 회신은 1000바이트 이하 텍스트만 지원합니다.");
+        ig = await connection(u, "instagram");
+        if (!ig || ig.expires < Date.now()) fail(503, "Meta 재연결 필요");
+      }
+      const out = await query(
+        sb.rpc("sanji_reserve_dispatch", {
+          p_owner: u,
+          p_draft: row.id,
+          p_hash: b.hash,
+          p_fingerprint: await digest(
+            u +
+              "|" +
+              d.target +
+              "|" +
+              d.channel +
+              "|" +
+              d.subject +
+              "|" +
+              d.body,
+          ),
+        }),
+      );
+      let response: any = {},
+        status = "manual_recorded";
+      try {
+        if (d.channel === "email") {
+          response = await remote(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+            {
+              method: "POST",
+              headers: {
+                Authorization: "Bearer " + gmail.access_token,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                raw: mime(d, gmail.email),
+                ...(d.providerThread ? { threadId: d.providerThread } : {}),
+              }),
+            },
+          );
+          status = "accepted";
+        }
+        if (d.channel === "instagram") {
+          response = await remote(
+            "https://graph.instagram.com/" +
+              (env("META_GRAPH_VERSION") || "v24.0") +
+              "/" +
+              encodeURIComponent(ig.id) +
+              "/messages",
+            {
+              method: "POST",
+              headers: {
+                Authorization: "Bearer " + ig.access_token,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                recipient: { id: d.senderId },
+                message: { text: d.body },
+              }),
+            },
+          );
+          status = "accepted";
+        }
+        await query(
+          sb
+            .from("sanji_outbox")
+            .update({ status })
+            .eq("id", out.id)
+            .eq("owner", u),
+        );
+        const t = d.replyTo
+          ? await owned(u, d.replyTo, "thread")
+          : {
+              target: d.target,
+              channel: d.channel,
+              subject: d.subject,
+              providerId: response.threadId || "",
+              owner: "",
+              next: "회신 대기",
+              due: "",
+              classification: "미분류",
+              messages: [],
+            };
+        t.messages.push({
+          id: response.id || out.id,
+          messageId: `<${d.messageId}@sanji.local>`,
+          out: true,
+          text: d.body,
+          at: now(),
+          status,
+        });
+        await putRecord(u, "thread", t, t.id);
+        const c = await owned(u, d.target, "candidate");
+        await putRecord(u, "candidate", { ...c, status: "발송" }, c.id);
+        await audit(u, "approved_dispatch", {
+          id: out.id,
+          status,
+          previewHash: b.hash,
+        });
+        await query(
+          sb.from("sanji_drafts").delete().eq("id", row.id).eq("owner", u),
+        );
+        return json({
+          id: out.id,
+          status,
+          note:
+            status === "accepted"
+              ? "제공자 접수. 도착·열람은 미확인입니다."
+              : "수동 발송 결과를 기록했습니다. 전달·열람 미확인.",
+        });
+      } catch (e) {
+        const rejected =
+          e instanceof HttpError &&
+          [400, 401, 403, 404, 429].includes(e.status);
+        await query(
+          sb
+            .from("sanji_outbox")
+            .update({
+              status: rejected ? "provider_rejected" : "outcome_unknown",
+              data: {
+                subject: d.subject,
+                targetName: d.targetName,
+                error: rejected
+                  ? "provider_rejected"
+                  : "결과 불확실 · 자동 재시도 없음",
+                retries: 0,
+              },
+            })
+            .eq("id", out.id)
+            .eq("owner", u),
+        );
+        return json(
+          {
+            error:
+              "결과를 확인하지 못했습니다. 제공자 보낸편지함을 확인하세요. 자동 재시도하지 않습니다.",
+          },
+          502,
+        );
+      }
+    }
+    return json({ error: "지원하지 않는 요청" }, 404);
+  } catch (e) {
+    if (e?.name === "ZodError")
+      return json(
+        {
+          error: "입력 내용 검증 실패",
+          details: e.issues.map((x: any) => ({
+            field: x.path.join("."),
+            message: x.message,
+          })),
+        },
+        400,
+      );
+    return json(
+      {
+        error:
+          e instanceof HttpError
+            ? e.message
+            : "서버 처리 실패. Supabase Function 로그를 확인하세요.",
+      },
+      e instanceof HttpError ? e.status : 500,
+    );
+  }
+});
