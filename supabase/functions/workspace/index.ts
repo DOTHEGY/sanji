@@ -1,3 +1,4 @@
+import { instagramTokenResponse } from "../_shared/instagram-token.ts";
 import { checkGmail } from "../_shared/gmail-check.ts";
 import { oauthLifetimeMs, oauthStateProblem, oauthErrorRedirect, providerErrorDetail } from "../_shared/oauth-status.ts";
 import { selectInstagramAccount, sameInstagramConversation } from "../_shared/instagram-accounts.ts";
@@ -435,7 +436,7 @@ async function callback(
       expires: Date.now() + token.expires_in * 1000,
     });
   } else if (provider === "instagram") {
-    const token = await remote("https://api.instagram.com/oauth/access_token", {
+    const tokenResponse = await remote("https://api.instagram.com/oauth/access_token", {
       method: "POST",
       body: new URLSearchParams({
         client_id: env("META_APP_ID"),
@@ -445,7 +446,10 @@ async function callback(
         redirect_uri: base + "/oauth/instagram/callback",
       }),
     }, "Instagram 인증 코드 교환");
-    const long = await remote(
+    let token;
+    try { token = instagramTokenResponse(tokenResponse); }
+    catch (e) { fail(502, e.message); }
+    const longResponse = await remote(
       "https://graph.instagram.com/access_token?" +
         new URLSearchParams({
           grant_type: "ig_exchange_token",
@@ -454,6 +458,9 @@ async function callback(
         }),
       {}, "Instagram 장기 토큰 교환",
     );
+    let long;
+    try { long = instagramTokenResponse(longResponse, true); }
+    catch (e) { fail(502, e.message); }
     const profile = await remote(
       "https://graph.instagram.com/" +
         (env("META_GRAPH_VERSION") || "v24.0") +
@@ -750,7 +757,7 @@ Deno.serve(async (req: Request) => {
       }
     }
     if (path === "/health" && req.method === "GET")
-      return json({ ok: true, version: 6, authRequired: true });
+      return json({ ok: true, version: 7, authRequired: true });
     if (path === "/jobs/run" && req.method === "POST")
       return await runJobs(req);
     const bearer = req.headers.get("authorization") || "";

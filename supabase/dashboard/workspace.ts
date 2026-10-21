@@ -1,3 +1,13 @@
+// supabase/functions/_shared/instagram-token.ts
+function instagramTokenResponse(response, requireExpiry = false) {
+  const token = typeof response?.access_token === "string" ? response : Array.isArray(response?.data) ? response.data[0] : null;
+  if (!token || typeof token.access_token !== "string" || !token.access_token.trim())
+    throw new Error("Instagram \uC751\uB2F5\uC5D0 \uC720\uD6A8\uD55C \uD1A0\uD070\uC774 \uC5C6\uC2B5\uB2C8\uB2E4. \uACC4\uC815 \uC5F0\uACB0\uC744 \uB2E4\uC2DC \uC2DC\uC791\uD558\uC138\uC694.");
+  if (requireExpiry && (!Number.isFinite(Number(token.expires_in)) || Number(token.expires_in) <= 0))
+    throw new Error("Instagram \uC7A5\uAE30 \uD1A0\uD070\uC758 \uC720\uD6A8\uAE30\uAC04\uC744 \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uAE30\uC874 \uC5F0\uACB0\uC740 \uC720\uC9C0\uB429\uB2C8\uB2E4.");
+  return token;
+}
+
 // supabase/functions/_shared/gmail-check.ts
 async function checkGmail(c, request, sendingEnabled) {
   const profile = await request("https://gmail.googleapis.com/gmail/v1/users/me/profile", {
@@ -591,7 +601,7 @@ async function callback(req, url2, provider, base) {
       expires: Date.now() + token.expires_in * 1e3
     });
   } else if (provider === "instagram") {
-    const token = await remote("https://api.instagram.com/oauth/access_token", {
+    const tokenResponse = await remote("https://api.instagram.com/oauth/access_token", {
       method: "POST",
       body: new URLSearchParams({
         client_id: env("META_APP_ID"),
@@ -601,7 +611,13 @@ async function callback(req, url2, provider, base) {
         redirect_uri: base + "/oauth/instagram/callback"
       })
     }, "Instagram \uC778\uC99D \uCF54\uB4DC \uAD50\uD658");
-    const long = await remote(
+    let token;
+    try {
+      token = instagramTokenResponse(tokenResponse);
+    } catch (e) {
+      fail(502, e.message);
+    }
+    const longResponse = await remote(
       "https://graph.instagram.com/access_token?" + new URLSearchParams({
         grant_type: "ig_exchange_token",
         client_secret: env("META_APP_SECRET"),
@@ -610,6 +626,12 @@ async function callback(req, url2, provider, base) {
       {},
       "Instagram \uC7A5\uAE30 \uD1A0\uD070 \uAD50\uD658"
     );
+    let long;
+    try {
+      long = instagramTokenResponse(longResponse, true);
+    } catch (e) {
+      fail(502, e.message);
+    }
     const profile = await remote(
       "https://graph.instagram.com/" + (env("META_GRAPH_VERSION") || "v24.0") + "/me?" + new URLSearchParams({
         fields: "id,user_id,username",
@@ -842,7 +864,7 @@ Deno.serve(async (req) => {
       }
     }
     if (path === "/health" && req.method === "GET")
-      return json({ ok: true, version: 6, authRequired: true });
+      return json({ ok: true, version: 7, authRequired: true });
     if (path === "/jobs/run" && req.method === "POST")
       return await runJobs(req);
     const bearer = req.headers.get("authorization") || "";

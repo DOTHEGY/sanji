@@ -283,7 +283,7 @@ test("Edge function compiles and denies unauthenticated/disallowed-origin reques
         new Request("https://project.example" + prefix + "/health"),
       );
       assert.equal(health.status, 200);
-      assert.equal((await health.json()).version, 6);
+      assert.equal((await health.json()).version, 7);
       const callback = await handler(new Request("https://project.example" + prefix + "/oauth/instagram/callback"));
       assert.equal(callback.status, 302);
       const back = new URL(callback.headers.get("location"));
@@ -713,4 +713,17 @@ test("Provider error diagnosis retains useful codes while redacting OAuth creden
   const detail = m.exports.providerErrorDetail("https://graph.instagram.com/me?access_token=private-token-123", {body: new URLSearchParams({client_secret: "private-secret-456", code: "private-code-789"})}, {error: {code: 100, message: "Invalid field user_id for private-token-123 private-secret-456 private-code-789"}});
   assert.match(detail, /100/); assert.match(detail, /Invalid field user_id/);
   assert.equal(detail.includes("private-"), false);
+});
+
+test("Instagram token exchange supports current data-array and legacy responses, rejecting empty tokens before next request", () => {
+  const compiled = esbuild.buildSync({ entryPoints: ["supabase/functions/_shared/instagram-token.ts"], bundle: true, platform: "node", format: "cjs", write: false });
+  const m = { exports: {} }; new Function("module", "exports", compiled.outputFiles[0].text)(m, m.exports);
+  const parse = m.exports.instagramTokenResponse;
+  assert.equal(parse({ data: [{access_token: "test-new-token",user_id:"123"}] }).access_token, "test-new-token");
+  assert.equal(parse({access_token:"test-legacy-token"}).access_token, "test-legacy-token");
+  assert.equal(parse({data:[{access_token:"test-long-token",expires_in:5183944}]}, true).expires_in, 5183944);
+  for (const response of [{}, {data:[]}, {data:[{}]}, {access_token:""}, {access_token:null}])
+    assert.throws(() => parse(response), /유효한 토큰/);
+  assert.throws(() => parse({access_token:"test-long-token"},true), /유효기간/);
+  assert.throws(() => parse({access_token:"test-long-token",expires_in:-1},true), /유효기간/);
 });
