@@ -1,3 +1,4 @@
+import { mailRecipients } from "./mail-recipients.ts";
 import { publicUrl, publicIp, marketplace, companyIdentity, parseOfficialPage, robotsAllowed } from "./discovery.ts";
 const defaults={enabled:false,target:30,keywords:["건강기능식품 유산균","건강식품 효소","건강식품 단백질","건강식품 견과","건강식품 올리브오일"]};
 const day=()=>new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Seoul"});
@@ -33,7 +34,7 @@ export function discoveryService(deps:any){
    return {text,url:url.toString(),bytes:size,redirects};
   }throw Error("리디렉션 횟수 제한 초과");
  }
- async function crawl(website:string){
+ async function crawl(website:string,maxPages=5){
   const base=publicUrl(website);
   if(marketplace(base.toString()))throw Error("플랫폼 운영사 메일을 브랜드 메일로 수집하지 않습니다. 회사·자사몰 URL을 확인하세요.");
   const robotCache=new Map<string,string>(),attempts:any[]=[],results:any[]=[],visited=new Set<string>();
@@ -56,7 +57,7 @@ export function discoveryService(deps:any){
   // A link is evidence of a relationship, never proof of legal ownership or permission to contact.
   const homeOrigin=new URL(first.source).origin,extraOrigins=new Set<string>();
   const queue=[...first.links.filter((l:any)=>["shop","company"].includes(l.type)),...first.links.filter((l:any)=>!["shop","company"].includes(l.type))];
-  while(queue.length&&attempts.length<5&&htmlBudget>0){
+  while(queue.length&&attempts.length<maxPages&&htmlBudget>0){
    const link:any=queue.shift();let next;try{next=publicUrl(link.url);}catch{continue;}
    if(visited.has(next.toString())||marketplace(next.toString())||/login|logout|signup|cart|order|privacy|recruit|terms/i.test(next.pathname))continue;
    if(next.origin!==homeOrigin){
@@ -70,7 +71,7 @@ export function discoveryService(deps:any){
    }
   }
   const contacts=Array.from(new Map(results.flatMap(p=>p.contacts).map(c=>[c.email.toLowerCase(),c])).values());
-  return {contacts,excludedCount:results.reduce((n,p)=>n+p.rejected.length,0),inquiryLinks:results.flatMap(p=>p.links).filter((l:any)=>/제휴|도매|입점|공동구매/.test(l.label)).slice(0,5),checked,pages:results.length,sourceAttempts:attempts,error:"",officialVerified:false,reviewNote:"홈페이지·연결된 자사몰 후보의 푸터·공개 사업용 메일을 확인했습니다. 이메일 출처와 연결 경로를 남기며 동일 법인 소유 관계는 별도 확인해야 합니다."};
+  return {contacts,publicEvidence:results.map(p=>p.publicEvidence),excludedCount:results.reduce((n,p)=>n+p.rejected.length,0),inquiryLinks:results.flatMap(p=>p.links).filter((l:any)=>/제휴|도매|입점|공동구매/.test(l.label)).slice(0,5),checked,pages:results.length,sourceAttempts:attempts,error:"",officialVerified:false,reviewNote:"홈페이지·연결된 자사몰 후보의 푸터·공개 사업용 메일을 확인했습니다. 이메일 출처와 연결 경로를 남기며 동일 법인 소유 관계는 별도 확인해야 합니다."};
  }
  async function config(u:string){return await query(sb.from("sanji_discovery_config").select("*").eq("owner",u).maybeSingle()) || {...defaults,owner:u};}
  async function cycle(u:string){
@@ -108,10 +109,18 @@ export function discoveryService(deps:any){
    await sb.from("sanji_discovery_config").update({updated:new Date().toISOString()}).eq("owner",u);
   }
  }
- async function scheduled(){
+ async function enrich(u:string,id:string){
+  const lead=await query(sb.from("sanji_discovery_leads").select("*").eq("owner",u).eq("id",id).single());
+  const source=(lead.data.contacts||[]).find((c:any)=>c.discoveryMethod==="public_page"&&c.source)?.source||lead.data.website;
+  const result=await crawl(publicUrl(source).origin+"/",2);
+  await query(sb.from("sanji_discovery_leads").update({data:{...lead.data,publicEvidence:result.publicEvidence||[],evidenceError:result.error||"",evidenceChecked:new Date().toISOString()},updated:new Date().toISOString()}).eq("owner",u).eq("id",id));
+  return {ok:true,pages:result.pages,evidenceCount:result.publicEvidence?.length||0,error:result.error||""};
+ }
+ async function scheduled(input:any={}){
   await sb.from("sanji_connections").delete().eq("provider","instagram_pending").lt("summary->>expires",String(Date.now()));
   const rows=await query(sb.from("sanji_discovery_config").select("owner").eq("enabled",true).order("updated").limit(1));
   if(!rows.length)return {status:"disabled",message:"자동 발굴이 꺼져 있습니다."};
+  if(input.task==="enrich"&&typeof input.leadId==="string")return await enrich(rows[0].owner,input.leadId);
   await sb.from("sanji_discovery_config").update({updated:new Date().toISOString()}).eq("owner",rows[0].owner);
   return await cycle(rows[0].owner);
  }
@@ -129,6 +138,14 @@ export function discoveryService(deps:any){
    return {settings,leads,usage:today,configured:false,engine:{status,label:labels[status],pending:pending.length,current:active?pending[0]?.data.name||"":"",heartbeat:settings.updated,lastCompleted:activity[0]?.checked||null,mode:"homepage_queue",nextRun:settings.enabled&&pending.length&&today.emails<settings.target&&today.calls<160?new Date(Math.ceil((Date.now()+1000)/300000)*300000).toISOString():null},activity,scope:"한국시간 오늘 · 공식 공개 이메일 후보 / 최종 검증 전 · 문의폼·전화번호 제외",llmCalls:0};
   }
   const b=await input();
+  if(path==="/discovery/enrich"&&method==="POST")return await enrich(u,String(b.id||""));
+  if(path==="/discovery/outreach"&&method==="POST"){
+   const lead=await query(sb.from("sanji_discovery_leads").select("*").eq("owner",u).eq("id",b.id).single());
+   const old=lead.data.outreach||{};
+   const fields:any={};for(const k of ["subject","body","signature","intro","productName","brandName","companyName"]){if(typeof b[k]==="string")fields[k]=b[k].slice(0,k==="body"?15000:1000);}
+   await query(sb.from("sanji_discovery_leads").update({data:{...lead.data,outreach:{...old,...fields,approved:false,updated:new Date().toISOString()}},updated:new Date().toISOString()}).eq("owner",u).eq("id",lead.id));
+   return {ok:true};
+  }
   if(path==="/discovery/settings"&&method==="POST"){
    const target=Number(b.target);if(!Number.isInteger(target)||target<1||target>100)throw Error("하루 목표는 1~100입니다.");
    const keywords=Array.isArray(b.keywords)?b.keywords.map((x:any)=>String(x).trim().slice(0,80)).filter(Boolean).slice(0,20):defaults.keywords;
@@ -146,16 +163,18 @@ export function discoveryService(deps:any){
    await query(sb.from("sanji_discovery_leads").update({status:"new",data:{...lead.data,website:url.toString(),error:""},updated:new Date().toISOString()}).eq("owner",u).eq("id",lead.id));return {ok:true};
   }
   if(path==="/discovery/run"&&method==="POST")return await cycle(u);
-  if(path==="/discovery/import"&&method==="POST"){
+  if((path==="/discovery/import"||path==="/discovery/prepare-contact")&&method==="POST"){
    const lead=await query(sb.from("sanji_discovery_leads").select("*").eq("owner",u).eq("id",b.id).single());
    const selected=(lead.data.contacts||[]).find((c:any)=>c.email===b.email);
-   const company=String(b.company||"").trim().slice(0,200);
-   if(selected){const source=String(b.source||selected.source||"").trim();if(!source)throw Error("사용자 제공 자료의 이메일은 원문 출처 URL을 확인한 뒤 등록하세요.");selected.source=publicUrl(source).toString();}
+   const company=String(lead.data.outreach?.brandName||lead.data.name||lead.data.company||b.company||"").trim().slice(0,200);
+   const emails=mailRecipients({emails:(lead.data.contacts||[]).filter((e:any)=>!e.excluded&&!e.excludeFromOutreach).map((e:any)=>e.email)});
+   if(selected){const source=String(b.source||selected.source||"").trim();if(source)selected.source=publicUrl(source).toString();else if(selected.evidenceType!=="screenshot")throw Error("이메일 원문 출처를 확인하세요.");}
    if(!b.approved||!selected||!company)throw Error("회사·이메일 소유 관계·사업용 용도를 확인하고 승인하세요.");
-   const key=companyIdentity(company),existing=await query(sb.from("sanji_records").select("id,data").eq("owner",u).eq("kind","candidate"));
-   if(existing.some((r:any)=>companyIdentity(r.data.company||"")===key || r.data.contact?.email?.toLowerCase()===selected.email.toLowerCase()))throw Error("같은 회사 또는 이메일이 이미 등록되어 있습니다. 기존 후보를 확인하세요.");
-   const c={name:lead.data.name,company,companyKey:key,kind:"브랜드",product:String(lead.data.product||"").slice(0,200),category:"미확인",classification:"개별 제품의 법적 분류 확인 필요",authority:"브랜드·법인 소유 관계 확인, 해당 제품 판매·유통 권한은 별도 확인 필요",website:lead.data.website,channels:lead.data.channel||"",contact:{email:selected.email,owner:company,source:selected.source,checked:selected.checked.slice(0,10),purpose:selected.purpose === "사업 제휴" ? "사업 제휴" : "비즈니스",verified:true},handle:"",profile:"",agency:"",topics:[],followers:null,metricsSource:"",metricsChecked:"",evidence:[{url:selected.source,checked:selected.checked.slice(0,10),description:selected.context}],reason:"공식 사이트의 공개 회사 이메일을 직접 검토·승인함. 제품·조건은 미확인.",status:"미접촉",note:"이메일 용도: "+selected.purpose+" / 발굴 출처: "+lead.data.source,next:"상품·법적 분류와 제안 근거 확인",due:"",owner:""};
-   await putRecord(u,"candidate",c);await query(sb.from("sanji_discovery_leads").update({status:"imported",updated:new Date().toISOString()}).eq("owner",u).eq("id",lead.id));await audit(u,"discovery_email_approved",{lead:lead.id});return {ok:true};
+   const key=companyIdentity(company),existing=await query(sb.from("sanji_records").select("id,data,version").eq("owner",u).eq("kind","candidate"));
+   const previous=existing.find((r:any)=>r.id===lead.data.candidateId||companyIdentity(r.data.company||"")===key||emails.includes(r.data.contact?.email?.toLowerCase()));
+   const c={name:company,company,legalCompanyName:lead.data.company||"",recipientEmails:emails,companyKey:key,kind:"브랜드",product:String(lead.data.product||"").slice(0,200),category:"미확인",classification:"개별 제품의 법적 분류 확인 필요",authority:"브랜드·법인 소유 관계 확인, 해당 제품 판매·유통 권한은 별도 확인 필요",website:lead.data.website,channels:lead.data.channel||"",contact:{email:selected.email,owner:company,source:selected.source,checked:selected.checked.slice(0,10),purpose:selected.purpose === "사업 제휴" ? "사업 제휴" : "비즈니스",verified:true},handle:"",profile:"",agency:"",topics:[],followers:null,metricsSource:"",metricsChecked:"",evidence:[{url:selected.source,checked:selected.checked.slice(0,10),description:selected.context}],reason:"공식 사이트의 공개 회사 이메일을 직접 검토·승인함. 제품·조건은 미확인.",status:"미접촉",note:"이메일 용도: "+selected.purpose+" / 발굴 출처: "+lead.data.source,next:"상품·법적 분류와 제안 근거 확인",due:"",owner:""};
+   c.product=String(lead.data.outreach?.productName||c.product||"").slice(0,200);
+   const saved=await putRecord(u,"candidate",previous?{...previous.data,...c,status:previous.data.status,version:previous.version}:c,previous?.id);await query(sb.from("sanji_discovery_leads").update({status:"imported",data:{...lead.data,candidateId:saved.id},updated:new Date().toISOString()}).eq("owner",u).eq("id",lead.id));await audit(u,"discovery_email_approved",{lead:lead.id});return {ok:true,candidateId:saved.id};
   }
   throw Error("지원하지 않는 발굴 작업입니다.");
  }

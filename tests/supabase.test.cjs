@@ -818,61 +818,37 @@ test("Gmail replies address the actual Reply-To sender and reject ambiguous or i
  assert.throws(()=>replyRecipient({from:"invalid"},"info@brand.example.test"),/회신 주소/);
 });
 
-test("Brand workflow combines discovery and registered brands, previews exact copy, invalidates approval on edits, and schedules only checked recipients", async () => {
-  const express = require("express"), app = express(); app.use(express.json());
-  const brands = ["A","B"].map((name,i)=>({id:"brand-"+i,name,company:name,kind:"브랜드",category:"미확인",status:"미접촉",product:"제품 "+name,topics:[],contact:{email:name.toLowerCase()+"@brand.example",verified:true}}));
-  const state={candidates:brands,deals:[],templates:[{id:"copy",name:"보존할 카피",channel:"이메일",subject:"(광고) {{브랜드명}} 제안",body:"공통 앞부분\n{{개인화}}\n공통 끝부분",signature:"원본 서명"}],threads:[],outbox:[],jobs:[],suppression:[],settings:{dailyLimit:20,senderName:"운영자",senderAddress:"주소",senderPhone:"번호"}};
-  const drafted=[],scheduled=[];let sends=0;
-  app.all(/^\/api\/.*/, (req,res)=>{
-    const p=req.path.replace("/api","");
-    if(p==="/me")return res.json({email:"owner@example.test",csrf:"test"});
-    if(p==="/state")return res.json(state);
-    if(p==="/connections")return res.json({gmail:{connected:true,enabled:true},instagram:{connected:false},search:{configured:false},ai:{configured:false}});
-    if(p==="/discovery")return res.json({settings:{enabled:true,target:30,keywords:[]},leads:[],usage:{emails:1,processed:3,calls:3},activity:[{name:"확인한 업체",emailCount:1,pages:2,checked:new Date().toISOString()}],engine:{status:"sources_exhausted",label:"대기열 소진 · 신규 소스 보강 필요",pending:0}});
-    if(p==="/drafts") {drafted.push(req.body);const c=brands.find(c=>c.id===req.body.target);return res.json({id:"draft-"+c.id,hash:"hash-"+c.id,target:c.name,email:c.contact.email,subject:req.body.subject.replace("{{브랜드명}}",c.name),body:req.body.body+"\n"+req.body.signature,attachments:[]});}
-    if(p==="/schedule") {scheduled.push(req.body);if(req.body.draftId === "draft-brand-1")return res.status(409).json({error:"이미 예약한 수신자"});return res.json({run_at:req.body.runAt});}
-    if(p.endsWith("/send")){sends++;return res.status(500).json({error:"never send in this test"});}
-    return res.status(404).json({error:p});
-  });
-  app.use("/app",express.static("private/ui"));
-  const server=app.listen(0,"127.0.0.1");await new Promise(r=>server.on("listening",r));let browser;
-  try {
-    browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||"/usr/bin/chromium",headless:true,args:["--no-sandbox"]});const page=await browser.newPage();const errors=[];page.on("pageerror",e=>errors.push(e.message));
-    await page.goto("http://127.0.0.1:"+server.address().port+"/app/#brands");
-    await page.waitForSelector("#discovery-progress");
-    assert.equal(await page.locator('#nav a[href="#discovery"]').count(),0);
-    assert.equal(await page.getByText("네이버 검색 연결",{exact:true}).count(),0);
-    assert.match(await page.locator("#discovery-progress").textContent(),/대기열 소진/);
-    await page.locator('[data-action="brand-tab"][data-id="saved"]').click();
-    await page.waitForSelector("#candidate-results");
-    assert.equal(await page.locator('#candidate-results [data-action="compose"]').count(),2);
-    await page.locator('#candidate-results [data-action="compose"]').first().click();
-    assert.equal(await page.locator('#compose-form [name=body]').inputValue(),state.templates[0].body);
-    await page.locator('[data-action="close"]').click();
-    await page.locator('[data-action="bulk-compose"]').click();
-    await page.locator('[name=bulk-target]').first().check();
-    await page.locator('[name="intro-brand-0"]').fill("확인한 제품 특징. 확인한 콘텐츠 적합성.");
-    await page.locator('#bulk-compose-form [name=lawfulBasis]').fill("사전 동의 기록 확인 완료");
-    await page.locator('#bulk-compose-form button[type=submit]').click();
-    await page.waitForSelector('[name=bulk-approve]');
-    assert.equal(drafted[0].body,"공통 앞부분\n확인한 제품 특징. 확인한 콘텐츠 적합성.\n공통 끝부분");
-    assert.equal(drafted[0].subject,state.templates[0].subject);assert.equal(scheduled.length,0);assert.equal(sends,0);
-    await page.locator('[data-action="bulk-schedule"]').click();
-    await page.waitForFunction(()=>document.querySelector("#form-error").textContent.includes("승인 체크"));assert.equal(scheduled.length,0);
-    await page.locator('[name=bulk-approve]').check();
-    await page.locator('#bulk-compose-form [name=body]').fill(state.templates[0].body+" 수정");
-    assert.equal(await page.locator('[name=bulk-approve]').count(),0);
-    await page.locator('[name=bulk-target]').nth(1).check();
-    await page.locator('[name="intro-brand-1"]').fill("두 번째 제품의 확인된 특징. 확인된 내용 적합성.");
-    await page.locator('#bulk-compose-form button[type=submit]').click();await page.waitForSelector('[name=bulk-approve]');
-    await page.locator('[name=bulk-approve]').nth(0).check();
-    await page.locator('[name=bulk-approve]').nth(1).check();
-    const future=new Date(Date.now()+86400000);await page.locator('#bulk-run-at').fill(future.toISOString().slice(0,16));
-    await page.locator('[data-action="bulk-schedule"]').click();await page.waitForFunction(()=>document.querySelector('[id^="bulk-result-"]').textContent.includes("예약 완료"));
-    await page.waitForFunction(()=>document.querySelector("#bulk-result-1").textContent.includes("예약 실패"));
-    assert.equal(scheduled.length,2);assert.equal(scheduled[0].approved,true);assert.equal(scheduled[0].draftId,"draft-brand-0");assert.equal(sends,0);
-    assert.equal(await page.locator('[name=bulk-approve]:disabled').count(),1);assert.deepEqual(errors,[]);
-  } finally {if(browser)await browser.close();await new Promise(r=>server.close(r));}
+test("Brand email workspace reviews all company addresses directly, preserves copy and requires final approval", async () => {
+ const express=require("express"),app=express();app.use(express.json());
+ const copy={subject:"(광고) 브랜드A 제안",body:"안녕하세요 브랜드A 담당자님.\n구체적인 제품 특징입니다. 콘텐츠 적합성입니다.\n공통 본문 그대로",signature:"원본 서명",brandName:"브랜드A",productName:"제품A"};
+ const lead={id:"lead-a",data:{name:"법인A",contacts:[{email:"a@brand.example",source:"https://brand.example"},{email:"cs@brand.example",source:"https://brand.example"}],outreach:copy}};
+ const state={candidates:[],deals:[],templates:[],threads:[],outbox:[],jobs:[],suppression:[],settings:{dailyLimit:20,senderAddress:"주소"}};
+ let saved=0,prepared=0,scheduled=0,sends=0;const drafted=[];
+ app.all(/^\/api\/.*/, (req,res)=>{const p=req.path.replace("/api","");
+ if(p==="/me")return res.json({email:"owner@example.test",csrf:"test"});
+ if(p==="/state")return res.json(state);
+ if(p==="/connections")return res.json({gmail:{connected:true},instagram:{},ai:{}});
+ if(p==="/discovery")return res.json({settings:{enabled:true,target:30,keywords:[]},leads:[lead],usage:{emails:2},activity:[]});
+ if(p==="/discovery/outreach"){saved++;return res.json({ok:true});}
+ if(p==="/discovery/prepare-contact"){prepared++;return res.json({candidateId:"candidate-a"});}
+ if(p==="/drafts"){drafted.push(req.body);return res.json({id:"draft-a",hash:"hash-a",target:"브랜드A",emails:lead.data.contacts.map(c=>c.email),subject:req.body.subject,body:req.body.body+"\n"+req.body.signature,attachments:[]});}
+ if(p==="/schedule"){scheduled++;return res.json({run_at:req.body.runAt});}
+ if(p.endsWith("/send"))sends++;
+ return res.status(404).json({error:p});});app.use("/app",express.static("private/ui"));
+ const server=app.listen(0,"127.0.0.1");await new Promise(r=>server.on("listening",r));let browser;
+ try{browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||"/usr/bin/chromium",headless:true,args:["--no-sandbox"]});const page=await browser.newPage();
+ await page.goto("http://127.0.0.1:"+server.address().port+"/app/#brands");await page.locator('[data-action="mail-review"]').click();
+ assert.equal(await page.locator('select[name=email]').count(),0);
+ assert.match(await page.locator('.recipient-list').textContent(),/a@brand.example.*cs@brand.example/);
+ assert.equal(await page.locator('[name=companyName]').inputValue(),"브랜드A");
+ assert.equal(await page.locator('[name=body]').inputValue(),copy.body);
+ await page.locator('[data-action="mail-save"]').click();await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes("저장"));assert.equal(saved,1);assert.equal(prepared,0);assert.equal(scheduled,0);
+ await page.locator('[name=ownership]').check();await page.locator('[name=lawfulBasis]').fill("사전 동의 기록 확인 완료");await page.locator('#mail-review-form button[type=submit]').click();await page.waitForSelector('[name=bulk-approve]');
+ assert.equal(drafted[0].recipientMode,"company_all");assert.equal(drafted[0].body,copy.body);assert.equal(drafted[0].subject,copy.subject);assert.equal(scheduled,0);
+ assert.match(await page.locator('#mail-final').textContent(),/a@brand.example, cs@brand.example/);
+ await page.locator('[name=body]').fill(copy.body+" 수정");assert.equal(await page.locator('[name=bulk-approve]').count(),0);
+ await page.locator('#mail-review-form button[type=submit]').click();await page.waitForSelector('[name=bulk-approve]');await page.locator('[name=bulk-approve]').check();await page.locator('#bulk-run-at').fill(new Date(Date.now()+86400000).toISOString().slice(0,16));await page.locator('[data-action="mail-schedule"]').click();await page.waitForFunction(()=>document.querySelector('#bulk-result-0').textContent.includes("예약 완료"));assert.equal(scheduled,1);assert.equal(sends,0);
+ }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
 });
 
 test("Discovery works without search API keys and reports exhausted sources instead of pretending to collect", async()=>{
@@ -908,4 +884,11 @@ test("Footer discovery follows an explicitly linked shop without a search key, d
   assert.equal(lead.data.sourceAttempts[0].redirects[0],"https://www.brand.co.kr/");
   assert.ok(lead.data.contacts.some(c=>c.email==="submitted@brand.co.kr"));assert.equal(lead.data.contacts.some(c=>c.email==="privacy@brand.co.kr"||c.email==="fake@brand.co.kr"),false);assert.equal(lead.data.pages,2);assert.equal(lead.data.sourceAttempts.length,2);
  }finally{global.fetch=oldFetch;global.Deno=oldDeno;}
+});
+
+test("Company recipient groups deduplicate addresses and reject header injection",()=>{
+ const compiled=esbuild.buildSync({entryPoints:["supabase/functions/_shared/mail-mime.ts"],bundle:true,platform:"node",format:"cjs",write:false});const m={exports:{}};new Function("module","exports","require",compiled.outputFiles[0].text)(m,m.exports,require);
+ const d={email:"a@brand.test",emails:["A@brand.test","cs@brand.test","a@brand.test"],subject:"제안",body:"내용",attachments:[],messageId:"group"};
+ const raw=Buffer.from(m.exports.mime(d,"sender@example.test"),"base64url").toString();assert.match(raw,/To: a@brand.test, cs@brand.test\r\n/);
+ assert.throws(()=>m.exports.mime({...d,emails:["a@brand.test\r\nBcc: b@other.test"]},"sender@example.test"),/수신 이메일/);
 });

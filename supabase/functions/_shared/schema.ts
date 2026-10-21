@@ -138,6 +138,7 @@ const draft = z.object({
   signature: text.default(""),
   attachments: z.array(attachment).max(5).default([]),
   replyTo: z.string().optional(),
+  recipientMode:z.enum(["primary","company_all"]).default("primary"),
   lawfulBasis: text.min(5),
   marketing: z.boolean().default(true),
 });

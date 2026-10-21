@@ -1,3 +1,4 @@
+import { mailRecipients } from "../_shared/mail-recipients.ts";
 import { singleMailbox, replyRecipient } from "../_shared/mail-reply.ts";
 import { discoveryService } from "../_shared/discovery-service.ts";
 import { mime } from "../_shared/mail-mime.ts";
@@ -170,7 +171,7 @@ async function audit(u: string, action: string, data: any = {}) {
 }
 function identities(c: any) {
   return [
-    c.contact?.email?.toLowerCase(),
+    ...(c.recipientEmails || [c.contact?.email]).filter(Boolean).flatMap((e:string)=>[e.toLowerCase(),"email:"+e.toLowerCase()]),
     c.companyKey && "company:" + c.companyKey.toLowerCase(),
     c.handle && "instagram:" + c.handle.toLowerCase(),
     c.profile,
@@ -498,7 +499,7 @@ async function sendDraft(u: string, draftId: string, b: any, jobId?: string) {
     fail(400, "직접 발송 완료 결과만 기록하세요.");
   let gmail, ig;
   if (d.channel === "email") {
-    if ((await query(sb.from("sanji_suppression").select("identity").eq("owner",u).eq("identity","email:"+d.email.toLowerCase()).limit(1))).length) fail(403,"회신 주소가 수신 거부 목록에 있습니다.");
+    if ((await query(sb.from("sanji_suppression").select("identity").eq("owner",u).in("identity",mailRecipients(d).flatMap(e=>[e,"email:"+e])).limit(1))).length) fail(403,"회신 주소가 수신 거부 목록에 있습니다.");
     gmail = await gmailToken(u);
   }
   if (d.channel === "instagram") {
@@ -723,7 +724,7 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true, version: 12, authRequired: true });
     if (path === "/discovery/tick" && req.method === "POST") {
       if (!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403, "발굴 실행기 인증 실패");
-      return json(await discovery.scheduled());
+      return json(await discovery.scheduled(await req.json().catch(()=>({}))));
     }
     if (path === "/jobs/run" && req.method === "POST")
       return await runJobs(req);
@@ -1028,7 +1029,7 @@ Deno.serve(async (req: Request) => {
         const r = await remote(
           "https://gmail.googleapis.com/gmail/v1/users/me/threads?" +
             new URLSearchParams({
-              q: `{from:${c.contact.email} to:${c.contact.email}} newer_than:90d`,
+              q: `{${mailRecipients({emails:c.recipientEmails,email:c.contact.email}).flatMap(e=>["from:"+e,"to:"+e]).join(" ")}} newer_than:90d`,
               maxResults: "20",
             }),
           { headers },
@@ -1227,6 +1228,7 @@ Deno.serve(async (req: Request) => {
           subject,
           body,
           email: recipient.email,
+          emails: inputData.channel === "email" ? mailRecipients({emails: !inputData.replyTo && inputData.recipientMode === "company_all" ? c.recipientEmails : undefined,email:recipient.email}) : [],
           replyRecipientNeedsReview:recipient.changed,
           targetName: c.name,
           targetVersion: c.version,
@@ -1241,7 +1243,7 @@ Deno.serve(async (req: Request) => {
           })),
         },
         hash = await digest(JSON.stringify(d));
-      if (inputData.channel === "email" && (await query(sb.from("sanji_suppression").select("identity").eq("owner",u).eq("identity","email:"+d.email.toLowerCase()).limit(1))).length) fail(403,"회신 주소가 수신 거부 목록에 있습니다.");
+      if (inputData.channel === "email" && (await query(sb.from("sanji_suppression").select("identity").eq("owner",u).in("identity",mailRecipients(d).flatMap(e=>[e,"email:"+e])).limit(1))).length) fail(403,"회신 주소가 수신 거부 목록에 있습니다.");
       const stored = await query(
         sb
           .from("sanji_drafts")
@@ -1260,6 +1262,7 @@ Deno.serve(async (req: Request) => {
           hash,
           target: c.name,
           email: d.email,
+          emails: d.emails,
           replyRecipientNeedsReview:d.replyRecipientNeedsReview,
           channel: d.channel,
           accountUsername: d.accountUsername,

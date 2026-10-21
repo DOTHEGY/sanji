@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import {mailRecipients} from "./mail-recipients.ts";
 function attachmentType(content: string) {
   const b = Buffer.from(content, "base64");
   if (b.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) return "image/png";
@@ -16,7 +17,7 @@ function messageIds(v: string) {
 export function mime(d: any, from: string) {
   const lines = [
     `From: ${from}`,
-    `To: ${d.email}`,
+    `To: ${mailRecipients(d).join(", ")}`,
     `Subject: =?UTF-8?B?${Buffer.from(d.subject).toString("base64")}?=`,
     `Message-ID: <${d.messageId}@sanji.local>`,
     "MIME-Version: 1.0",

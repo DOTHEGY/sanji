@@ -54,7 +54,9 @@ export function parseOfficialPage(html: string, source: string, checked: string)
     try{const url=publicUrl(new URL(value,source).toString()).toString();if(!marketplace(url))found.push({url,label,type:shop?"shop":company?"company":"contact",linkedFrom:source});}catch{}
   }
   const links=Array.from(new Map(found.map(l=>[l.url,l])).values());
-  return {contacts,rejected,links,text:text.slice(-8000)};
+  const title=plainHtml(/<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1]||"");
+  const description=Array.from(html.matchAll(/<meta\b([^>]*)>/gi)).map(m=>({name:attribute(m[1],"name")||attribute(m[1],"property"),content:attribute(m[1],"content")})).find(m=>/^(description|og:description)$/i.test(m.name))?.content||"";
+  return {contacts,rejected,links,text:text.slice(-8000),publicEvidence:{url:source,title,description:plainHtml(description),excerpt:text.slice(0,5000),checked}};
 }
 export function shoppingProspects(items: any[], keyword: string, checked: string) {
   const found=new Map();
