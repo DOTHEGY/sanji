@@ -117,13 +117,19 @@ function discoveryService(deps) {
   const { sb: sb2, query: query2, audit: audit2, putRecord: putRecord2 } = deps;
   async function publicFetch(value, cap = 7e5) {
     let url2 = publicUrl(value);
+    const redirects = [];
     for (let redirect = 0; redirect < 3; redirect++) {
       const addresses = (await Promise.allSettled([Deno.resolveDns(url2.hostname, "A"), Deno.resolveDns(url2.hostname, "AAAA")])).flatMap((r2) => r2.status === "fulfilled" ? r2.value : []);
       if (!addresses.length || addresses.some((ip) => !publicIp(ip))) throw Error("\uACF5\uAC1C IP \uD655\uC778\uC774 \uC548 \uB418\uB294 \uC8FC\uC18C\uB294 \uC218\uC9D1\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
       const r = await fetch(url2, { redirect: "manual", headers: { "User-Agent": "SanjiResearch/1.0 (business-contact-research; no form submissions)", Accept: "text/html,text/plain" }, signal: AbortSignal.timeout(8e3) });
       if ([301, 302, 303, 307, 308].includes(r.status)) {
         const next = publicUrl(new URL(r.headers.get("location") || "", url2).toString());
-        if (next.hostname.replace(/^www\./, "") !== url2.hostname.replace(/^www\./, "")) throw Error("\uB2E4\uB978 \uB3C4\uBA54\uC778 \uB9AC\uB514\uB809\uC158\uC740 \uAC80\uD1A0 \uD6C4 \uC9C1\uC811 \uB4F1\uB85D\uD558\uC138\uC694.");
+        if (marketplace(next.toString())) throw Error("\uD50C\uB7AB\uD3FC\uC73C\uB85C \uC774\uB3D9\uD55C \uC8FC\uC18C\uB294 \uD68C\uC0AC \uC774\uBA54\uC77C \uCD9C\uCC98\uB85C \uC790\uB3D9 \uC218\uC9D1\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+        if (next.origin !== url2.origin && url2.pathname !== "/robots.txt") {
+          const policy = await publicFetch(next.origin + "/robots.txt", 1e5);
+          if (!robotsAllowed(policy.text, next.pathname)) throw Error("\uC774\uB3D9\uD55C \uC0AC\uC774\uD2B8\uC758 robots.txt\uC5D0\uC11C \uC218\uC9D1\uC774 \uC81C\uD55C\uB429\uB2C8\uB2E4.");
+        }
+        redirects.push(url2.toString());
         url2 = next;
         await r.body?.cancel();
         continue;
@@ -159,7 +165,7 @@ function discoveryService(deps) {
       } catch {
         text2 = new TextDecoder().decode(bytes);
       }
-      return { text: text2, url: url2.toString(), bytes: size };
+      return { text: text2, url: url2.toString(), bytes: size, redirects };
     }
     throw Error("\uB9AC\uB514\uB809\uC158 \uD69F\uC218 \uC81C\uD55C \uCD08\uACFC");
   }
@@ -180,10 +186,10 @@ function discoveryService(deps) {
         if (!robotsAllowed(robotCache.get(url2.origin) || "", url2.pathname)) throw Error("robots.txt\uC5D0\uC11C \uC218\uC9D1\uC774 \uC81C\uD55C\uB41C \uACBD\uB85C\uC785\uB2C8\uB2E4.");
         const page = await publicFetch(url2.toString(), Math.min(2 * 1024 * 1024, htmlBudget));
         htmlBudget -= page.bytes || 0;
-        const parsed = parseOfficialPage(page.text, page.url, checked);
+        const parsed = { ...parseOfficialPage(page.text, page.url, checked), source: page.url };
         const contacts2 = parsed.contacts.map((c) => ({ ...c, discoveryMethod: "public_page", linkedFrom, sourceRelation: linkedFrom ? "\uD648\uD398\uC774\uC9C0\uC5D0\uC11C \uC5F0\uACB0\uB41C \uD398\uC774\uC9C0 \xB7 \uB3D9\uC77C \uD68C\uC0AC \uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804" : "\uD648\uD398\uC774\uC9C0 \uD6C4\uBCF4 \xB7 \uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804" }));
         results.push({ ...parsed, contacts: contacts2 });
-        attempts.push({ url: page.url, linkedFrom, checked, emailCount: contacts2.length, status: "checked" });
+        attempts.push({ url: page.url, requestedUrl: url2.toString(), redirects: page.redirects, linkedFrom, checked, emailCount: contacts2.length, status: "checked" });
         return parsed;
       } catch (e) {
         if (/크기 제한/.test(e.message || "")) htmlBudget = 0;
@@ -193,7 +199,7 @@ function discoveryService(deps) {
     }
     const first = await read(base.toString());
     if (!first) return { contacts: [], excludedCount: 0, inquiryLinks: [], checked, pages: 0, sourceAttempts: attempts, error: attempts[0]?.error || "\uD648\uD398\uC774\uC9C0 \uD655\uC778 \uC2E4\uD328", officialVerified: false };
-    const homeOrigin = base.origin, extraOrigins = /* @__PURE__ */ new Set();
+    const homeOrigin = new URL(first.source).origin, extraOrigins = /* @__PURE__ */ new Set();
     const queue = [...first.links.filter((l) => ["shop", "company"].includes(l.type)), ...first.links.filter((l) => !["shop", "company"].includes(l.type))];
     while (queue.length && attempts.length < 5 && htmlBudget > 0) {
       const link = queue.shift();

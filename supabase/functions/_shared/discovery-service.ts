@@ -4,7 +4,7 @@ const day=()=>new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Seoul"});
 export function discoveryService(deps:any){
  const {sb,query,audit,putRecord}=deps;
  async function publicFetch(value:string,cap=700000){
-  let url=publicUrl(value);
+  let url=publicUrl(value);const redirects:string[]=[];
   for(let redirect=0;redirect<3;redirect++){
    // Resolve before every request, including redirects. Fail closed if DNS checks are unavailable.
    const addresses=(await Promise.allSettled([Deno.resolveDns(url.hostname,"A"),Deno.resolveDns(url.hostname,"AAAA")])).flatMap((r:any)=>r.status==="fulfilled"?r.value:[]);
@@ -12,7 +12,12 @@ export function discoveryService(deps:any){
    const r=await fetch(url,{redirect:"manual",headers:{"User-Agent":"SanjiResearch/1.0 (business-contact-research; no form submissions)",Accept:"text/html,text/plain"},signal:AbortSignal.timeout(8000)});
    if([301,302,303,307,308].includes(r.status)){
     const next=publicUrl(new URL(r.headers.get("location")||"",url).toString());
-    if(next.hostname.replace(/^www\./,"")!==url.hostname.replace(/^www\./,""))throw Error("다른 도메인 리디렉션은 검토 후 직접 등록하세요.");
+    if(marketplace(next.toString()))throw Error("플랫폼으로 이동한 주소는 회사 이메일 출처로 자동 수집하지 않습니다.");
+    if(next.origin!==url.origin&&url.pathname!=="/robots.txt"){
+     const policy=await publicFetch(next.origin+"/robots.txt",100000);
+     if(!robotsAllowed(policy.text,next.pathname))throw Error("이동한 사이트의 robots.txt에서 수집이 제한됩니다.");
+    }
+    redirects.push(url.toString());
     url=next;await r.body?.cancel();continue;
    }
    if(r.status===404&&url.pathname==="/robots.txt")return {text:"",url:url.toString()};
@@ -25,7 +30,7 @@ export function discoveryService(deps:any){
    const bytes=new Uint8Array(size);let at=0;for(const b of chunks){bytes.set(b,at);at+=b.length;}
    const charset=/charset=([^;\s]+)/i.exec(type)?.[1]||"utf-8";
    let text;try{text=new TextDecoder(charset).decode(bytes);}catch{text=new TextDecoder().decode(bytes);}
-   return {text,url:url.toString(),bytes:size};
+   return {text,url:url.toString(),bytes:size,redirects};
   }throw Error("리디렉션 횟수 제한 초과");
  }
  async function crawl(website:string){
@@ -39,9 +44,9 @@ export function discoveryService(deps:any){
     if(!robotCache.has(url.origin)){const r=await publicFetch(url.origin+"/robots.txt",100000);robotCache.set(url.origin,r.text);}
     if(!robotsAllowed(robotCache.get(url.origin)||"",url.pathname))throw Error("robots.txt에서 수집이 제한된 경로입니다.");
     const page=await publicFetch(url.toString(),Math.min(2*1024*1024,htmlBudget));htmlBudget-=page.bytes||0;
-    const parsed=parseOfficialPage(page.text,page.url,checked);
+    const parsed={...parseOfficialPage(page.text,page.url,checked),source:page.url};
     const contacts=parsed.contacts.map((c:any)=>({...c,discoveryMethod:"public_page",linkedFrom,sourceRelation:linkedFrom?"홈페이지에서 연결된 페이지 · 동일 회사 소유 관계 검토 전":"홈페이지 후보 · 소유 관계 검토 전"}));
-    results.push({...parsed,contacts});attempts.push({url:page.url,linkedFrom,checked,emailCount:contacts.length,status:"checked"});
+    results.push({...parsed,contacts});attempts.push({url:page.url,requestedUrl:url.toString(),redirects:page.redirects,linkedFrom,checked,emailCount:contacts.length,status:"checked"});
     return parsed;
    }catch(e){if(/크기 제한/.test(e.message||""))htmlBudget=0;attempts.push({url:url.toString(),linkedFrom,checked,status:"failed",error:String(e.message||"페이지 확인 실패").slice(0,300)});return null;}
   }
@@ -49,7 +54,7 @@ export function discoveryService(deps:any){
   if(!first)return {contacts:[],excludedCount:0,inquiryLinks:[],checked,pages:0,sourceAttempts:attempts,error:attempts[0]?.error||"홈페이지 확인 실패",officialVerified:false};
   // Follow explicitly linked stores, including unquoted href and family-site option values.
   // A link is evidence of a relationship, never proof of legal ownership or permission to contact.
-  const homeOrigin=base.origin,extraOrigins=new Set<string>();
+  const homeOrigin=new URL(first.source).origin,extraOrigins=new Set<string>();
   const queue=[...first.links.filter((l:any)=>["shop","company"].includes(l.type)),...first.links.filter((l:any)=>!["shop","company"].includes(l.type))];
   while(queue.length&&attempts.length<5&&htmlBudget>0){
    const link:any=queue.shift();let next;try{next=publicUrl(link.url);}catch{continue;}
