@@ -27,6 +27,7 @@ function publicUrl(value) {
 function marketplace(value) {
   try {
     const h = new URL(value).hostname;
+    if (h.endsWith(".cafe24.com") && !/^(www|support|help|hosting|eclogin)\.cafe24\.com$/.test(h)) return false;
     return marketHosts.some((d) => h === d || h.endsWith("." + d));
   } catch {
     return false;
@@ -70,8 +71,8 @@ function parseOfficialPage(html, source, checked) {
     const at = text2.toLowerCase().indexOf(email.toLowerCase()), context = at < 0 ? "" : text2.slice(Math.max(0, at - 100), at + email.length + 100);
     const block = blocks.filter((v) => v.toLowerCase().includes(email.toLowerCase())).sort((a, b) => a.length - b.length)[0] || email;
     const domain = email.split("@")[1]?.toLowerCase(), ownerMatch = domain === host || host.endsWith("." + domain) || domain.endsWith("." + host);
-    const unrelated = /^(user|example|test|sample|noreply|no-reply|privacy|hr|recruit|recruitment|jobs|career|security|dpo|techsupport|abuse)@/i.test(email) || /개인정보(?:보호책임|관리|담당|\s*문의)|정보보호(?:책임|담당)|채용|인사담당/.test(block) && !/(고객센터|대표\s*(?:메일|이메일)|제휴\s*(?:문의|메일))/.test(block);
-    const platformMail = /@(coupang\.com|navercorp\.com|cafe24\.com|cafe24corp\.com|gmarket\.co\.kr)$/i.test(email) && !ownerMatch;
+    const unrelated = /[._-]it@/i.test(email) || /^(user|example|test|sample|noreply|no-reply|privacy|hr|recruit|recruitment|jobs|career|security|dpo|techsupport|webmaster|postmaster|hostmaster|abuse|it)@/i.test(email) || /개인정보(?:보호책임|관리|담당|\s*문의)|정보보호(?:책임|담당)|채용|인사담당/.test(block) && !/(고객센터|대표\s*(?:메일|이메일)|제휴\s*(?:문의|메일))/.test(block);
+    const platformMail = /@(coupang\.com|navercorp\.com|cafe24\.com|cafe24corp\.com|gmarket\.co\.kr|godo\.co\.kr|godomall\.com|nhn-commerce\.com|nhncommerce\.com|makeshop\.co\.kr|connectwave\.co\.kr|gabia\.com)$/i.test(email);
     if (unrelated || platformMail) {
       rejected.push({ email, reason: unrelated ? "\uC608\uC2DC\xB7\uC218\uC2E0\uBD88\uAC00\xB7\uAC1C\uC778\uC815\uBCF4\xB7\uCC44\uC6A9 \uC6A9\uB3C4" : "\uD50C\uB7AB\uD3FC \uC6B4\uC601\uC0AC \uC774\uBA54\uC77C\uC774\uBA70 \uC81C\uC548 \uB300\uC0C1 \uD68C\uC0AC\uC640 \uB2E4\uB984", source });
       continue;
@@ -124,7 +125,7 @@ function discoveryService(deps) {
       const r = await fetch(url2, { redirect: "manual", headers: { "User-Agent": "SanjiResearch/1.0 (business-contact-research; no form submissions)", Accept: "text/html,text/plain" }, signal: AbortSignal.timeout(8e3) });
       if ([301, 302, 303, 307, 308].includes(r.status)) {
         const next = publicUrl(new URL(r.headers.get("location") || "", url2).toString());
-        if (marketplace(next.toString())) throw Error("\uD50C\uB7AB\uD3FC\uC73C\uB85C \uC774\uB3D9\uD55C \uC8FC\uC18C\uB294 \uD68C\uC0AC \uC774\uBA54\uC77C \uCD9C\uCC98\uB85C \uC790\uB3D9 \uC218\uC9D1\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+        if (marketplace(next.toString())) throw Error("\uD50C\uB7AB\uD3FC\uC73C\uB85C \uC774\uB3D9\uD55C \uC8FC\uC18C\uB294 \uD68C\uC0AC \uC774\uBA54\uC77C \uCD9C\uCC98\uB85C \uC790\uB3D9 \uC218\uC9D1\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4: " + next.hostname);
         if (next.origin !== url2.origin && url2.pathname !== "/robots.txt") {
           const policy = await publicFetch(next.origin + "/robots.txt", 1e5);
           if (!robotsAllowed(policy.text, next.pathname)) throw Error("\uC774\uB3D9\uD55C \uC0AC\uC774\uD2B8\uC758 robots.txt\uC5D0\uC11C \uC218\uC9D1\uC774 \uC81C\uD55C\uB429\uB2C8\uB2E4.");
@@ -324,6 +325,11 @@ function discoveryService(deps) {
       const lead = await query2(sb2.from("sanji_discovery_leads").select("*").eq("owner", u).eq("id", b.id).single());
       const selected = (lead.data.contacts || []).find((c2) => c2.email === b.email);
       const company = String(b.company || "").trim().slice(0, 200);
+      if (selected) {
+        const source = String(b.source || selected.source || "").trim();
+        if (!source) throw Error("\uC0AC\uC6A9\uC790 \uC81C\uACF5 \uC790\uB8CC\uC758 \uC774\uBA54\uC77C\uC740 \uC6D0\uBB38 \uCD9C\uCC98 URL\uC744 \uD655\uC778\uD55C \uB4A4 \uB4F1\uB85D\uD558\uC138\uC694.");
+        selected.source = publicUrl(source).toString();
+      }
       if (!b.approved || !selected || !company) throw Error("\uD68C\uC0AC\xB7\uC774\uBA54\uC77C \uC18C\uC720 \uAD00\uACC4\xB7\uC0AC\uC5C5\uC6A9 \uC6A9\uB3C4\uB97C \uD655\uC778\uD558\uACE0 \uC2B9\uC778\uD558\uC138\uC694.");
       const key2 = companyIdentity(company), existing = await query2(sb2.from("sanji_records").select("id,data").eq("owner", u).eq("kind", "candidate"));
       if (existing.some((r) => companyIdentity(r.data.company || "") === key2 || r.data.contact?.email?.toLowerCase() === selected.email.toLowerCase())) throw Error("\uAC19\uC740 \uD68C\uC0AC \uB610\uB294 \uC774\uBA54\uC77C\uC774 \uC774\uBBF8 \uB4F1\uB85D\uB418\uC5B4 \uC788\uC2B5\uB2C8\uB2E4. \uAE30\uC874 \uD6C4\uBCF4\uB97C \uD655\uC778\uD558\uC138\uC694.");

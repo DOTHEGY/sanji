@@ -12,7 +12,7 @@ export function discoveryService(deps:any){
    const r=await fetch(url,{redirect:"manual",headers:{"User-Agent":"SanjiResearch/1.0 (business-contact-research; no form submissions)",Accept:"text/html,text/plain"},signal:AbortSignal.timeout(8000)});
    if([301,302,303,307,308].includes(r.status)){
     const next=publicUrl(new URL(r.headers.get("location")||"",url).toString());
-    if(marketplace(next.toString()))throw Error("플랫폼으로 이동한 주소는 회사 이메일 출처로 자동 수집하지 않습니다.");
+    if(marketplace(next.toString()))throw Error("플랫폼으로 이동한 주소는 회사 이메일 출처로 자동 수집하지 않습니다: "+next.hostname);
     if(next.origin!==url.origin&&url.pathname!=="/robots.txt"){
      const policy=await publicFetch(next.origin+"/robots.txt",100000);
      if(!robotsAllowed(policy.text,next.pathname))throw Error("이동한 사이트의 robots.txt에서 수집이 제한됩니다.");
@@ -150,6 +150,7 @@ export function discoveryService(deps:any){
    const lead=await query(sb.from("sanji_discovery_leads").select("*").eq("owner",u).eq("id",b.id).single());
    const selected=(lead.data.contacts||[]).find((c:any)=>c.email===b.email);
    const company=String(b.company||"").trim().slice(0,200);
+   if(selected){const source=String(b.source||selected.source||"").trim();if(!source)throw Error("사용자 제공 자료의 이메일은 원문 출처 URL을 확인한 뒤 등록하세요.");selected.source=publicUrl(source).toString();}
    if(!b.approved||!selected||!company)throw Error("회사·이메일 소유 관계·사업용 용도를 확인하고 승인하세요.");
    const key=companyIdentity(company),existing=await query(sb.from("sanji_records").select("id,data").eq("owner",u).eq("kind","candidate"));
    if(existing.some((r:any)=>companyIdentity(r.data.company||"")===key || r.data.contact?.email?.toLowerCase()===selected.email.toLowerCase()))throw Error("같은 회사 또는 이메일이 이미 등록되어 있습니다. 기존 후보를 확인하세요.");

@@ -6,7 +6,7 @@ export function publicUrl(value: string) {
   u.hash=""; return u;
 }
 export function marketplace(value: string) {
-  try { const h = new URL(value).hostname; return marketHosts.some(d=>h===d || h.endsWith("."+d)); } catch { return false; }
+  try { const h = new URL(value).hostname; if(h.endsWith(".cafe24.com")&&!/^(www|support|help|hosting|eclogin)\.cafe24\.com$/.test(h))return false; return marketHosts.some(d=>h===d || h.endsWith("."+d)); } catch { return false; }
 }
 export function publicIp(ip: string) {
   if (ip.includes(":")) return /^[23][0-9a-f]{0,3}:/i.test(ip) && !/^2001:0?db8:/i.test(ip) && !/^2002:/i.test(ip);
@@ -37,8 +37,8 @@ export function parseOfficialPage(html: string, source: string, checked: string)
     const at=text.toLowerCase().indexOf(email.toLowerCase()),context=at<0?"":text.slice(Math.max(0,at-100),at+email.length+100);
     const block=blocks.filter(v=>v.toLowerCase().includes(email.toLowerCase())).sort((a,b)=>a.length-b.length)[0]||email;
     const domain=email.split("@")[1]?.toLowerCase(),ownerMatch=domain===host||host.endsWith("."+domain)||domain.endsWith("."+host);
-    const unrelated=/^(user|example|test|sample|noreply|no-reply|privacy|hr|recruit|recruitment|jobs|career|security|dpo|techsupport|abuse)@/i.test(email)||(/개인정보(?:보호책임|관리|담당|\s*문의)|정보보호(?:책임|담당)|채용|인사담당/.test(block)&&!/(고객센터|대표\s*(?:메일|이메일)|제휴\s*(?:문의|메일))/.test(block));
-    const platformMail=/@(coupang\.com|navercorp\.com|cafe24\.com|cafe24corp\.com|gmarket\.co\.kr)$/i.test(email)&&!ownerMatch;
+    const unrelated=/[._-]it@/i.test(email)||/^(user|example|test|sample|noreply|no-reply|privacy|hr|recruit|recruitment|jobs|career|security|dpo|techsupport|webmaster|postmaster|hostmaster|abuse|it)@/i.test(email)||(/개인정보(?:보호책임|관리|담당|\s*문의)|정보보호(?:책임|담당)|채용|인사담당/.test(block)&&!/(고객센터|대표\s*(?:메일|이메일)|제휴\s*(?:문의|메일))/.test(block));
+    const platformMail=/@(coupang\.com|navercorp\.com|cafe24\.com|cafe24corp\.com|gmarket\.co\.kr|godo\.co\.kr|godomall\.com|nhn-commerce\.com|nhncommerce\.com|makeshop\.co\.kr|connectwave\.co\.kr|gabia\.com)$/i.test(email);
     if(unrelated||platformMail){rejected.push({email,reason:unrelated?"예시·수신불가·개인정보·채용 용도":"플랫폼 운영사 이메일이며 제안 대상 회사와 다름",source});continue;}
     const purpose=/^(cs[0-9]*|help|support)@/i.test(email)||/고객센터|고객문의|customer|support/i.test(block)?"고객센터":/제휴|입점|도매|공동구매|영업|파트너|b2b|business|partnership/i.test(block)?"사업 제휴":"대표·일반 문의 / 세부 용도 미확인";
     contacts.push({email,source,checked,purpose,context:block.length<500?block:context,location:footerText.includes(email)?"footer":mailto.includes(email)?"mailto":"body",domainMatch:ownerMatch,ownership:ownerMatch?"도메인 일치 · 법인 확인 필요":"회사 소유 관계 확인 필요",verified:false});

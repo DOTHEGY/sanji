@@ -767,9 +767,9 @@ function discoveryHelpers(){
 }
 test("Email discovery includes official general and customer mail, labels ownership and excludes placeholders, privacy, recruitment and platform owners",()=>{
  const {parseOfficialPage,shoppingProspects,companyIdentity}=discoveryHelpers();
- const r=parseOfficialPage('<p>대표 이메일 info@brand.co.kr</p><p>고객센터 cs@brand.co.kr</p><div>'+ ' '.repeat(250) +'</div><p>제휴 문의 b2b@brand.co.kr</p><input placeholder="user@gmail.com"><p>privacy@brand.co.kr hr@brand.co.kr</p><p>플랫폼 support@cafe24.com</p><p>브랜드 공개 brandbusiness@gmail.com</p>',"https://www.brand.co.kr/","2026-10-21");
+ const r=parseOfficialPage('<p>대표 이메일 info@brand.co.kr</p><p>고객센터 cs@brand.co.kr</p><div>'+ ' '.repeat(250) +'</div><p>제휴 문의 b2b@brand.co.kr</p><input placeholder="user@gmail.com"><p>privacy@brand.co.kr hr@brand.co.kr</p><p>플랫폼 support@cafe24.com godo@godo.co.kr</p><p>기술 담당 webmaster@brand.co.kr nbtusa.it@brand.co.kr</p><p>브랜드 공개 brandbusiness@gmail.com</p>',"https://www.brand.co.kr/","2026-10-21");
  assert.ok(r.contacts.some(c=>c.email==="info@brand.co.kr"));assert.ok(r.contacts.some(c=>c.email==="cs@brand.co.kr"));assert.ok(r.contacts.some(c=>c.email==="b2b@brand.co.kr"));
- assert.equal(r.contacts.some(c=>c.email.includes("privacy@")||c.email.includes("hr@")||c.email==="support@cafe24.com"||c.email==="user@gmail.com"),false);
+ assert.equal(r.contacts.some(c=>c.email.includes("privacy@")||c.email.includes("hr@")||c.email==="support@cafe24.com"||c.email==="user@gmail.com"||c.email==="godo@godo.co.kr"||c.email==="webmaster@brand.co.kr"||c.email==="nbtusa.it@brand.co.kr"),false);
  assert.equal(r.contacts.find(c=>c.email==="brandbusiness@gmail.com").domainMatch,false);
  assert.equal(r.contacts.every(c=>c.verified===false),true);
  const items=shoppingProspects([{brand:"테스트 브랜드",maker:"제조사 A",title:"<b>건강</b> 상품",link:"https://www.coupang.com/x",mallName:"쿠팡"},{brand:"테스트 브랜드",title:"다른 SKU"},{brand:"쿠팡"}],"건강식품","2026-10-21");
@@ -783,7 +783,7 @@ test("Discovery blocks private targets, honors robots and distinguishes marketpl
  assert.equal(robotsAllowed("User-agent: *\nDisallow: /private/", "/private/contact"),false);
  assert.equal(robotsAllowed("User-agent: *\nDisallow: /", "/"),false);
  assert.equal(robotsAllowed("User-agent: *\nDisallow: /private/", "/contact"),true);
- assert.equal(marketplace("https://smartstore.naver.com/brand"),true);assert.equal(marketplace("https://www.coupang.com/x"),true);assert.equal(marketplace("https://brand.co.kr"),false);
+ assert.equal(marketplace("https://smartstore.naver.com/brand"),true);assert.equal(marketplace("https://www.coupang.com/x"),true);assert.equal(marketplace("https://brand.co.kr"),false);assert.equal(marketplace("https://foodbrand.cafe24.com"),false);assert.equal(marketplace("https://www.cafe24.com"),true);
 });
 test("Discovery schema is repeatable, tenant private and daily claims cannot overlap",async()=>{
  const db=await database();try{
