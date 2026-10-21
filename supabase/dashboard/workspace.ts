@@ -1,3 +1,20 @@
+// supabase/functions/_shared/mail-reply.ts
+function singleMailbox(header) {
+  const value = String(header || "").replace(/\r?\n[ \t]+/g, " ");
+  if (/[\r\n]/.test(value)) return "";
+  const angle = Array.from(value.matchAll(/<([^<>]+)>/g), (m) => m[1].trim());
+  const pattern = /^[A-Z0-9.!#$%&'*+\/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9.-]*[A-Z0-9])?\.[A-Z]{2,}$/i;
+  if (angle.length === 1) return pattern.test(angle[0]) ? angle[0] : "";
+  if (angle.length > 1) return "";
+  return pattern.test(value.trim()) ? value.trim() : "";
+}
+function replyRecipient(message, original) {
+  if (!message) return { email: original, changed: false };
+  const email = singleMailbox(message.replyToHeader || message.replyAddress || message.from || "");
+  if (!email) throw Error("\uC218\uC2E0 \uB300\uD654\uC758 \uD68C\uC2E0 \uC8FC\uC18C\uB97C \uD558\uB098\uB85C \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uC6D0\uBCF8 Gmail\uC5D0\uC11C \uD655\uC778\uD558\uC138\uC694.");
+  return { email, changed: email.toLowerCase() !== original.toLowerCase() };
+}
+
 // supabase/functions/_shared/discovery.ts
 var marketHosts = ["coupang.com", "naver.com", "smartstore.naver.com", "gmarket.co.kr", "11st.co.kr", "auction.co.kr", "lotteon.com", "ssg.com", "tmon.co.kr", "wemakeprice.com", "danawa.com", "cafe24.com"];
 var companyIdentity = (v) => v.normalize("NFKC").toLowerCase().replace(/주식회사|\(주\)|㈜|[\s.,·()_-]/g, "");
@@ -1050,7 +1067,10 @@ async function sendDraft(u, draftId, b, jobId) {
   if (d.channel === "manual_dm" && !b.manuallySent)
     fail(400, "\uC9C1\uC811 \uBC1C\uC1A1 \uC644\uB8CC \uACB0\uACFC\uB9CC \uAE30\uB85D\uD558\uC138\uC694.");
   let gmail, ig;
-  if (d.channel === "email") gmail = await gmailToken(u);
+  if (d.channel === "email") {
+    if ((await query(sb.from("sanji_suppression").select("identity").eq("owner", u).eq("identity", "email:" + d.email.toLowerCase()).limit(1))).length) fail(403, "\uD68C\uC2E0 \uC8FC\uC18C\uAC00 \uC218\uC2E0 \uAC70\uBD80 \uBAA9\uB85D\uC5D0 \uC788\uC2B5\uB2C8\uB2E4.");
+    gmail = await gmailToken(u);
+  }
   if (d.channel === "instagram") {
     const t = await owned(u, d.replyTo, "thread");
     if (!t.lastInbound || Date.now() - t.lastInbound > 864e5 || !t.senderId)
@@ -1514,7 +1534,9 @@ Deno.serve(async (req) => {
               references: h.references || "",
               subject: h.subject || "",
               from: h.from || "",
-              out: (h.from || "").toLowerCase().includes(g.email.toLowerCase()),
+              replyToHeader: h["reply-to"] || "",
+              replyAddress: singleMailbox(h["reply-to"] || h.from || ""),
+              out: singleMailbox(h.from || "").toLowerCase() === g.email.toLowerCase(),
               text: textBody(m.payload) || m.snippet || "[\uBCF8\uBB38 \uBBF8\uC9C0\uC6D0]",
               hasAttachments: gmailHasAttachments(m.payload),
               at: new Date(Number(m.internalDate)).toISOString(),
@@ -1615,12 +1637,19 @@ ${settings.optOut}` : "");
         0
       ) > 5 * 1024 * 1024)
         fail(400, "\uCCA8\uBD80 \uD569\uACC4\uB294 5MB \uC774\uD558\uC785\uB2C8\uB2E4.");
-      let reply = {};
+      let reply = {}, recipient = { email: c.contact.email, changed: false };
       if (inputData.replyTo) {
         const t = await owned(u, inputData.replyTo, "thread");
         if (t.target !== c.id || t.channel !== inputData.channel)
           fail(400, "\uD68C\uC2E0 \uCC44\uB110\xB7\uC218\uC2E0\uC790 \uBD88\uC77C\uCE58");
         const last = t.messages.filter((m) => !m.out).at(-1);
+        if (inputData.channel === "email") {
+          try {
+            recipient = replyRecipient(last, c.contact.email);
+          } catch (e) {
+            fail(400, e.message);
+          }
+        }
         const igAccount = inputData.channel === "instagram" ? await instagramForThread(u, t) : null;
         reply = {
           providerThread: t.providerId,
@@ -1641,7 +1670,8 @@ ${settings.optOut}` : "");
         ...reply,
         subject,
         body,
-        email: c.contact.email,
+        email: recipient.email,
+        replyRecipientNeedsReview: recipient.changed,
         targetName: c.name,
         targetVersion: c.version,
         dealVersions: deals.map((d2) => ({
@@ -1654,6 +1684,7 @@ ${settings.optOut}` : "");
           size: Buffer2.from(a.content, "base64").length
         }))
       }, hash = await digest(JSON.stringify(d));
+      if (inputData.channel === "email" && (await query(sb.from("sanji_suppression").select("identity").eq("owner", u).eq("identity", "email:" + d.email.toLowerCase()).limit(1))).length) fail(403, "\uD68C\uC2E0 \uC8FC\uC18C\uAC00 \uC218\uC2E0 \uAC70\uBD80 \uBAA9\uB85D\uC5D0 \uC788\uC2B5\uB2C8\uB2E4.");
       const stored = await query(
         sb.from("sanji_drafts").insert({
           owner: u,
@@ -1667,7 +1698,8 @@ ${settings.optOut}` : "");
           id: stored.id,
           hash,
           target: c.name,
-          email: c.contact.email,
+          email: d.email,
+          replyRecipientNeedsReview: d.replyRecipientNeedsReview,
           channel: d.channel,
           accountUsername: d.accountUsername,
           subject,

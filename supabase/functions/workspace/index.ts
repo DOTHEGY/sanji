@@ -1,3 +1,4 @@
+import { singleMailbox, replyRecipient } from "../_shared/mail-reply.ts";
 import { discoveryService } from "../_shared/discovery-service.ts";
 import { mime } from "../_shared/mail-mime.ts";
 import { instagramTokenResponse, instagramLoginPending } from "../_shared/instagram-token.ts";
@@ -496,7 +497,10 @@ async function sendDraft(u: string, draftId: string, b: any, jobId?: string) {
   if (d.channel === "manual_dm" && !b.manuallySent)
     fail(400, "직접 발송 완료 결과만 기록하세요.");
   let gmail, ig;
-  if (d.channel === "email") gmail = await gmailToken(u);
+  if (d.channel === "email") {
+    if ((await query(sb.from("sanji_suppression").select("identity").eq("owner",u).eq("identity","email:"+d.email.toLowerCase()).limit(1))).length) fail(403,"회신 주소가 수신 거부 목록에 있습니다.");
+    gmail = await gmailToken(u);
+  }
   if (d.channel === "instagram") {
     const t = await owned(u, d.replyTo, "thread");
     if (!t.lastInbound || Date.now() - t.lastInbound > 86400000 || !t.senderId)
@@ -1051,9 +1055,9 @@ Deno.serve(async (req: Request) => {
                 references: h.references || "",
                 subject: h.subject || "",
                 from: h.from || "",
-                out: (h.from || "")
-                  .toLowerCase()
-                  .includes(g.email.toLowerCase()),
+                replyToHeader: h["reply-to"] || "",
+                replyAddress: singleMailbox(h["reply-to"] || h.from || ""),
+                out: singleMailbox(h.from || "").toLowerCase() === g.email.toLowerCase(),
                 text: textBody(m.payload) || m.snippet || "[본문 미지원]",
                 hasAttachments: gmailHasAttachments(m.payload),
                 at: new Date(Number(m.internalDate)).toISOString(),
@@ -1189,12 +1193,16 @@ Deno.serve(async (req: Request) => {
         5 * 1024 * 1024
       )
         fail(400, "첨부 합계는 5MB 이하입니다.");
-      let reply: any = {};
+      let reply: any = {}, recipient = {email:c.contact.email,changed:false};
       if (inputData.replyTo) {
         const t = await owned(u, inputData.replyTo, "thread");
         if (t.target !== c.id || t.channel !== inputData.channel)
           fail(400, "회신 채널·수신자 불일치");
         const last = t.messages.filter((m: any) => !m.out).at(-1);
+        if (inputData.channel === "email") {
+          try { recipient = replyRecipient(last,c.contact.email); }
+          catch(e) { fail(400,e.message); }
+        }
         const igAccount = inputData.channel === "instagram" ? await instagramForThread(u, t) : null;
         reply = {
           providerThread: t.providerId,
@@ -1218,7 +1226,8 @@ Deno.serve(async (req: Request) => {
           ...reply,
           subject,
           body,
-          email: c.contact.email,
+          email: recipient.email,
+          replyRecipientNeedsReview:recipient.changed,
           targetName: c.name,
           targetVersion: c.version,
           dealVersions: deals.map((d: any) => ({
@@ -1232,6 +1241,7 @@ Deno.serve(async (req: Request) => {
           })),
         },
         hash = await digest(JSON.stringify(d));
+      if (inputData.channel === "email" && (await query(sb.from("sanji_suppression").select("identity").eq("owner",u).eq("identity","email:"+d.email.toLowerCase()).limit(1))).length) fail(403,"회신 주소가 수신 거부 목록에 있습니다.");
       const stored = await query(
         sb
           .from("sanji_drafts")
@@ -1249,7 +1259,8 @@ Deno.serve(async (req: Request) => {
           id: stored.id,
           hash,
           target: c.name,
-          email: c.contact.email,
+          email: d.email,
+          replyRecipientNeedsReview:d.replyRecipientNeedsReview,
           channel: d.channel,
           accountUsername: d.accountUsername,
           subject,

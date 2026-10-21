@@ -805,3 +805,15 @@ test("Instagram login response status never pretends API verification or persist
  assert.equal(result.connected,false);assert.equal(result.apiVerified,false);assert.equal(result.authorizationResponseReceived,true);assert.equal(result.subject,"1234");
  assert.equal(JSON.stringify(result).includes("private-token-not-for-status"),false);assert.equal(result.access_token,undefined);
 });
+
+test("Gmail replies address the actual Reply-To sender and reject ambiguous or injected mailbox headers",()=>{
+ const compiled=esbuild.buildSync({entryPoints:["supabase/functions/_shared/mail-reply.ts"],bundle:true,platform:"node",format:"cjs",write:false});
+ const m={exports:{}};new Function("module","exports",compiled.outputFiles[0].text)(m,m.exports);const {singleMailbox,replyRecipient}=m.exports;
+ assert.equal(singleMailbox('담당자 <buyer@brand.example.test>'),"buyer@brand.example.test");
+ assert.equal(singleMailbox('Buyer <buyer@brand.example.test>\r\nBcc: stranger@example.test'),"");
+ assert.equal(singleMailbox('a@example.test, b@example.test'),"");
+ const selected=replyRecipient({from:'담당자 <buyer@brand.example.test>',replyToHeader:'제휴팀 <partner@brand.example.test>'},"info@brand.example.test");
+ assert.equal(selected.email,"partner@brand.example.test");assert.equal(selected.changed,true);
+ assert.equal(replyRecipient(null,"info@brand.example.test").email,"info@brand.example.test");
+ assert.throws(()=>replyRecipient({from:"invalid"},"info@brand.example.test"),/회신 주소/);
+});
