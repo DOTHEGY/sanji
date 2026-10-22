@@ -139,6 +139,6 @@ const draft = z.object({
   attachments: z.array(attachment).max(5).default([]),
   replyTo: z.string().optional(),
   lawfulBasis: text.min(5),
-  marketing: z.boolean().default(true),
+  marketing: z.boolean().default(false),
 });
 module.exports = { candidate, deal, template, draft };

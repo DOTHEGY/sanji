@@ -924,7 +924,7 @@ var draft = z.object({
   templateVersion: z.number().int().positive().optional(),
   recipientMode: z.enum(["primary", "company_all"]).default("primary"),
   lawfulBasis: text.min(5),
-  marketing: z.boolean().default(true)
+  marketing: z.boolean().default(false)
 });
 
 // supabase/functions/workspace/index.ts

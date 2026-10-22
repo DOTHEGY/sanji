@@ -820,7 +820,7 @@ test("Gmail replies address the actual Reply-To sender and reject ambiguous or i
 
 test("Brand email workspace reviews all company addresses directly, preserves copy and requires final approval", async () => {
  const express=require("express"),app=express();app.use(express.json());
- const copy={subject:"(광고) 브랜드A 제안",body:"안녕하세요 브랜드A 담당자님.\n구체적인 제품 특징입니다. 콘텐츠 적합성입니다.\n공통 본문 그대로",signature:"원본 서명",brandName:"브랜드A",productName:"제품A"};
+ const copy={subject:"브랜드A 제안",body:"안녕하세요 브랜드A 담당자님.\n구체적인 제품 특징입니다. 콘텐츠 적합성입니다.\n공통 본문 그대로",signature:"원본 서명",brandName:"브랜드A",productName:"제품A"};
  const lead={id:"lead-a",data:{name:"법인A",contacts:[{email:"a@brand.example",source:"https://brand.example"},{email:"cs@brand.example",source:"https://brand.example"}],outreach:copy}};
  const state={candidates:[],deals:[],templates:[],threads:[],outbox:[],jobs:[],suppression:[],settings:{dailyLimit:20,senderAddress:"주소"}};
  let saved=0,prepared=0,scheduled=0,sends=0;const drafted=[];
@@ -844,7 +844,7 @@ test("Brand email workspace reviews all company addresses directly, preserves co
  assert.equal(await page.locator('[name=body]').inputValue(),copy.body);
  await page.locator('[data-action="mail-save"]').click();await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes("저장"));assert.equal(saved,1);assert.equal(prepared,0);assert.equal(scheduled,0);
  await page.locator('[name=ownership]').check();await page.locator('[name=lawfulBasis]').fill("사전 동의 기록 확인 완료");await page.locator('#mail-review-form button[type=submit]').click();await page.waitForSelector('[name=bulk-approve]');
- assert.equal(drafted[0].recipientMode,"company_all");assert.equal(drafted[0].body,copy.body);assert.equal(drafted[0].subject,copy.subject);assert.equal(scheduled,0);
+ assert.equal(drafted[0].marketing,false);assert.equal(drafted[0].recipientMode,"company_all");assert.equal(drafted[0].body,copy.body);assert.equal(drafted[0].subject,copy.subject);assert.equal(scheduled,0);
  assert.match(await page.locator('#mail-final').textContent(),/a@brand.example, cs@brand.example/);
  await page.locator('[name=body]').fill(copy.body+" 수정");assert.equal(await page.locator('[name=bulk-approve]').count(),0);
  await page.locator('#mail-review-form button[type=submit]').click();await page.waitForSelector('[name=bulk-approve]');await page.locator('[name=bulk-approve]').check();await page.locator('#bulk-run-at').fill(new Date(Date.now()+86400000).toISOString().slice(0,16));await page.locator('[data-action="mail-schedule"]').click();await page.waitForFunction(()=>document.querySelector('#bulk-result-0').textContent.includes("예약 완료"));assert.equal(scheduled,1);assert.equal(sends,0);
