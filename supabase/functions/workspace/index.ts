@@ -1,3 +1,4 @@
+import {drainApprovedJobs} from "../_shared/job-batch.ts";
 import { discoveryCompletionNotifier } from "../_shared/discovery-notification.ts";
 import { mailContent } from "../_shared/mail-content.ts";
 import { mailRecipients } from "../_shared/mail-recipients.ts";
@@ -660,6 +661,9 @@ async function runJobs(req: Request) {
   let different = 0;
   for (let i = 0; i < a.length; i++) different |= a[i] ^ b[i];
   if (different) fail(401, "작업 실행 권한 없음");
+  return json(await drainApprovedJobs(async()=>{const response=await runScheduledJob();return await response.json();}));
+}
+async function runScheduledJob(){
   const rows = await query(sb.rpc("sanji_claim_job")),
     job = Array.isArray(rows) ? rows[0] : rows;
   if (!job) return json({ processed: 0 });

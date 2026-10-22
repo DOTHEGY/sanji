@@ -1,3 +1,14 @@
+// supabase/functions/_shared/job-batch.ts
+async function drainApprovedJobs(processOne, maxJobs = 10, budgetMs = 45e3) {
+  const started = Date.now(), results = [];
+  while (results.length < maxJobs && Date.now() - started < budgetMs) {
+    const result = await processOne();
+    if (!result?.processed) break;
+    results.push(result);
+  }
+  return { processed: results.length, results };
+}
+
 // supabase/functions/_shared/mail-mime.ts
 import { Buffer } from "node:buffer";
 
@@ -1826,6 +1837,12 @@ async function runJobs(req) {
   let different = 0;
   for (let i = 0; i < a.length; i++) different |= a[i] ^ b[i];
   if (different) fail(401, "\uC791\uC5C5 \uC2E4\uD589 \uAD8C\uD55C \uC5C6\uC74C");
+  return json(await drainApprovedJobs(async () => {
+    const response = await runScheduledJob();
+    return await response.json();
+  }));
+}
+async function runScheduledJob() {
   const rows = await query(sb.rpc("sanji_claim_job")), job = Array.isArray(rows) ? rows[0] : rows;
   if (!job) return json({ processed: 0 });
   try {

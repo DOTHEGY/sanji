@@ -1118,3 +1118,34 @@ test("Completion notifier sends one real MIME contract to the owner only, preser
  const raw=Buffer.from(JSON.parse(requests[0].o.body).raw,'base64url').toString();assert.match(raw,/To: owner@example.test/);assert.equal(raw.includes('bcc:'),false);const body=Buffer.from(raw.split('\r\n\r\n')[1].replace(/\r\n/g,''),'base64').toString();assert.match(body,/매일 한국시간 자정/);assert.match(body,/이메일 확보 완료와 회사·상품 검증 완료는 구분/);assert.match(body,/40곳/);
  claimed=false;fail=true;assert.equal((await notify(u1)).status,'outcome_unknown');assert.equal((await notify(u1)).status,'not_due_or_already_attempted');assert.equal(requests.length,2);assert.equal(updates.at(-1).status,'outcome_unknown');
 });
+
+
+test("Approved job batch drains due jobs within a bound and never retries failed or unknown jobs",async()=>{
+ const result=esbuild.buildSync({entryPoints:["supabase/functions/_shared/job-batch.ts"],bundle:true,platform:"node",format:"cjs",write:false}),m={exports:{}};new Function("module","exports",result.outputFiles[0].text)(m,m.exports);
+ let calls=0;const states=["completed","failed","outcome_unknown","completed"];
+ const first=await m.exports.drainApprovedJobs(async()=>{calls++;return states.length?{processed:1,status:states.shift()}:{processed:0};},3);
+ assert.equal(first.processed,3);assert.equal(calls,3);assert.deepEqual(first.results.map(x=>x.status),["completed","failed","outcome_unknown"]);assert.equal(states.length,1);
+ const next=await m.exports.drainApprovedJobs(async()=>states.length?{processed:1,status:states.shift()}:{processed:0});assert.equal(next.processed,1);
+ let budgetCalls=0;assert.equal((await m.exports.drainApprovedJobs(async()=>{budgetCalls++;return {processed:1};},10,0)).processed,0);assert.equal(budgetCalls,0);
+});
+
+test("Inline morning scheduling stores approved KST times without sending or creating duplicate jobs",async()=>{
+ const express=require("express"),app=express();app.use(express.json());
+ const leads=["a","b","c","d"].map(id=>({id,data:{name:"브랜드"+id,contacts:[{email:id+"@brand.test",source:"https://"+id+".brand.test"}],outreach:{subject:"협업 "+id,body:"개인화 "+id+"\n공통 본문",signature:"서명",brandName:"브랜드"+id,productName:"제품"+id}}}));
+ const state={candidates:[],deals:[],templates:[],threads:[],outbox:[],jobs:[],suppression:[],settings:{senderAddress:""}};const sent=[],scheduled=[];let preparedCount=0,preparedAtFirstSend=null;
+ app.all(/^\/api\/.*/,(req,res)=>{const p=req.path.replace("/api","");
+ if(p==="/me")return res.json({email:"owner@example.test",csrf:"test"});if(p==="/state")return res.json(state);if(p==="/connections")return res.json({gmail:{connected:true,enabled:true},instagram:{},ai:{}});
+ if(p==="/discovery")return res.json({settings:{enabled:true,target:40,keywords:[]},leads,usage:{emails:2},activity:[]});
+ if(p==="/discovery/outreach")return res.json({ok:true});if(p==="/discovery/prepare-contact"){preparedCount++;return res.json({candidateId:req.body.id});}
+ if(p==="/drafts"){const id=req.body.target;return res.json({id,hash:"hash-"+id,target:id,email:id+"@brand.test",subject:req.body.subject,body:req.body.body+"\n\n"+req.body.signature,attachments:[]});}
+ if(p==="/schedule"){scheduled.push(req.body);return res.json({id:"job-"+req.body.draftId,run_at:req.body.runAt});}
+ if(/^\/drafts\/[^/]+\/send$/.test(p)){if(preparedAtFirstSend===null)preparedAtFirstSend=preparedCount;sent.push({path:p,...req.body});return res.json({note:"Gmail 서버 접수"});}res.status(404).json({error:"unknown"});});
+ app.use("/app",express.static("private/ui"));const server=app.listen(0,"127.0.0.1");let browser;
+ try{browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||"/usr/bin/chromium",args:["--no-sandbox"]});const page=await browser.newPage();await page.goto("http://127.0.0.1:"+server.address().port+"/app/#brands");
+ await page.locator('[data-action="mail-select-all"]').click();await page.getByText('선택한 메일 예약하기',{exact:true}).click();assert.ok((await page.locator('#inline-run-at').inputValue()).endsWith('T09:00'));
+ const day=new Date(Date.now()+2*86400000).toISOString().slice(0,10),value=day+'T09:00';await page.locator('#inline-run-at').fill(value);await page.locator('[data-action="mail-schedule-selected"]').click();
+ await page.waitForFunction(()=>document.querySelector('#inline-mail-summary').textContent.includes('전송 처리 완료'));assert.equal(sent.length,0);assert.equal(scheduled.length,4);assert.ok(scheduled.every(x=>x.approved&&x.runAt===new Date(value+'+09:00').toISOString()&&x.hash==='hash-'+x.draftId));
+ assert.ok((await page.locator('#mail-state-b').textContent()).includes('예약 완료'));await page.locator('[data-action="mail-schedule-selected"]').click();assert.equal(scheduled.length,4);assert.equal(sent.length,0);
+
+ }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
+});
