@@ -1655,6 +1655,8 @@ Deno.serve(async (req) => {
       const gmail = await connection(u, "gmail"), accounts = await instagramAccounts(u);
       const ig = accounts.find((a) => Number(a.summary?.expires) > Date.now())?.summary;
       const loginPending = await query(sb.from("sanji_connections").select("provider,summary").eq("owner", u).like("provider", "instagram_login:%"));
+      const pendingState = await query(sb.from("sanji_connections").select("summary").eq("owner", u).eq("provider", "instagram_pending").maybeSingle());
+      const canRetryPending = Number(pendingState?.summary?.expires || 0) > Date.now();
       return json({
         gmail: {
           configured: !!env("GOOGLE_CLIENT_ID") && !!env("GOOGLE_CLIENT_SECRET"),
@@ -1667,7 +1669,7 @@ Deno.serve(async (req) => {
           connected: !!ig,
           username: ig?.username || "",
           accounts: accounts.map((a) => ({ key: a.provider, ...a.summary })),
-          loginPending: loginPending.map((a) => ({ key: a.provider, ...a.summary, requiresLogin: true })),
+          loginPending: loginPending.map((a) => ({ key: a.provider, ...a.summary, requiresLogin: !canRetryPending, canRetry: canRetryPending })),
           enabled: env("INSTAGRAM_SENDING_ENABLED") === "true"
         },
         search: { configured: !!env("BRAVE_SEARCH_API_KEY") || await discovery.configured(u) },
