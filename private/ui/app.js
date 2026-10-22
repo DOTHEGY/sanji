@@ -496,6 +496,7 @@ function mailCopy(l) {
 }
 function sentMailRows() { return data.outbox.filter(o=>o.channel==="email"&&o.status==="accepted"); }
 function mailLeadSent(l) { return sentMailRows().some(o=>o.target===l.data.candidateId||candidate(o.target)?.contact?.email&&(l.data.contacts||[]).some(c=>c.email.toLowerCase()===candidate(o.target).contact.email.toLowerCase())); }
+function searchSummary(r){const s=r.engine?.searchState||r.settings.search_state||{};return "검색 보충: "+esc(({searching:"검색 중",replenished:"새 후보 추가",no_new_results:"새 결과 없음 · 다음 검색어 대기"})[s.status]||"대기")+" · 오늘 검색어 "+Number(s.queries||0)+"개 · 최근 새 후보 "+Number(s.added||0)+"곳"+(s.sources?.length?'<details><summary>검색 제공자별 결과</summary>'+s.sources.map(x=>'<p>'+esc(x.engine)+" · "+esc(x.query)+" · "+(x.ok?Number(x.count)+"개 링크":esc(x.error||"추출 결과 없음"))+'</p>').join("")+'</details>':"");}
 function discoveryProgress(r) {
   return '<div class="research-status"><span class="status-dot"></span><strong>'+esc(r.engine?.label||"수집 현황 확인 중")+'</strong><span>오늘 확인 '+Number(r.usage.processed||0)+'곳 · 신규 업체 '+Number(r.usage.companies||0)+'곳 · 원문 메일 '+Number(r.usage.emails||0)+'개</span></div><details class="research-log"><summary>최근 수집 내역</summary>'+(r.activity||[]).map(a=>'<div class="task"><strong>'+esc(a.name)+'</strong><span>'+a.emailCount+'개 · '+esc(localTime(a.checked))+'</span>'+(a.error?'<small>'+esc(a.error)+'</small>':'')+'</div>').join("")+'</details>';
 }
@@ -513,7 +514,7 @@ function sentMailCards() {
   return '<div class="mail-list">'+rows.map(o=>{
     const c=candidate(o.target),thread=data.threads.find(t=>t.target===o.target&&t.channel==="email"),copy=o.data?.sentCopy||o.data;
     const old=thread?.messages.filter(m=>m.out).sort((a,b)=>Math.abs(Date.parse(a.at)-Date.parse(o.created))-Math.abs(Date.parse(b.at)-Date.parse(o.created)))[0];
-    return '<article class="panel sent-card"><div class="mail-card-top"><h3>'+esc(c?.name||"발송 대상")+'</h3>'+tag("Gmail 서버 접수")+'</div><p class="fine">'+esc(copy?.emails?.join(", ")||copy?.email||c?.contact?.email||"")+" · "+esc(localTime(o.created))+'</p><details><summary>'+esc(copy?.subject||thread?.subject||"보낸 메일")+'</summary><div class="mail-letter">'+esc(copy?.body||old?.text||"보낸 원문은 대화함에서 동기화해 확인하세요.")+'</div></details><p class="fine">받은편지함 도착·열람 상태는 확인되지 않았습니다.</p>'+(thread?button("대화·답장 보기","mail-open-thread",thread.id):"")+'</article>';
+    return '<article class="panel sent-card"><div class="mail-card-top"><h3>'+esc(c?.name||"발송 대상")+'</h3>'+tag("Gmail 서버 접수")+'</div><p class="fine">'+esc(copy?.emails?.join(", ")||copy?.email||c?.contact?.email||"")+" · "+esc(localTime(o.created))+'</p><details><summary>'+esc(copy?.subject||thread?.subject||"보낸 메일")+'</summary><div class="mail-letter">'+esc(copy?.body||old?.text||"보낸 원문은 대화함에서 동기화해 확인하세요.")+'</div></details><p class="fine">받은편지함 도착·열람 미확인 · Gmail API 발송에는 Mailsuite 확장 프로그램 추적이 자동 적용되지 않습니다.</p>'+(thread?button("대화·답장 보기","mail-open-thread",thread.id):"")+'</article>';
   }).join("")+'</div>'+(rows.length?"":'<div class="panel empty"><h3>아직 보낸 영업 메일이 없습니다</h3><p>승인 후 실제 Gmail 서버가 접수한 메일만 여기에 표시됩니다.</p></div>');
 }
 async function discoveryPage() {
@@ -524,10 +525,10 @@ async function discoveryPage() {
     const yesterday=historyCount(r,1),today=historyCount(r,0);
     const ready=r.leads.filter(l=>l.status!=="blocked"&&l.data.contacts?.length&&!mailLeadSent(l)),emails=new Set(r.leads.flatMap(l=>(l.data.contacts||[]).map(c=>c.email.toLowerCase())));
     $("#app").innerHTML=head("브랜드 이메일","업체별 제안 확인부터 발송 승인까지 한곳에서 진행하세요.",'<a class="text-link" href="#templates">공통 템플릿 설정 ↗</a>')+
-    '<div class="mail-overview"><div><span>발송 전</span><strong><span id="mail-pending-count">'+ready.length+'</span><small>업체</small></strong></div><div><span>어제 이메일 확보 · '+esc(yesterday.day.slice(5))+'</span><strong><span id="mail-yesterday-companies">'+Number(yesterday.companies)+'</span><small>곳</small></strong></div><div><span>오늘 이메일 확보 · '+esc(today.day.slice(5))+'</span><strong><span id="mail-today-companies">'+Number(today.companies)+'</span><small>/ '+r.settings.target+'곳</small></strong></div><div><span>보낸 메일</span><strong><span id="mail-sent-count">'+sentMailRows().length+'</span><small>통</small></strong></div></div><div class="daily-discovery-line"><span class="status-dot"></span> 매일 00:00 KST · 신규 '+r.settings.target+'곳 목표 <span>이메일 '+emails.size+'개 확보</span></div>'+
-    discoveryHistory(r)+'<div class="mail-workspace"><div class="mail-toolbar"><div class="mail-tabs" role="tablist">'+button("발송 전","brand-tab","pending",brandTab==="pending")+button("보낸 메일","brand-tab","sent",brandTab==="sent")+'</div>'+(brandTab==="pending"?'<div class="actions mail-filter-actions"><div class="day-filters">'+button("전체","mail-day","all",mailDayFilter==="all")+button("어제","mail-day","yesterday",mailDayFilter==="yesterday")+button("오늘","mail-day","today",mailDayFilter==="today")+'</div><input id="mail-filter" class="search" placeholder="업체·이메일 검색" aria-label="업체·이메일 검색">'+button("선택한 메일 검토","mail-review-selected","",true)+'</div>':"")+'</div>'+
+    '<div class="mail-overview"><div><span>발송 전</span><strong><span id="mail-pending-count">'+ready.length+'</span><small>업체</small></strong></div><div><span>어제 이메일 확보 · '+esc(yesterday.day.slice(5))+'</span><strong><span id="mail-yesterday-companies">'+Number(yesterday.companies)+'</span><small>곳</small></strong></div><div><span>오늘 이메일 확보 · '+esc(today.day.slice(5))+'</span><strong><span id="mail-today-companies">'+Number(today.companies)+'</span><small>/ '+r.settings.target+'곳</small></strong></div><div><span>보낸 메일</span><strong><span id="mail-sent-count">'+sentMailRows().length+'</span><small>통</small></strong></div></div><div class="daily-discovery-line"><span class="status-dot"></span> 매일 00:00 KST · 검색 후보 자동 보충 · 신규 '+r.settings.target+'곳 목표 <span>이메일 '+emails.size+'개 확보</span></div><div id="search-refill-status" class="fine">'+searchSummary(r)+'</div>'+
+    discoveryHistory(r)+'<div class="mail-workspace"><div class="mail-toolbar"><div class="mail-tabs" role="tablist">'+button("발송 전","brand-tab","pending",brandTab==="pending")+button("보낸 메일","brand-tab","sent",brandTab==="sent")+'</div>'+(brandTab==="pending"?'<div class="actions mail-filter-actions"><div class="day-filters">'+button("전체","mail-day","all",mailDayFilter==="all")+button("어제","mail-day","yesterday",mailDayFilter==="yesterday")+button("오늘","mail-day","today",mailDayFilter==="today")+'</div><input id="mail-filter" class="search" placeholder="업체·이메일 검색" aria-label="업체·이메일 검색">'+button("현재 목록 전체 선택","mail-select-all")+button("선택 해제","mail-select-none")+button("선택한 메일 일괄 검토","mail-review-selected","",true)+'</div>':"")+'</div>'+
     '<div id="discovery-results">'+(brandTab==="sent"?sentMailCards():discoveryCards(r))+'</div></div>'+
-    '<details class="panel mail-advanced"><summary>수집 현황·운영 설정</summary><div id="discovery-progress">'+discoveryProgress(r)+'</div><div class="actions">'+button("새로고침","discovery-refresh")+button("다음 업체 수집","discovery-run")+button(discoveryOnlyEmails?"메일 미확보 업체도 보기":"이메일 있는 업체만 보기","discovery-filter")+'</div><form id="discovery-settings" class="form-grid">'+field("target","하루 신규 업체 목표",r.settings.target,"number")+field("enabled","자동 수집 켜짐",r.settings.enabled,"checkbox")+'<input name="keywords" type="hidden" value="'+esc(r.settings.keywords.join("\n"))+'"><button type="submit">설정 저장</button></form><details><summary>홈페이지 직접 추가</summary><form id="discovery-seed" class="form-grid">'+field("name","업체명","")+field("url","공개 홈페이지 URL","","url")+'<button type="submit">추가</button></form></details><p class="fine">화면 현황은 30초마다 갱신됩니다. 외부 유료 검색·AI API를 사용하지 않는 수집 경로입니다. Supabase 실제 사용료는 청구 화면에서 확인해야 합니다.</p></details>';
+    '<details class="panel mail-advanced"><summary>수집 현황·운영 설정</summary><div id="discovery-progress">'+discoveryProgress(r)+'</div><div class="actions">'+button("새로고침","discovery-refresh")+button("다음 업체 수집","discovery-run")+button(discoveryOnlyEmails?"메일 미확보 업체도 보기":"이메일 있는 업체만 보기","discovery-filter")+'</div><form id="discovery-settings" class="form-grid">'+field("target","하루 신규 업체 목표",r.settings.target,"number")+field("enabled","자동 수집 켜짐",r.settings.enabled,"checkbox")+'<input name="keywords" type="hidden" value="'+esc(r.settings.keywords.join("\n"))+'"><button type="submit">설정 저장</button></form><details><summary>홈페이지 직접 추가</summary><form id="discovery-seed" class="form-grid">'+field("name","업체명","")+field("url","공개 홈페이지 URL","","url")+'<button type="submit">추가</button></form></details><p class="fine">화면 현황은 30초마다 갱신됩니다. Google·네이버·Bing·DuckDuckGo의 공개 검색 결과를 순차 확인합니다. 보안문자·차단은 우회하지 않으며, 검색어 회전과 재보충은 하루 64개 검색어 이내로 진행합니다. 유료 검색·AI API는 사용하지 않습니다. Supabase 실제 사용료는 청구 화면에서 확인해야 합니다.</p></details>';
     scheduleDiscoveryRefresh();
   } catch(e) {if(e.status===404){candidatesPage("brand");return;}$("#app").innerHTML=head("브랜드 이메일","")+'<div class="error">'+esc(e.message)+'</div>';}
 }
@@ -537,7 +538,7 @@ function scheduleDiscoveryRefresh() {
     if(!me||!["brands","discovery"].includes(location.hash.slice(1)))return;
     try {
       const r=await api("/discovery"),editing=$("#modal").open||document.activeElement?.closest("form");
-      if($("#discovery-progress"))$("#discovery-progress").innerHTML=discoveryProgress(r);
+      if($("#discovery-progress"))$("#discovery-progress").innerHTML=discoveryProgress(r);if($("#search-refill-status"))$("#search-refill-status").innerHTML=searchSummary(r);
       if($("#mail-today-companies"))$("#mail-today-companies").textContent=historyCount(r,0).companies;if($("#mail-yesterday-companies"))$("#mail-yesterday-companies").textContent=historyCount(r,1).companies;
       if(!editing){discoveryView=r;data=await api("/state");if($("#mail-pending-count"))$("#mail-pending-count").textContent=r.leads.filter(l=>l.status!=="blocked"&&l.data.contacts?.length&&!mailLeadSent(l)).length;if($("#mail-sent-count"))$("#mail-sent-count").textContent=sentMailRows().length;if($("#discovery-results"))$("#discovery-results").innerHTML=brandTab==="sent"?sentMailCards():discoveryCards(r);}
     }catch(e){toast("현황 갱신 실패: "+e.message);}
@@ -548,7 +549,7 @@ function mailReview(ids) {
   const leads=ids.map(id=>discoveryView?.leads.find(l=>l.id===id)).filter(Boolean);
   if(!leads.length)return toast("검토할 업체를 선택하세요.");
   close();bulkPreviews=[];
-  modal('<div class="review-heading"><span class="eyebrow">EMAIL REVIEW</span><h2>제안 메일 검토</h2><p>업체 '+leads.length+'곳 · 저장만으로는 발송되지 않습니다.</p></div><form id="mail-review-form">'+leads.map(l=>{
+  modal('<div class="review-heading"><span class="eyebrow">EMAIL REVIEW</span><h2>제안 메일 검토</h2><p>업체 '+leads.length+'곳 · 저장만으로는 발송되지 않습니다.</p></div><form id="mail-review-form"><div class="actions">'+button("표시된 업체 소유 관계 일괄 확인","mail-ownership-all")+'</div>'+leads.map(l=>{
     const c=mailCopy(l),contacts=l.data.contacts||[];
     return '<section class="mail-review-item" data-lead="'+l.id+'" data-template-id="'+esc(c.templateId||"")+'" data-template-version="'+esc(c.templateVersion||"")+'"><div class="mail-card-top"><h3>'+esc(c.companyName)+'</h3>'+tag("발송 전")+'</div>'+(c.sendBlockedReason?'<p class="error">'+esc(c.sendBlockedReason)+'</p>':"")+(c.uncertainty?'<p class="notice">'+esc(c.uncertainty)+'</p>':"")+'<div class="form-grid"><label class="field">받는 주소 · 업체당 한 통<input name="email" type="hidden" value="'+esc(contacts[0]?.email||"")+'"><div class="recipient-list">'+contacts.filter(e=>!e.excluded&&!e.excludeFromOutreach).map(e=>'<span>'+esc(e.email)+'</span>').join("")+'</div></label><input name="companyName" type="hidden" value="'+esc(c.companyName)+'">' +field("productName","제안 제품·제품군",c.productName)+field("source","직접 확인한 이메일 원문 URL",contacts[0]?.source||"","url")+'</div>'+field("subject","제목",c.subject)+field("body","업체명·개인화가 반영된 본문",c.body,"textarea")+field("signature","서명",c.signature,"textarea")+'<details class="mail-evidence"><summary>개인화 작성 근거</summary>'+(c.evidence||[]).map(e=>'<p><a href="'+esc(e.url)+'" target="_blank" rel="noopener">'+esc(e.description||"공개 자료")+' ↗</a>'+(e.quote?'<blockquote>'+esc(e.quote)+'</blockquote>':"")+'</p>').join("")+'</details><label class="review-check"><input name="ownership" type="checkbox"> 공개 원문·이메일 소유 회사·제안 대상 회사의 일치 여부를 확인했습니다.</label></section>';
   }).join("")+'<div class="review-footer">'+(!data.settings.senderAddress?'<p class="notice">발송 전에 <a href="#settings" data-action="mail-settings">발신자 사업장 주소</a>를 입력해 주세요. 초안 저장과 내용 검토는 지금 가능합니다.</p>':"")+field("lawfulBasis","발송 근거·동의 기록","","textarea")+'<details><summary>추가 발송 설정</summary>'+field("marketing","광고성 판매·홍보 메일에 해당함",false,"checkbox")+'</details>'+'<label class="field">첨부파일 (최대 5개·파일당 2MB·합계 5MB)<input name="attachments" type="file" multiple></label><div class="actions">'+button("초안 저장","mail-save")+'<button type="submit" class="primary">최종 발송 내용 확인</button></div></div></form><div id="mail-final"></div>');
@@ -588,11 +589,29 @@ async function prepareMailReview(form) {
       bulkPreviews.push({...p,candidateId:id});
     }catch(e){errors.push(l.data.name+": "+e.message);}
   }
-  $("#mail-final").innerHTML='<h3>최종 발송 내용</h3>'+errors.map(e=>'<p class="error">'+esc(e)+'</p>').join("")+bulkPreviews.map((p,i)=>'<article class="panel"><h3>'+esc(p.target)+'</h3><p class="fine">받는 주소: '+esc((p.emails||[p.email]).join(", "))+'</p><strong>'+esc(p.subject)+'</strong><div class="mail-letter">'+esc(p.body)+'</div><p class="fine">첨부: '+esc(p.attachments.map(a=>a.name).join(", ")||"없음")+'</p><label class="review-check"><input name="bulk-approve" type="checkbox" value="'+i+'"> 이 수신자·최종 내용·첨부를 승인합니다.</label><div id="bulk-result-'+i+'" role="status"></div></article>').join("")+(bulkPreviews.length?'<p class="fine">15분 안에 승인하세요. 내용을 수정하면 다시 확인해야 합니다.</p><label class="field">예약 시각<input id="bulk-run-at" type="datetime-local"></label>'+button("승인한 메일 예약","mail-schedule","",true):"");
+  $("#mail-final").innerHTML='<h3>최종 발송 내용</h3>'+errors.map(e=>'<p class="error">'+esc(e)+'</p>').join("")+bulkPreviews.map((p,i)=>'<article class="panel"><h3>'+esc(p.target)+'</h3><p class="fine">받는 주소: '+esc((p.emails||[p.email]).join(", "))+'</p><strong>'+esc(p.subject)+'</strong><div class="mail-letter">'+esc(p.body)+'</div><p class="fine">첨부: '+esc(p.attachments.map(a=>a.name).join(", ")||"없음")+'</p><label class="review-check"><input name="bulk-approve" type="checkbox" value="'+i+'"> 이 수신자·최종 내용·첨부를 승인합니다.</label><div id="bulk-result-'+i+'" role="status"></div></article>').join("")+(bulkPreviews.length?'<label class="review-check"><input id="mail-approve-all" type="checkbox"> 위 '+bulkPreviews.length+'개 메일의 수신자·제목·본문·첨부를 모두 확인하고 일괄 승인합니다.</label><div class="actions">'+button("승인한 메일 지금 일괄 전송","mail-send-all","",true)+'</div><p class="fine">15분 안에 승인하세요. 내용을 수정하면 다시 확인해야 합니다.</p><label class="field">예약 시각<input id="bulk-run-at" type="datetime-local"></label>'+button("승인한 메일 예약","mail-schedule","",true):"");
 }
 function invalidateMailReview(){if($("#mail-final")){$("#mail-final").innerHTML='<p class="fine">내용이 변경되었습니다. 최종 발송 내용을 다시 확인하세요.</p>';bulkPreviews=[];}}
 
-let bulkPreviews = [], bulkTemplateId = "";
+let bulkPreviews = [], bulkTemplateId = "", bulkSending = false;
+async function bulkSendNow(){
+ if(bulkSending)return;
+ const checked=$$("#mail-final [name=bulk-approve]:checked:not(:disabled)");
+ if(!checked.length)throw Error("최종 메일을 확인한 뒤 일괄 승인 또는 개별 승인하세요.");
+ const entries=checked.map(check=>({check,index:Number(check.value),preview:bulkPreviews[Number(check.value)],result:$("#bulk-result-"+check.value)}));
+ bulkSending=true;const controls=$$("#mail-final button, #mail-final input");controls.forEach(e=>e.disabled=true);
+ let accepted=0,failed=0;
+ try{
+  for(const entry of entries){
+   const {check,preview:p,result}=entry;if(!p)continue;
+   try{const r=await api("/drafts/"+p.id+"/send","POST",{hash:p.hash,approved:true});
+    if(result)result.textContent=r.note||"Gmail 서버 접수";accepted++;
+   }catch(e){failed++;if(result)result.textContent="발송 오류 · "+e.message+" · 자동 재시도하지 않습니다.";}
+   check.checked=false;check.dataset.attempted="true";
+  }
+  data=await api("/state");toast("전송 처리 "+accepted+"건 · 오류 "+failed+"건. 결과를 확인하세요.");
+ }finally{bulkSending=false;controls.forEach(e=>{e.disabled=e.dataset.attempted==="true";});}
+}
 function bulkCompose() {
   close(); bulkPreviews = [];
   const templates = data.templates.filter(t => t.channel === "이메일");
@@ -812,6 +831,10 @@ const actions = {
   "mail-review-selected": () => mailReview([...selectedMailLeads]),
   "mail-save": saveMailReview,
   "mail-schedule": bulkSchedule,
+  "mail-send-all": bulkSendNow,
+  "mail-select-all": () => {const boxes=$$("#discovery-results [data-mail-select]");for(const e of boxes){const l=discoveryView.leads.find(l=>l.id===e.dataset.mailSelect);if(!l?.data.contacts?.length||l.data.outreach?.sendBlockedReason)continue;e.checked=true;selectedMailLeads.add(e.dataset.mailSelect);}toast(selectedMailLeads.size+"개 업체 선택 · 대상 회사 확인이 필요한 업체는 제외했습니다.");},
+  "mail-select-none": () => {selectedMailLeads.clear();$$("[data-mail-select]").forEach(e=>e.checked=false);},
+  "mail-ownership-all": () => { $$("#mail-review-form [name=ownership]").forEach(e=>{const l=discoveryView.leads.find(l=>l.id===e.closest("[data-lead]").dataset.lead);if(!l?.data.outreach?.sendBlockedReason)e.checked=true;});invalidateMailReview();toast("소유 관계를 일괄 확인했습니다. 최종 내용 검토 후 별도로 발송 승인하세요.");},
   "mail-settings": () => { close(); location.hash="settings"; },
   "mail-open-thread": id => { selectedThread=id; location.hash="inbox"; },
   "discovery-refresh": discoveryPage,
@@ -1014,6 +1037,9 @@ document.addEventListener("input", (e) => {
   if (e.target.id === "mail-filter" && discoveryView) $("#discovery-results").innerHTML=discoveryCards(discoveryView);
 });
 document.addEventListener("change", (e) => {
+  if(e.target.id==="mail-approve-all") $$("#mail-final [name=bulk-approve]:not(:disabled)").forEach(c=>c.checked=e.target.checked);
+  if(e.target.name==="bulk-approve"&&$("#mail-approve-all")){const all=$$("#mail-final [name=bulk-approve]:not(:disabled)");$("#mail-approve-all").checked=!!all.length&&all.every(c=>c.checked);}
+
   if (e.target.closest("#compose-form")) invalidatePreview();
   if (e.target.closest("#mail-review-form")) invalidateMailReview();
   if (e.target.closest("#bulk-compose-form")) invalidateBulk();

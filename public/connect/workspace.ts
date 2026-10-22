@@ -148,6 +148,54 @@ function publicHtmlRedirect(html, source) {
   }
 }
 
+// supabase/functions/_shared/discovery-search.ts
+var excluded = /(^|\.)(google\.[a-z.]+|naver\.com|navercorp\.com|bing\.com|duckduckgo\.com|youtube\.com|instagram\.com|facebook\.com|coupang\.com|daum\.net|tistory\.com|wikipedia\.org|wikidata\.org|microsoft\.com)$/i;
+var searchTopics = ["\uAC74\uAC15\uAE30\uB2A5\uC2DD\uD488 \uC720\uC0B0\uADE0", "\uAC74\uAC15\uC2DD\uD488 \uD6A8\uC18C", "\uB2E8\uBC31\uC9C8 \uD504\uB85C\uD2F4", "\uC62C\uB9AC\uBE0C\uC624\uC77C", "\uD64D\uC0BC", "\uBE44\uD0C0\uBBFC", "\uCF5C\uB77C\uAC90", "\uC624\uBA54\uAC003", "\uB8E8\uD14C\uC778", "\uACAC\uACFC", "\uB514\uCE74\uD398\uC778 \uCEE4\uD53C", "\uAC74\uAC15\uC999", "\uC2DD\uC774\uC12C\uC720", "\uACE1\uBB3C \uC120\uC2DD", "\uBC00\uD06C\uC528\uC2AC", "\uB9C8\uADF8\uB124\uC298", "\uD504\uB85C\uD3F4\uB9AC\uC2A4", "\uBC1C\uD6A8\uC2DD\uD488", "\uCC28 \uAC74\uAC15\uC2DD\uD488", "\uC774\uB108\uBDF0\uD2F0", "\uC0B0\uC591\uC720", "\uC591\uBC30\uCD94\uC999", "\uC54C\uBD80\uBBFC", "\uD504\uB9AC\uBC14\uC774\uC624\uD2F1\uC2A4"];
+var searchEngines = ["Google", "Naver", "Bing", "DuckDuckGo"];
+function searchQuery(cursor, keywords = []) {
+  const topics = keywords.length ? Array.from(/* @__PURE__ */ new Set([...keywords, ...searchTopics])) : searchTopics;
+  const variants = [" \uACF5\uC2DD\uBAB0", " \uBE0C\uB79C\uB4DC \uACF5\uC2DD\uBAB0 \uC774\uBA54\uC77C", " \uC81C\uC870\uC0AC \uD648\uD398\uC774\uC9C0", " \uC2DD\uD488 \uD68C\uC0AC\uC18C\uAC1C", " \uB3C4\uB9E4 \uACF5\uAE09 \uACF5\uC2DD \uD648\uD398\uC774\uC9C0", " \uACE0\uAC1D\uC13C\uD130 \uC774\uBA54\uC77C"];
+  const dayIndex = Math.floor((Date.now() + 9 * 36e5) / 864e5);
+  return topics[cursor % topics.length] + variants[(dayIndex + Math.floor(cursor / topics.length)) % variants.length];
+}
+function searchUrl(engine, q) {
+  if (engine === "Google") return "https://www.google.com/search?" + new URLSearchParams({ q, hl: "ko", num: "10" });
+  if (engine === "Naver") return "https://search.naver.com/search.naver?" + new URLSearchParams({ query: q, where: "webkr" });
+  if (engine === "Bing") return "https://www.bing.com/search?" + new URLSearchParams({ q, format: "rss", setlang: "ko" });
+  return "https://html.duckduckgo.com/html/?" + new URLSearchParams({ q, kl: "kr-kr" });
+}
+function destination(raw, source) {
+  let u = new URL(decodeHtml(raw), source);
+  if (/(^|\.)google\./.test(u.hostname) && u.pathname === "/url") u = new URL(u.searchParams.get("q") || u.searchParams.get("url") || "");
+  if (/(^|\.)duckduckgo\.com$/.test(u.hostname) && u.searchParams.has("uddg")) u = new URL(u.searchParams.get("uddg"));
+  u = publicUrl(u.toString());
+  if (excluded.test(u.hostname) || marketplace(u.toString()) || /\.(go\.kr|gov|edu|ac\.kr)$/.test(u.hostname)) throw Error("\uBAA9\uB85D\xB7\uD50C\uB7AB\uD3FC \uC81C\uC678");
+  return u;
+}
+function searchResults(html, source, query2) {
+  if (/unusual traffic|anomaly-modal|<title[^>]*>[^<]*(?:captcha|보안 확인|자동입력)|id=["'](?:captcha|challenge-form)["']/i.test(html)) throw Error("\uAC80\uC0C9 \uC81C\uACF5\uC790 \uBCF4\uC548 \uD655\uC778 \xB7 \uC6B0\uD68C\uD558\uC9C0 \uC54A\uC74C");
+  const rows = [], hosts = /* @__PURE__ */ new Set();
+  const add = (href, title) => {
+    try {
+      const u = destination(href, source), host = u.hostname.replace(/^www\./, "");
+      const text2 = plainHtml(title).replace(/새\s*창\s*열림/g, "").replace(/(?:https?:\/\/)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/[^\s]*)?/gi, "").replace(/›.*$/, "").replace(/\s+/g, " ").trim();
+      if (text2.length < 2 || hosts.has(host) || /개인정보|이용약관|로그인|회원가입|뉴스|신문|블로그|리뷰|후기|백과|채용/.test(text2)) return;
+      const name = text2.split(/\s+[|｜–—]\s+|\s+-\s+/)[0].replace(/공식\s*(쇼핑몰|홈페이지|온라인몰|스토어|사이트|몰)|홈페이지|바로가기/g, "").trim().slice(0, 100);
+      if (name.length < 2) return;
+      hosts.add(host);
+      rows.push({ name, website: u.origin + "/", source, searchResultUrl: u.toString(), searchQuery: query2, industry: "food candidate" });
+    } catch {
+    }
+  };
+  for (const m of html.matchAll(/<item\b[^>]*>([\s\S]*?)<\/item>/gi)) {
+    const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(m[1])?.[1] || "";
+    const link = /<link[^>]*>([\s\S]*?)<\/link>/i.exec(m[1])?.[1] || "";
+    add(link.replace(/<!\[CDATA\[|\]\]>/g, ""), title.replace(/<!\[CDATA\[|\]\]>/g, ""));
+  }
+  for (const m of html.matchAll(/<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) add(m[1], m[2]);
+  return rows.slice(0, 15);
+}
+
 // supabase/functions/_shared/discovery-sources.ts
 var excludedHosts = /(^|\.)(google|bing|naver|coupang|facebook|instagram|youtube|kakao|twitter|wikimedia|wikipedia|wikidata|w3|adobe|microsoft)\.(com|co\.kr|org|net)$/i;
 function sourceProspects(rows, known, date) {
@@ -176,7 +224,7 @@ function sourceProspects(rows, known, date) {
     if (names.has(identity) || hosts.has(host)) continue;
     names.add(identity);
     hosts.add(host);
-    out.push({ identity, data: { name, website: url2.toString(), source: r.source, sourceEntity: r.entity || "", channel: "\uACF5\uAC1C \uAE30\uC5C5 \uB370\uC774\uD130\xB7\uD611\uD68C \uBAA9\uB85D \xB7 \uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804", company: "", product: "", contacts: [], checked: date, officialVerified: false, classification: "\uBBF8\uD655\uC778", authority: "\uBBF8\uD655\uC778", researchNote: "\uC678\uBD80 \uBAA9\uB85D\uC5D0 \uAC8C\uC2DC\uB41C \uC2DD\uD488\xB7\uAC74\uAC15 \uAD00\uB828 \uC5C5\uCCB4 \uD6C4\uBCF4\uC785\uB2C8\uB2E4. \uD648\uD398\uC774\uC9C0\xB7\uC774\uBA54\uC77C\xB7\uBC95\uC778 \uC18C\uC720\xB7\uC0C1\uD488 \uBD84\uB958\uB294 \uC6D0\uBB38 \uD655\uC778 \uD6C4 \uBCC4\uB3C4 \uAC80\uD1A0\uD569\uB2C8\uB2E4." } });
+    out.push({ identity, data: { name, website: url2.toString(), source: r.source, sourceEntity: r.entity || "", searchQuery: r.searchQuery || "", searchResultUrl: r.searchResultUrl || "", channel: r.searchQuery ? "\uACF5\uAC1C \uAC80\uC0C9 \xB7 \uD648\uD398\uC774\uC9C0\xB7\uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804" : "\uACF5\uAC1C \uAE30\uC5C5 \uB370\uC774\uD130\xB7\uD611\uD68C \uBAA9\uB85D \xB7 \uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804", company: "", product: "", contacts: [], checked: date, officialVerified: false, classification: "\uBBF8\uD655\uC778", authority: "\uBBF8\uD655\uC778", researchNote: "\uC678\uBD80 \uBAA9\uB85D\uC5D0 \uAC8C\uC2DC\uB41C \uC2DD\uD488\xB7\uAC74\uAC15 \uAD00\uB828 \uC5C5\uCCB4 \uD6C4\uBCF4\uC785\uB2C8\uB2E4. \uD648\uD398\uC774\uC9C0\xB7\uC774\uBA54\uC77C\xB7\uBC95\uC778 \uC18C\uC720\xB7\uC0C1\uD488 \uBD84\uB958\uB294 \uC6D0\uBB38 \uD655\uC778 \uD6C4 \uBCC4\uB3C4 \uAC80\uD1A0\uD569\uB2C8\uB2E4." } });
   }
   return out;
 }
@@ -392,6 +440,55 @@ function discoveryService(deps) {
     await audit2(u, "daily_discovery_sources_refreshed", { day: state.day, added, status: state.status });
     return { status: "sources_refreshed", added, message: added ? "\uC911\uBCF5 \uC81C\uC678 \uC2E0\uADDC \uD648\uD398\uC774\uC9C0 \uD6C4\uBCF4 " + added + "\uACF3 \uCD94\uAC00" : "\uC678\uBD80 \uBAA9\uB85D \uD655\uC778 \uC644\uB8CC \xB7 \uC2E0\uADDC \uD6C4\uBCF4 \uC5C6\uC74C", sources };
   }
+  async function refillSearch(u) {
+    const lease = await query2(sb2.rpc("sanji_claim_search_sources", { p_owner: u }));
+    if (!lease) return null;
+    const cfg = await config(u), known = await query2(sb2.from("sanji_discovery_leads").select("identity,data").eq("owner", u));
+    const sources = [], found = [];
+    const checked = (/* @__PURE__ */ new Date()).toISOString();
+    for (let offset = 0; offset < 2; offset++) {
+      const cursor = Number(lease.cursor || 0) + offset, q = searchQuery(cursor, cfg.keywords || []);
+      for (let n = 0; n < searchEngines.length; n++) {
+        const engine = searchEngines[(cursor + n) % searchEngines.length], url2 = searchUrl(engine, q);
+        try {
+          const r = await fetch(url2, { headers: { Accept: "text/html,application/rss+xml,application/xml", "User-Agent": "SanjiResearch/1.0 (public business discovery; no authentication bypass)" }, signal: AbortSignal.timeout(4500) });
+          if (!r.ok) {
+            await r.body?.cancel();
+            throw Error("\uAC80\uC0C9 HTTP " + r.status);
+          }
+          const reader = r.body?.getReader();
+          if (!reader) throw Error("\uBE48 \uAC80\uC0C9 \uACB0\uACFC");
+          let text2 = "", size = 0;
+          const decoder = new TextDecoder();
+          while (true) {
+            const b = await reader.read();
+            if (b.done) break;
+            size += b.value.length;
+            if (size > 18e5) {
+              await reader.cancel();
+              throw Error("\uAC80\uC0C9 \uD398\uC774\uC9C0 \uD06C\uAE30 \uC81C\uD55C");
+            }
+            text2 += decoder.decode(b.value, { stream: true });
+          }
+          text2 += decoder.decode();
+          const rows2 = searchResults(text2, url2, q);
+          sources.push({ engine, query: q, count: rows2.length, ok: rows2.length > 0, checked, diagnostics: { title: /<title[^>]*>([^<]*)/i.exec(text2)?.[1]?.slice(0, 150), bytes: size, anchors: (text2.match(/<a\b/gi) || []).length, items: (text2.match(/<item\b/gi) || []).length } });
+          if (rows2.length) {
+            found.push(...rows2);
+            break;
+          }
+        } catch (e) {
+          sources.push({ engine, query: q, ok: false, error: String(e.message).slice(0, 200), checked });
+        }
+      }
+    }
+    const rows = sourceProspects(found, known, checked).map((row) => ({ ...row, owner: u }));
+    const added = rows.length ? Number(await query2(sb2.rpc("sanji_enqueue_discovery_sources", { p_owner: u, p_rows: rows }))) : 0;
+    const state = { ...lease, status: added ? "replenished" : "no_new_results", added, checked, leaseUntil: null, sources };
+    await query2(sb2.from("sanji_discovery_config").update({ search_state: state }).eq("owner", u));
+    await audit2(u, "discovery_search_refilled", { queries: 2, added, sources });
+    return { status: "search_refilled", added, sources };
+  }
   async function cycle(u) {
     const settings = await config(u);
     let pending = await query2(sb2.from("sanji_discovery_leads").select("*").eq("owner", u).eq("status", "new").order("created").limit(1));
@@ -461,7 +558,9 @@ function discoveryService(deps) {
     if (input.task === "enrich" && typeof input.leadId === "string") return await enrich(rows[0].owner, input.leadId);
     await sb2.from("sanji_discovery_config").update({ updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", rows[0].owner);
     const refreshed = await refreshSources(rows[0].owner);
-    if (refreshed) return refreshed;
+    if (refreshed?.added) return refreshed;
+    const searched = await refillSearch(rows[0].owner);
+    if (searched) return searched;
     return await cycle(rows[0].owner);
   }
   async function handle(path, method, u, input) {
@@ -474,9 +573,9 @@ function discoveryService(deps) {
       const pending = leads.filter((l) => l.status === "new");
       const active = !!usage?.lease_until && Date.parse(usage.lease_until) > Date.now();
       const status = !settings.enabled ? "paused" : (today.companies || 0) >= settings.target ? "target_reached" : today.calls >= 240 ? "daily_limit" : !pending.length ? "sources_exhausted" : active ? "running" : "queued";
-      const labels = { paused: "\uC790\uB3D9 \uC218\uC9D1 \uAEBC\uC9D0", target_reached: "\uC624\uB298 \uC2E0\uADDC \uC5C5\uCCB4 \uBAA9\uD45C \uB3C4\uB2EC", daily_limit: "\uC624\uB298 \uC2E4\uD589 \uD55C\uB3C4 \uB3C4\uB2EC", sources_exhausted: "\uB300\uAE30\uC5F4 \uC18C\uC9C4 \xB7 \uC2E0\uADDC \uC18C\uC2A4 \uBCF4\uAC15 \uD544\uC694", running: "\uD648\uD398\uC774\uC9C0 \uACF5\uAC1C \uC774\uBA54\uC77C \uD655\uC778 \uC911", queued: "\uD648\uD398\uC774\uC9C0 \uD6C4\uBCF4 \uC21C\uCC28 \uC218\uC9D1 \uB300\uAE30 \xB7 5\uBD84 \uAC04\uACA9" };
+      const labels = { paused: "\uC790\uB3D9 \uC218\uC9D1 \uAEBC\uC9D0", target_reached: "\uC624\uB298 \uC2E0\uADDC \uC5C5\uCCB4 \uBAA9\uD45C \uB3C4\uB2EC", daily_limit: "\uC624\uB298 \uC2E4\uD589 \uD55C\uB3C4 \uB3C4\uB2EC", sources_exhausted: settings.enabled ? "\uD6C4\uBCF4 \uB300\uAE30\uC5F4 \uC18C\uC9C4 \xB7 \uAC80\uC0C9 \uBCF4\uCDA9 \uB300\uAE30" : "\uB300\uAE30\uC5F4 \uC18C\uC9C4 \xB7 \uC2E0\uADDC \uC18C\uC2A4 \uBCF4\uAC15 \uD544\uC694", running: "\uD648\uD398\uC774\uC9C0 \uACF5\uAC1C \uC774\uBA54\uC77C \uD655\uC778 \uC911", queued: "\uD648\uD398\uC774\uC9C0 \uD6C4\uBCF4 \uC21C\uCC28 \uC218\uC9D1 \uB300\uAE30 \xB7 5\uBD84 \uAC04\uACA9" };
       const activity = leads.filter((l) => l.status !== "new").sort((a, b2) => Date.parse(b2.updated) - Date.parse(a.updated)).slice(0, 12).map((l) => ({ id: l.id, name: l.data.name, checked: l.data.checked || l.updated, emailCount: l.data.contacts?.length || 0, pages: l.data.pages || 0, error: l.data.error || "" }));
-      return { settings, leads, usage: today, history, configured: false, engine: { status, label: labels[status], pending: pending.length, current: active ? pending[0]?.data.name || "" : "", heartbeat: settings.updated, lastCompleted: activity[0]?.checked || null, mode: "public_sources_and_homepages", refreshAt: "00:00", timezone: "Asia/Seoul", sourceState: settings.source_state || {}, nextRun: settings.enabled && pending.length && (today.companies || 0) < settings.target && today.calls < 240 ? new Date(Math.ceil((Date.now() + 1e3) / 3e5) * 3e5).toISOString() : null }, activity, scope: "\uD55C\uAD6D\uC2DC\uAC04 \uC624\uB298 \xB7 \uC774\uBA54\uC77C \uD655\uBCF4 \uC2E0\uADDC \uC5C5\uCCB4 / \uC774\uBA54\uC77C \uC8FC\uC18C \uC218 \uBCC4\uB3C4 \xB7 \uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804", llmCalls: 0 };
+      return { settings, leads, usage: today, history, configured: false, engine: { status, label: labels[status], pending: pending.length, current: active ? pending[0]?.data.name || "" : "", heartbeat: settings.updated, lastCompleted: activity[0]?.checked || null, mode: "public_sources_and_homepages", refreshAt: "00:00", timezone: "Asia/Seoul", sourceState: settings.source_state || {}, searchState: settings.search_state || {}, nextRun: settings.enabled && pending.length && (today.companies || 0) < settings.target && today.calls < 240 ? new Date(Math.ceil((Date.now() + 1e3) / 3e5) * 3e5).toISOString() : null }, activity, scope: "\uD55C\uAD6D\uC2DC\uAC04 \uC624\uB298 \xB7 \uC774\uBA54\uC77C \uD655\uBCF4 \uC2E0\uADDC \uC5C5\uCCB4 / \uC774\uBA54\uC77C \uC8FC\uC18C \uC218 \uBCC4\uB3C4 \xB7 \uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804", llmCalls: 0 };
     }
     const b = await input();
     if (path === "/discovery/refresh" && method === "POST") return await refreshSources(u) || { status: "already_checked", message: "\uC624\uB298 \uC678\uBD80 \uBAA9\uB85D\uC744 \uD655\uC778\uD588\uC2B5\uB2C8\uB2E4. \uB9E4\uC77C \uD55C\uAD6D\uC2DC\uAC04 00:00\uC5D0 \uC0C8 \uD6C4\uBCF4\uB97C \uD655\uC778\uD569\uB2C8\uB2E4." };

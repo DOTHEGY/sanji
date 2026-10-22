@@ -11,7 +11,7 @@ export function sourceProspects(rows:any[],known:any[],date:string){
   const aliases:any={"한국야쿠르트":"hy","에이치와이":"hy","sempiofoodscompany":"샘표"};
   const identity=aliases[companyIdentity(name)]||companyIdentity(name);if(names.has(identity)||hosts.has(host))continue;
   names.add(identity);hosts.add(host);
-  out.push({identity,data:{name,website:url.toString(),source:r.source,sourceEntity:r.entity||"",channel:"공개 기업 데이터·협회 목록 · 소유 관계 검토 전",company:"",product:"",contacts:[],checked:date,officialVerified:false,classification:"미확인",authority:"미확인",researchNote:"외부 목록에 게시된 식품·건강 관련 업체 후보입니다. 홈페이지·이메일·법인 소유·상품 분류는 원문 확인 후 별도 검토합니다."}});
+  out.push({identity,data:{name,website:url.toString(),source:r.source,sourceEntity:r.entity||"",searchQuery:r.searchQuery||"",searchResultUrl:r.searchResultUrl||"",channel:r.searchQuery?"공개 검색 · 홈페이지·소유 관계 검토 전":"공개 기업 데이터·협회 목록 · 소유 관계 검토 전",company:"",product:"",contacts:[],checked:date,officialVerified:false,classification:"미확인",authority:"미확인",researchNote:"외부 목록에 게시된 식품·건강 관련 업체 후보입니다. 홈페이지·이메일·법인 소유·상품 분류는 원문 확인 후 별도 검토합니다."}});
  }
  return out;
 }

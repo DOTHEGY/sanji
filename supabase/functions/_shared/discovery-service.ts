@@ -1,3 +1,4 @@
+import { searchEngines, searchQuery, searchUrl, searchResults } from "./discovery-search.ts";
 import { sourceProspects, directoryLinks, directoryRoots, publicCompanyQuery } from "./discovery-sources.ts";
 import { leadOutreach } from "./mail-template.ts";
 import { mailRecipients } from "./mail-recipients.ts";
@@ -105,6 +106,32 @@ export function discoveryService(deps:any){
   await audit(u,"daily_discovery_sources_refreshed",{day:state.day,added,status:state.status});
   return {status:"sources_refreshed",added,message:added?"중복 제외 신규 홈페이지 후보 "+added+"곳 추가":"외부 목록 확인 완료 · 신규 후보 없음",sources};
  }
+ async function refillSearch(u:string){
+  const lease=await query(sb.rpc("sanji_claim_search_sources",{p_owner:u}));if(!lease)return null;
+  const cfg=await config(u),known=await query(sb.from("sanji_discovery_leads").select("identity,data").eq("owner",u));
+  const sources:any[]=[],found:any[]=[];const checked=new Date().toISOString();
+  // Two distinct queries per lease, paced by SQL. Try another public search engine on denial/empty HTML.
+  for(let offset=0;offset<2;offset++){
+   const cursor=Number(lease.cursor||0)+offset,q=searchQuery(cursor,cfg.keywords||[]);
+   for(let n=0;n<searchEngines.length;n++){
+    const engine=searchEngines[(cursor+n)%searchEngines.length],url=searchUrl(engine,q);
+    try{
+     const r=await fetch(url,{headers:{Accept:"text/html,application/rss+xml,application/xml","User-Agent":"SanjiResearch/1.0 (public business discovery; no authentication bypass)"},signal:AbortSignal.timeout(4500)});
+     if(!r.ok){await r.body?.cancel();throw Error("검색 HTTP "+r.status);}
+     const reader=r.body?.getReader();if(!reader)throw Error("빈 검색 결과");let text="",size=0;const decoder=new TextDecoder();
+     while(true){const b=await reader.read();if(b.done)break;size+=b.value.length;if(size>1800000){await reader.cancel();throw Error("검색 페이지 크기 제한");}text+=decoder.decode(b.value,{stream:true});}text+=decoder.decode();
+     const rows=searchResults(text,url,q);sources.push({engine,query:q,count:rows.length,ok:rows.length>0,checked,diagnostics:{title:/<title[^>]*>([^<]*)/i.exec(text)?.[1]?.slice(0,150),bytes:size,anchors:(text.match(/<a\b/gi)||[]).length,items:(text.match(/<item\b/gi)||[]).length}});
+     if(rows.length){found.push(...rows);break;}
+    }catch(e){sources.push({engine,query:q,ok:false,error:String(e.message).slice(0,200),checked});}
+   }
+  }
+  const rows=sourceProspects(found,known,checked).map(row=>({...row,owner:u}));
+  const added=rows.length?Number(await query(sb.rpc("sanji_enqueue_discovery_sources",{p_owner:u,p_rows:rows}))):0;
+  const state={...lease,status:added?"replenished":"no_new_results",added,checked,leaseUntil:null,sources};
+  await query(sb.from("sanji_discovery_config").update({search_state:state}).eq("owner",u));
+  await audit(u,"discovery_search_refilled",{queries:2,added,sources});
+  return {status:"search_refilled",added,sources};
+ }
  async function cycle(u:string){
   const settings=await config(u);
   let pending=await query(sb.from("sanji_discovery_leads").select("*").eq("owner",u).eq("status","new").order("created").limit(1));
@@ -157,7 +184,8 @@ export function discoveryService(deps:any){
   if(!rows.length)return {status:"disabled",message:"자동 발굴이 꺼져 있습니다."};
   if(input.task==="enrich"&&typeof input.leadId==="string")return await enrich(rows[0].owner,input.leadId);
   await sb.from("sanji_discovery_config").update({updated:new Date().toISOString()}).eq("owner",rows[0].owner);
-  const refreshed=await refreshSources(rows[0].owner);if(refreshed)return refreshed;
+  const refreshed=await refreshSources(rows[0].owner);if(refreshed?.added)return refreshed;
+  const searched=await refillSearch(rows[0].owner);if(searched)return searched;
   return await cycle(rows[0].owner);
  }
  async function handle(path:string,method:string,u:string,input:any){
@@ -170,9 +198,9 @@ export function discoveryService(deps:any){
    const pending=leads.filter((l:any)=>l.status==="new");
    const active=!!usage?.lease_until&&Date.parse(usage.lease_until)>Date.now();
    const status=!settings.enabled?"paused":(today.companies||0)>=settings.target?"target_reached":today.calls>=240?"daily_limit":!pending.length?"sources_exhausted":active?"running":"queued";
-   const labels:any={paused:"자동 수집 꺼짐",target_reached:"오늘 신규 업체 목표 도달",daily_limit:"오늘 실행 한도 도달",sources_exhausted:"대기열 소진 · 신규 소스 보강 필요",running:"홈페이지 공개 이메일 확인 중",queued:"홈페이지 후보 순차 수집 대기 · 5분 간격"};
+   const labels:any={paused:"자동 수집 꺼짐",target_reached:"오늘 신규 업체 목표 도달",daily_limit:"오늘 실행 한도 도달",sources_exhausted:settings.enabled?"후보 대기열 소진 · 검색 보충 대기":"대기열 소진 · 신규 소스 보강 필요",running:"홈페이지 공개 이메일 확인 중",queued:"홈페이지 후보 순차 수집 대기 · 5분 간격"};
    const activity=leads.filter((l:any)=>l.status!=="new").sort((a:any,b:any)=>Date.parse(b.updated)-Date.parse(a.updated)).slice(0,12).map((l:any)=>({id:l.id,name:l.data.name,checked:l.data.checked||l.updated,emailCount:l.data.contacts?.length||0,pages:l.data.pages||0,error:l.data.error||""}));
-   return {settings,leads,usage:today,history,configured:false,engine:{status,label:labels[status],pending:pending.length,current:active?pending[0]?.data.name||"":"",heartbeat:settings.updated,lastCompleted:activity[0]?.checked||null,mode:"public_sources_and_homepages",refreshAt:"00:00",timezone:"Asia/Seoul",sourceState:settings.source_state||{},nextRun:settings.enabled&&pending.length&&(today.companies||0)<settings.target&&today.calls<240?new Date(Math.ceil((Date.now()+1000)/300000)*300000).toISOString():null},activity,scope:"한국시간 오늘 · 이메일 확보 신규 업체 / 이메일 주소 수 별도 · 소유 관계 검토 전",llmCalls:0};
+   return {settings,leads,usage:today,history,configured:false,engine:{status,label:labels[status],pending:pending.length,current:active?pending[0]?.data.name||"":"",heartbeat:settings.updated,lastCompleted:activity[0]?.checked||null,mode:"public_sources_and_homepages",refreshAt:"00:00",timezone:"Asia/Seoul",sourceState:settings.source_state||{},searchState:settings.search_state||{},nextRun:settings.enabled&&pending.length&&(today.companies||0)<settings.target&&today.calls<240?new Date(Math.ceil((Date.now()+1000)/300000)*300000).toISOString():null},activity,scope:"한국시간 오늘 · 이메일 확보 신규 업체 / 이메일 주소 수 별도 · 소유 관계 검토 전",llmCalls:0};
   }
   const b=await input();
   if(path==="/discovery/refresh"&&method==="POST")return await refreshSources(u)||{status:"already_checked",message:"오늘 외부 목록을 확인했습니다. 매일 한국시간 00:00에 새 후보를 확인합니다."};

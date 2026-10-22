@@ -1021,3 +1021,57 @@ test("Brand list shows yesterday and today acquisition counts and filters the ac
  await page.goto('http://127.0.0.1:'+server.address().port+'/app/#settings');await page.waitForSelector('#settings-form');assert.equal(await page.locator('[name=dailyLimit]').count(),0);
  }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
 });
+
+test("Public search parses provider links without treating snippets or platform mail as official contacts",()=>{
+ const compiled=esbuild.buildSync({entryPoints:["supabase/functions/_shared/discovery-search.ts"],bundle:true,platform:"node",format:"cjs",write:false});const m={exports:{}};new Function("module","exports",compiled.outputFiles[0].text)(m,m.exports);
+ const {searchResults,searchQuery,searchUrl}=m.exports;
+ const rows=searchResults('<a href="/url?q=https%3A%2F%2Fbrand.co.kr%2Fshop"><h3>브랜드 공식몰</h3></a><a href="https://brand.co.kr/other">브랜드 중복</a><a href="https://smartstore.naver.com/brand">입점 브랜드</a><a href="https://news.naver.com/">건강식품 뉴스</a><a href="https://www.navercorp.com/">© NAVER Corp. 새 창 열림</a><a href="https://empty-brand.co.kr/">새 창 열림</a>snippet@brand.co.kr',searchUrl("Google","유산균"),"유산균");
+ assert.equal(rows.length,1);assert.equal(rows[0].website,"https://brand.co.kr/");assert.equal(rows[0].name,"브랜드");assert.equal(rows[0].searchQuery,"유산균");assert.equal(rows[0].contacts,undefined);
+ const rss=searchResults('<rss><channel><item><title>뉴브랜드 - 공식몰</title><link>https://newbrand.co.kr/</link></item></channel></rss>',searchUrl("Bing","홍삼"),"홍삼");assert.equal(rss[0].name,"뉴브랜드");
+ assert.throws(()=>searchResults("unusual traffic captcha","https://www.google.com/","q"),/우회하지/);
+ assert.notEqual(searchQuery(0),searchQuery(1));assert.notEqual(searchUrl("Google","한글"),searchUrl("Naver","한글"));
+});
+
+test("Search replenishment rotates engines after denial and queues new sites with query provenance",async()=>{
+ const compiled=esbuild.buildSync({entryPoints:["supabase/functions/_shared/discovery-service.ts"],bundle:true,platform:"node",format:"cjs",write:false});const m={exports:{}};new Function("module","exports",compiled.outputFiles[0].text)(m,m.exports);
+ let state={},queued=[],fetches=[];const oldFetch=global.fetch;
+ const config={enabled:true,target:40,keywords:[],source_state:{}};
+ class Q{constructor(t){this.t=t;}select(fields){this.fields=fields;return this;}eq(){return this;}lt(){return this;}order(){return this;}limit(){return this;}maybeSingle(){return this;}update(v){this.v=v;return this;}delete(){return this;}then(ok,bad){let data=this.t==="sanji_discovery_config"?(this.v?(Object.assign(config,this.v),config):(this.fields==="owner"?[{owner:"owner"}]:config)):[];if(this.v?.search_state)state=this.v.search_state;return Promise.resolve({data,error:null}).then(ok,bad);}}
+ const sb={from:t=>new Q(t),rpc:(name,args)=>({name,args})};
+ const query=async q=>{if(q instanceof Q){const r=await q;return r.data;}if(q.name==="sanji_claim_daily_sources")return false;if(q.name==="sanji_claim_search_sources")return {cursor:0,queries:2,day:"2026-10-22"};if(q.name==="sanji_enqueue_discovery_sources"){queued=q.args.p_rows;return queued.length;}return [];};
+ global.fetch=async u=>{fetches.push(String(u));if(String(u).includes("google.com"))return new Response("denied",{status:429});return new Response('<a href="https://brand.co.kr/">브랜드 공식몰</a>',{headers:{"content-type":"text/html"}});};
+ try{const service=m.exports.discoveryService({sb,query,audit:async()=>{},putRecord:async()=>{}});const r=await service.scheduled();assert.equal(r.added,1);assert.equal(state.queries,2);assert.equal(state.status,"replenished");assert.ok(fetches.some(u=>u.includes("naver.com")));assert.ok(queued[0].data.searchQuery);assert.equal(queued[0].data.contacts.length,0);}finally{global.fetch=oldFetch;}
+});
+
+test("Bulk email selects and approves two companies once, sends approved hashes and never resends on a second click",async()=>{
+ const express=require("express"),app=express();app.use(express.json());
+ const leads=["a","b"].map(id=>({id,data:{name:"브랜드"+id,contacts:[{email:id+"@brand.test",source:"https://"+id+".brand.test"}],outreach:{subject:"협업 "+id,body:"개인화 "+id+"\n공통 본문",signature:"서명",brandName:"브랜드"+id,productName:"제품"+id}}}));
+ const state={candidates:[],deals:[],templates:[],threads:[],outbox:[],jobs:[],suppression:[],settings:{senderAddress:"주소"}};const sent=[];
+ app.all(/^\/api\/.*/,(req,res)=>{const p=req.path.replace("/api","");
+ if(p==="/me")return res.json({email:"owner@example.test",csrf:"test"});if(p==="/state")return res.json(state);if(p==="/connections")return res.json({gmail:{connected:true,enabled:true},instagram:{},ai:{}});
+ if(p==="/discovery")return res.json({settings:{enabled:true,target:40,keywords:[]},leads,usage:{emails:2},activity:[]});
+ if(p==="/discovery/outreach")return res.json({ok:true});if(p==="/discovery/prepare-contact")return res.json({candidateId:req.body.id});
+ if(p==="/drafts"){const id=req.body.target;return res.json({id,hash:"hash-"+id,target:id,email:id+"@brand.test",subject:req.body.subject,body:req.body.body,attachments:[]});}
+ if(/^\/drafts\/[^/]+\/send$/.test(p)){sent.push({path:p,...req.body});return res.json({note:"Gmail 서버 접수"});}res.status(404).json({error:"unknown"});});
+ app.use("/app",express.static("private/ui"));const server=app.listen(0,"127.0.0.1");let browser;
+ try{browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||"/usr/bin/chromium",args:["--no-sandbox"]});const page=await browser.newPage();await page.goto("http://127.0.0.1:"+server.address().port+"/app/#brands");
+ await page.locator('[data-action="mail-select-all"]').click();assert.equal(await page.locator('[data-mail-select]:checked').count(),2);await page.locator('[data-action="mail-review-selected"]').click();
+ await page.locator('[data-action="mail-ownership-all"]').click();assert.equal(await page.locator('[name=ownership]:checked').count(),2);await page.locator('[name=lawfulBasis]').fill("협업 제안 발송 근거 확인");await page.locator('#mail-review-form button[type=submit]').click();await page.waitForSelector('#mail-approve-all');assert.equal(sent.length,0);
+ await page.locator('[data-action="mail-send-all"]').click();assert.equal(sent.length,0);await page.locator('#mail-approve-all').check();assert.equal(await page.locator('[name=bulk-approve]:checked').count(),2);
+ await page.locator('[data-action="mail-send-all"]').click();await page.waitForFunction(()=>document.querySelector('#bulk-result-1').textContent.includes('Gmail 서버 접수')&&!document.querySelector('[data-action=mail-send-all]').disabled);assert.equal(sent.length,2);assert.ok(sent.every(x=>x.approved&&x.hash==="hash-"+x.path.split("/")[2]));
+ await page.locator('[data-action="mail-send-all"]').click();assert.equal(sent.length,2);
+ }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
+});
+
+test("Search refill lease enforces owner, cooldown, target and daily budget while allowing more searches after an empty queue",async()=>{
+ const db=await database();try{
+ await db.exec(fs.readFileSync('supabase/migrations/202610210003_discovery.sql','utf8'));await db.exec(fs.readFileSync('supabase/migrations/202610220001_mail_refresh.sql','utf8'));await db.exec(fs.readFileSync('supabase/migrations/202610220003_search_refill.sql','utf8'));
+ await db.query('insert into auth.users(id,email) values($1,$2)',[u1,'owner@example.test']);await db.query('insert into sanji_members(user_id) values($1)',[u1]);await db.query('insert into sanji_discovery_config(owner,enabled,target) values($1,true,40)',[u1]);
+ const claim=async()=>(await db.query('select sanji_claim_search_sources($1) s',[u1])).rows[0].s;
+ assert.equal((await claim()).queries,2);assert.equal(await claim(),null);
+ await db.query("update sanji_discovery_config set search_state=jsonb_set(jsonb_set(search_state,'{leaseUntil}','null'),'{checked}',to_jsonb((now()-interval '16 minutes')::text))");assert.equal((await claim()).cursor,2);
+ await db.query("update sanji_discovery_config set search_state=jsonb_set(jsonb_set(jsonb_set(search_state,'{leaseUntil}','null'),'{checked}',to_jsonb((now()-interval '16 minutes')::text)),'{queries}','64')");assert.equal(await claim(),null);
+ await db.query("update sanji_discovery_config set search_state='{}'");await db.query("insert into sanji_discovery_usage(owner,day,companies) values($1,(now() at time zone 'Asia/Seoul')::date,40)",[u1]);assert.equal(await claim(),null);
+ await login(db,u1);await assert.rejects(()=>db.query('select sanji_claim_search_sources($1)',[u1]),/permission denied/);
+ }finally{await db.close();}
+});

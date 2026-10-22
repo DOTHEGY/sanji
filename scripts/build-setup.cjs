@@ -41,3 +41,5 @@ fs.copyFileSync("supabase/migrations/202610210003_discovery.sql", "public/setup/
 fs.copyFileSync("supabase/migrations/202610220001_mail_refresh.sql", "public/setup/mail-refresh.sql");
 
 fs.copyFileSync("supabase/migrations/202610220002_mail_operations.sql", "public/setup/mail-operations.sql");
+
+fs.copyFileSync("supabase/migrations/202610220003_search_refill.sql", "public/setup/search-refill.sql");
