@@ -30,3 +30,12 @@ test('topic search can retain a profile with an unavailable snippet without clai
  const rows=parse('<a href="https://www.instagram.com/public_recipe/">@public_recipe Instagram</a>robots.txt로 인해 정보를 수집할 수 없습니다.','https://search.naver.com/search.naver?query='+encodeURIComponent('site:instagram.com 공동구매 레시피'),['공동구매 레시피']);
  assert.equal(rows.length,1);assert.match(rows[0].reasons[0],/적합성은 미확인/);assert.equal(rows[0].engagement,undefined);
 });
+test('creator migration is repeatable; public roles cannot inspect private prospects',async()=>{
+ const {PGlite}=require('@electric-sql/pglite'),db=new PGlite();try{
+ await db.exec('create role anon;create role authenticated;create role service_role bypassrls;create schema auth;create table auth.users(id uuid primary key);');
+ const sql=fs.readFileSync('supabase/migrations/202610220007_creator_outreach.sql','utf8');await db.exec(sql);await db.exec(sql);
+ const owner='11111111-1111-4111-8111-111111111111';await db.query('insert into auth.users values($1)',[owner]);await db.query('insert into sanji_creator_config(owner) values($1)',[owner]);
+ assert.equal((await db.query('select enabled,auto_send,target from sanji_creator_config')).rows[0].auto_send,false);
+ for(const role of ['anon','authenticated']){await db.exec('set role '+role);await assert.rejects(()=>db.query('select * from sanji_creator_prospects'),/permission denied/);await db.exec('reset role');}
+ }finally{await db.close();}
+});
