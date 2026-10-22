@@ -1,3 +1,5 @@
+import { researchBrand } from "./brand-research.ts";
+import { discoveryHealth } from "./discovery-health.ts";
 import { searchEngines, searchQuery, searchUrl, searchResults } from "./discovery-search.ts";
 import { sourceProspects, directoryLinks, directoryRoots, publicCompanyQuery } from "./discovery-sources.ts";
 import { leadOutreach } from "./mail-template.ts";
@@ -61,7 +63,7 @@ export function discoveryService(deps:any){
   // Follow explicitly linked stores, including unquoted href and family-site option values.
   // A link is evidence of a relationship, never proof of legal ownership or permission to contact.
   const homeOrigin=new URL(first.source).origin,extraOrigins=new Set<string>();
-  const queue=[...first.links.filter((l:any)=>["shop","company"].includes(l.type)),...first.links.filter((l:any)=>!["shop","company"].includes(l.type))];
+  const queue=[...first.links.filter((l:any)=>["shop","company"].includes(l.type)),...first.links.filter((l:any)=>l.type==="product").slice(0,1),...first.links.filter((l:any)=>!["shop","company","product"].includes(l.type))];
   while(queue.length&&attempts.length<maxPages&&htmlBudget>0){
    const link:any=queue.shift();let next;try{next=publicUrl(link.url);}catch{continue;}
    if(visited.has(next.toString())||marketplace(next.toString())||/login|logout|signup|cart|order|privacy|recruit|terms/i.test(next.pathname))continue;
@@ -133,6 +135,7 @@ export function discoveryService(deps:any){
   return {status:"search_refilled",added,sources};
  }
  async function cycle(u:string){
+  const cycleStarted=Date.now();
   const settings=await config(u);
   let pending=await query(sb.from("sanji_discovery_leads").select("*").eq("owner",u).eq("status","new").order("created").limit(1));
   if(!pending.length)return {status:"sources_exhausted",message:"현재 홈페이지 후보 대기열을 모두 확인했습니다. 신규 소스 보강이 필요합니다. 수집 중으로 표시하지 않습니다."};
@@ -159,7 +162,7 @@ export function discoveryService(deps:any){
      emails=duplicate?0:data.contacts.filter((c:any)=>!known.has(c.email.toLowerCase())&&!priorContacts.some((p:any)=>p.email.toLowerCase()===c.email.toLowerCase())).length;
      companies=!duplicate&&!priorContacts.length&&emails>0?1:0;
      if(duplicate){data.duplicateNote="기존 업체와 이메일 중복 · 별도 신규 제안 차단";}
-     if(companies){data.firstEmailAt=data.firstEmailAt||new Date().toISOString();data.discoveredDay=day();const ts=await query(sb.from("sanji_records").select("id,data,version,updated").eq("owner",u).eq("kind","template").order("updated",{ascending:true}).limit(20));const t=ts.find((t:any)=>t.data.channel==="이메일");if(t)data.outreach=leadOutreach(t,data);}
+     if(companies){data.firstEmailAt=data.firstEmailAt||new Date().toISOString();data.discoveredDay=day();const ts=await query(sb.from("sanji_records").select("id,data,version,updated").eq("owner",u).eq("kind","template").order("updated",{ascending:true}).limit(20));const t=ts.find((t:any)=>t.data.channel==="이메일");if(t){const researched=researchBrand(data,t);data.outreach=researched.outreach;data.research=researched.research;}}
      data.error=crawled.error||"";
     }catch(e){data.error=String(e.message||"수집 실패").slice(0,400);error=data.error;data.contacts=data.contacts||[];data.checked=new Date().toISOString();}
     await query(sb.from("sanji_discovery_leads").update({data,status:duplicate?"blocked":"review",updated:new Date().toISOString()}).eq("owner",u).eq("id",lead.id));processed=1;
@@ -169,6 +172,7 @@ export function discoveryService(deps:any){
   finally{
    await query(sb.from("sanji_discovery_usage").update({added:usage.added+added,processed:usage.processed+processed,emails:usage.emails+emails,companies:(usage.companies||0)+companies,lease_until:null,last_error:error}).eq("owner",u).eq("day",usage.day));
    await sb.from("sanji_discovery_config").update({updated:new Date().toISOString()}).eq("owner",u);
+   await audit(u,"discovery_cycle_completed",{processed,emails,companies,error,durationMs:Date.now()-cycleStarted});
   }
  }
  async function enrich(u:string,id:string){
@@ -178,15 +182,64 @@ export function discoveryService(deps:any){
   await query(sb.from("sanji_discovery_leads").update({data:{...lead.data,publicEvidence:result.publicEvidence||[],evidenceError:result.error||"",evidenceChecked:new Date().toISOString()},updated:new Date().toISOString()}).eq("owner",u).eq("id",id));
   return {ok:true,pages:result.pages,evidenceCount:result.publicEvidence?.length||0,error:result.error||""};
  }
+ async function researchNext(u:string,requestedId=""){
+  const all=await query(sb.from("sanji_discovery_leads").select("*").eq("owner",u).order("updated").limit(500));
+  const lead=all.sort((a:any,b:any)=>Number(!a.data.outreach?.needsPersonalization&&!a.data.outreach?.sendBlockedReason)-Number(!b.data.outreach?.needsPersonalization&&!b.data.outreach?.sendBlockedReason)).find((l:any)=>(!requestedId||l.id===requestedId)&&l.data.contacts?.length&&(!l.data.research||l.data.outreach?.needsPersonalization||l.data.outreach?.sendBlockedReason||l.data.research?.ownership==="research_pending")&&Number(l.data.research?.attempts||0)<3&&(requestedId||Number(l.data.research?.attempts||0)===0||!l.data.research?.checked||Date.parse(l.data.research.checked)<Date.now()-6*3600000));
+  if(!lead)return null;
+  const data={...lead.data};let repaired=false;
+  if(data.outreach?.sendBlockedReason){
+   const target=String(data.outreach.sendBlockedReason).includes("종근당건강")?"종근당건강":data.name;
+   const url=searchUrl("Naver",target+" 건강식품 공식몰");
+   try{
+    const r=await fetch(url,{headers:{Accept:"text/html","User-Agent":"SanjiResearch/1.0"},signal:AbortSignal.timeout(7000)});
+    if(!r.ok)throw Error("업체 재검색 HTTP "+r.status);const html=await r.text();if(html.length>2000000)throw Error("검색 결과 크기 제한");
+    const rows=searchResults(html,url,target+" 건강식품 공식몰");data.researchLookup={query:target+" 건강식품 공식몰",checked:new Date().toISOString(),candidates:rows.slice(0,8).map((r:any)=>({name:r.name,website:r.website,source:r.source}))};
+    const candidate=rows.find((r:any)=>companyIdentity(r.name).includes(companyIdentity(target))&&new URL(r.website).origin!==new URL(data.website).origin);
+    if(candidate){const result=await crawl(candidate.website,2);const evidence=(result.publicEvidence||[]).map((p:any)=>p.title+" "+p.description+" "+p.excerpt).join(" ");
+     if(result.contacts?.length&&companyIdentity(evidence).includes(companyIdentity(target))&&/건강기능식품|건강식품/.test(evidence)){
+      data.previousContactResearch=[...(data.previousContactResearch||[]),{website:data.website,contacts:data.contacts,reason:data.outreach.sendBlockedReason,checked:new Date().toISOString()}];
+      Object.assign(data,result,{website:candidate.website,name:target});data.outreach={...data.outreach,brandName:target,companyName:target,intro:"",needsPersonalization:true,sendBlockedReason:""};repaired=true;
+     }
+    }
+   }catch(e){data.researchLookupError=String(e.message).slice(0,300);}
+  }else if((!data.publicEvidence?.some((p:any)=>p.products?.length)&&data.outreach?.needsPersonalization)||!data.publicEvidence?.some((p:any)=>{try{return new URL(p.url).origin===new URL(data.website).origin;}catch{return false;}})){
+   const result=await crawl(data.website,3);if(result.publicEvidence?.length)data.publicEvidence=Array.from(new Map([...(data.publicEvidence||[]),...result.publicEvidence].map((p:any)=>[p.url,p])).values());
+  }
+  const missing=(data.contacts||[]).map((c:any)=>c.source).filter((url:string)=>url&&!data.publicEvidence?.some((p:any)=>p.url===url));
+  for(const source of Array.from(new Set(missing)).slice(0,2)){
+   try{const result=await crawl(String(source),1);if(result.publicEvidence?.length)data.publicEvidence=Array.from(new Map([...(data.publicEvidence||[]),...result.publicEvidence].map((p:any)=>[p.url,p])).values());}catch{}
+  }
+  const ts=await query(sb.from("sanji_records").select("id,data,version,updated").eq("owner",u).eq("kind","template").order("updated").limit(20));
+  const t=ts.find((t:any)=>t.data.channel==="이메일"),result=researchBrand(data,t);
+  result.research.attempts=Number(data.research?.attempts||0)+1;
+  if(data.outreach?.sendBlockedReason){result.outreach.sendBlockedReason=data.outreach.sendBlockedReason;result.research.ownership="research_pending";result.research.reason=data.outreach.sendBlockedReason;}
+  const excluded=!!data.outreach?.sendBlockedReason&&result.research.attempts>=3;
+  if(excluded){result.research.status="excluded";result.research.reason="공식 홈페이지와 동명 식품 브랜드 재검색을 대조했지만 식품 제안 대상 회사·이메일 근거가 일치하지 않아 자동 제외했습니다.";}
+  await query(sb.from("sanji_discovery_leads").update({data:{...data,...result},...(excluded?{status:"blocked"}:{}),updated:new Date().toISOString()}).eq("owner",u).eq("id",lead.id));
+  await audit(u,"brand_researched",{lead:lead.id,ownership:result.research.ownership,personalized:!result.outreach.needsPersonalization,repaired});
+  return {status:"brand_researched",name:data.name,ownership:result.research.ownership,personalized:!result.outreach.needsPersonalization,reason:result.research.reason};
+ }
  async function scheduled(input:any={}){
   await sb.from("sanji_connections").delete().eq("provider","instagram_pending").lt("summary->>expires",String(Date.now()));
   const rows=await query(sb.from("sanji_discovery_config").select("owner").eq("enabled",true).order("updated").limit(1));
   if(!rows.length)return {status:"disabled",message:"자동 발굴이 꺼져 있습니다."};
-  if(input.task==="enrich"&&typeof input.leadId==="string")return await enrich(rows[0].owner,input.leadId);
-  await sb.from("sanji_discovery_config").update({updated:new Date().toISOString()}).eq("owner",rows[0].owner);
-  const refreshed=await refreshSources(rows[0].owner);if(refreshed?.added)return refreshed;
-  const searched=await refillSearch(rows[0].owner);if(searched)return searched;
-  return await cycle(rows[0].owner);
+  const owner=rows[0].owner,cfg=await config(owner),lastStarted=new Date().toISOString();
+  await query(sb.from("sanji_discovery_config").update({runtime:{...cfg.runtime,lastStarted,status:"running"},updated:lastStarted}).eq("owner",owner));
+  try{
+   let result;
+   if(input.task==="enrich"&&typeof input.leadId==="string")result=await enrich(owner,input.leadId);
+   else if(input.task==="research"&&typeof input.leadId==="string")result=await researchNext(owner,input.leadId)||{status:"research_wait"};
+   else {
+    const refreshed=await refreshSources(owner);
+    const searched=refreshed?.added?null:await refillSearch(owner);
+    // Research backlog every other tick; new-contact research also happens inside cycle().
+    const researched=(!refreshed?.added&&!searched&&Math.floor(Date.now()/300000)%2===0)?await researchNext(owner):null;
+    result=refreshed?.added?refreshed:searched||researched||await cycle(owner);
+   }
+   await query(sb.from("sanji_discovery_config").update({runtime:{lastStarted,lastFinished:new Date().toISOString(),status:"idle",result},updated:new Date().toISOString()}).eq("owner",owner));
+   return result;
+  }catch(e){await query(sb.from("sanji_discovery_config").update({runtime:{lastStarted,lastFinished:new Date().toISOString(),status:"failed",error:String(e.message).slice(0,400)}}).eq("owner",owner));throw e;}
+
  }
  async function handle(path:string,method:string,u:string,input:any){
   if(path==="/discovery"&&method==="GET"){
@@ -200,7 +253,7 @@ export function discoveryService(deps:any){
    const status=!settings.enabled?"paused":(today.companies||0)>=settings.target?"target_reached":today.calls>=240?"daily_limit":!pending.length?"sources_exhausted":active?"running":"queued";
    const labels:any={paused:"자동 수집 꺼짐",target_reached:"오늘 신규 업체 목표 도달",daily_limit:"오늘 실행 한도 도달",sources_exhausted:settings.enabled?"후보 대기열 소진 · 검색 보충 대기":"대기열 소진 · 신규 소스 보강 필요",running:"홈페이지 공개 이메일 확인 중",queued:"홈페이지 후보 순차 수집 대기 · 5분 간격"};
    const activity=leads.filter((l:any)=>l.status!=="new").sort((a:any,b:any)=>Date.parse(b.updated)-Date.parse(a.updated)).slice(0,12).map((l:any)=>({id:l.id,name:l.data.name,checked:l.data.checked||l.updated,emailCount:l.data.contacts?.length||0,pages:l.data.pages||0,error:l.data.error||""}));
-   return {settings,leads,usage:today,history,configured:false,engine:{status,label:labels[status],pending:pending.length,current:active?pending[0]?.data.name||"":"",heartbeat:settings.updated,lastCompleted:activity[0]?.checked||null,mode:"public_sources_and_homepages",refreshAt:"00:00",timezone:"Asia/Seoul",sourceState:settings.source_state||{},searchState:settings.search_state||{},nextRun:settings.enabled&&pending.length&&(today.companies||0)<settings.target&&today.calls<240?new Date(Math.ceil((Date.now()+1000)/300000)*300000).toISOString():null},activity,scope:"한국시간 오늘 · 이메일 확보 신규 업체 / 이메일 주소 수 별도 · 소유 관계 검토 전",llmCalls:0};
+   return {settings,leads,usage:today,history,health:discoveryHealth(settings,today,leads),configured:false,engine:{status,label:labels[status],pending:pending.length,current:active?pending[0]?.data.name||"":"",heartbeat:settings.updated,lastCompleted:activity[0]?.checked||null,mode:"public_sources_and_homepages",refreshAt:"00:00",timezone:"Asia/Seoul",sourceState:settings.source_state||{},searchState:settings.search_state||{},nextRun:settings.enabled&&pending.length&&(today.companies||0)<settings.target&&today.calls<240?new Date(Math.ceil((Date.now()+1000)/300000)*300000).toISOString():null},activity,scope:"한국시간 오늘 · 이메일 확보 신규 업체 / 이메일 주소 수 별도 · 소유 관계 검토 전",llmCalls:0};
   }
   const b=await input();
   if(path==="/discovery/refresh"&&method==="POST")return await refreshSources(u)||{status:"already_checked",message:"오늘 외부 목록을 확인했습니다. 매일 한국시간 00:00에 새 후보를 확인합니다."};

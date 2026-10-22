@@ -49,14 +49,20 @@ export function parseOfficialPage(html: string, source: string, checked: string)
     if(!value||/^(javascript:|mailto:|tel:|#)/i.test(value))continue;
     const shop=/공식몰|자사몰|온라인\s*쇼핑몰|온라인몰|브랜드몰|쇼핑몰|공식\s*(?:스토어|샵)|몰(?:$|[)）])/i.test(label);
     const company=/회사\s*소개|기업\s*소개|기업\s*홈페이지|회사\s*홈페이지|공식\s*(?:홈페이지|사이트|웹)|오피셜|official\s*(?:site|website)/i.test(label);
+    const productLink=/\/(?:product|goods)\/|[?&](?:product_no|goodsNo|goodsno)=/i.test(value);
     const contact=/제휴|입점|도매|공동구매|문의|고객센터|고객상담|contact|partner|business|회사\s*소개|about/i.test(label+" "+value);
-    if(!shop&&!contact&&!company)continue;
-    try{const url=publicUrl(new URL(value,source).toString()).toString();if(!marketplace(url))found.push({url,label,type:shop?"shop":company?"company":"contact",linkedFrom:source});}catch{}
+    if(!shop&&!contact&&!company&&!productLink)continue;
+    try{const url=publicUrl(new URL(value,source).toString()).toString();if(!marketplace(url))found.push({url,label,type:shop?"shop":company?"company":productLink?"product":"contact",linkedFrom:source});}catch{}
   }
   const links=Array.from(new Map(found.map(l=>[l.url,l])).values());
+  const products:any[]=[];
+  for(const m of visible.matchAll(/상품명\s*:\s*([\s\S]{3,300}?)(?=상품요약정보|소비자가|판매가|상품명|타임세일|$)/g)){const name=plainHtml(m[1]);if(name.length>=4&&name.length<=140)products.push({name,quote:name});}
+  for(const m of html.matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)){
+   try{const visit=(v:any,depth=0)=>{if(!v||depth>5)return;if(Array.isArray(v)){v.slice(0,30).forEach(x=>visit(x,depth+1));return;}if(typeof v!=="object")return;if([v["@type"]].flat().includes("Product")&&typeof v.name==="string")products.push({name:plainHtml(v.name),quote:plainHtml(v.name)});if(v["@graph"])visit(v["@graph"],depth+1);if(v.itemListElement)visit(v.itemListElement,depth+1);if(v.item)visit(v.item,depth+1);};visit(JSON.parse(m[1]));}catch{}
+  }
   const title=plainHtml(/<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1]||"");
   const description=Array.from(html.matchAll(/<meta\b([^>]*)>/gi)).map(m=>({name:attribute(m[1],"name")||attribute(m[1],"property"),content:attribute(m[1],"content")})).find(m=>/^(description|og:description)$/i.test(m.name))?.content||"";
-  return {contacts,rejected,links,text:text.slice(-8000),publicEvidence:{url:source,title,description:plainHtml(description),excerpt:text.slice(0,5000),checked}};
+  return {contacts,rejected,links,text:text.slice(-8000),publicEvidence:{url:source,title,products:products.slice(0,12),description:plainHtml(description),excerpt:text.slice(0,5000),checked}};
 }
 export function shoppingProspects(items: any[], keyword: string, checked: string) {
   const found=new Map();
