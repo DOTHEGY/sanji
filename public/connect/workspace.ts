@@ -1,3 +1,116 @@
+// supabase/functions/_shared/mail-mime.ts
+import { Buffer } from "node:buffer";
+
+// supabase/functions/_shared/mail-recipients.ts
+function mailRecipients(d) {
+  const input = Array.isArray(d.emails) && d.emails.length ? d.emails : [d.email];
+  const out = [...new Set(input.map((x) => String(x || "").trim().toLowerCase()))];
+  if (!out.length || out.length > 20 || out.some((x) => !/^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(x) || /[\r\n,<>]/.test(x))) throw Error("\uC218\uC2E0 \uC774\uBA54\uC77C \uBAA9\uB85D\uC744 \uD655\uC778\uD558\uC138\uC694.");
+  return out;
+}
+
+// supabase/functions/_shared/mail-mime.ts
+function attachmentType(content) {
+  const b = Buffer.from(content, "base64");
+  if (b.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
+  if (b[0] === 255 && b[1] === 216 && b[2] === 255) return "image/jpeg";
+  if (["GIF87a", "GIF89a"].includes(b.subarray(0, 6).toString())) return "image/gif";
+  if (b.subarray(0, 4).toString() === "RIFF" && b.subarray(8, 12).toString() === "WEBP") return "image/webp";
+  if (b.subarray(0, 5).toString() === "%PDF-") return "application/pdf";
+  return "application/octet-stream";
+}
+function messageIds(v) {
+  return (String(v || "").match(/<[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~@-]+>/g) || []).slice(-20).join(" ");
+}
+function encodedHeader(value) {
+  const parts = [];
+  let chunk = "";
+  if (/[\r\n]/.test(value)) throw Error("\uBA54\uC77C \uC81C\uBAA9\xB7\uBC1C\uC2E0\uC790\uBA85\uC5D0 \uC904\uBC14\uAFC8\uC744 \uB123\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+  for (const char of String(value || "")) {
+    if (Buffer.byteLength(chunk + char, "utf8") > 42) {
+      parts.push(chunk);
+      chunk = "";
+    }
+    chunk += char;
+  }
+  if (chunk || !parts.length) parts.push(chunk);
+  return parts.map((p) => "=?UTF-8?B?" + Buffer.from(p).toString("base64") + "?=").join("\r\n ");
+}
+var base64Body = (text2) => Buffer.from(text2, "utf8").toString("base64").match(/.{1,76}/g)?.join("\r\n") || "";
+function mime(d, from) {
+  const lines = [
+    `From: ${d.senderName ? encodedHeader(d.senderName) + " <" + from + ">" : from}`,
+    `To: ${mailRecipients(d).join(", ")}`,
+    `Subject: ${encodedHeader(d.subject)}`,
+    `Message-ID: <${d.messageId}@sanji.local>`,
+    "MIME-Version: 1.0"
+  ];
+  if (d.inReplyTo)
+    lines.push(
+      "In-Reply-To: " + messageIds(d.inReplyTo),
+      "References: " + messageIds(d.references) + " " + messageIds(d.inReplyTo)
+    );
+  const attachments = d.attachments || [];
+  if (!attachments.length)
+    return Buffer.from(
+      [
+        ...lines,
+        "Content-Type: text/plain; charset=UTF-8",
+        "Content-Transfer-Encoding: base64",
+        "",
+        base64Body(d.body)
+      ].join("\r\n")
+    ).toString("base64url");
+  const boundary = "sanji_" + crypto.randomUUID();
+  lines.push(
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
+    "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    base64Body(d.body)
+  );
+  for (const a of attachments)
+    lines.push(
+      `--${boundary}`,
+      "Content-Type: " + attachmentType(a.content),
+      `Content-Disposition: attachment; filename*=UTF-8''${encodeURIComponent(a.name)}`,
+      "Content-Transfer-Encoding: base64",
+      "",
+      a.content.match(/.{1,76}/g)?.join("\r\n") || ""
+    );
+  lines.push(`--${boundary}--`);
+  return Buffer.from(lines.join("\r\n")).toString("base64url");
+}
+
+// supabase/functions/_shared/discovery-notification.ts
+function discoveryCompletionNotifier({ sb: sb2, query: query2, gmailToken: gmailToken2, remote: remote2, audit: audit2, env: env2 }) {
+  return async function notifyOwner2(owner) {
+    if (env2("EMAIL_SENDING_ENABLED") !== "true") return { status: "sending_disabled" };
+    const snapshot = await query2(sb2.rpc("sanji_claim_discovery_notification", { p_owner: owner }));
+    if (!snapshot) return { status: "not_due_or_already_attempted" };
+    let submitting = false;
+    try {
+      const g = await gmailToken2(owner);
+      const subject = "[\uC0B0\uC9C0] " + snapshot.day + " \uC2E0\uADDC \uC5C5\uCCB4 " + snapshot.target + "\uACF3 \uC774\uBA54\uC77C \uBC1C\uAD74 \uC644\uB8CC";
+      const body = "\uC624\uB298\uC758 \uC774\uBA54\uC77C \uBC1C\uAD74 \uBAA9\uD45C\uB97C \uB2EC\uC131\uD588\uC2B5\uB2C8\uB2E4.\n\n\uC9D1\uACC4\uC77C: " + snapshot.day + " (\uD55C\uAD6D\uC2DC\uAC04)\n\uBAA9\uD45C: \uC2E0\uADDC \uC5C5\uCCB4 " + snapshot.target + "\uACF3\n\uC774\uBA54\uC77C \uD655\uBCF4 \uC5C5\uCCB4: " + snapshot.companies + "\uACF3\n\uC2E0\uADDC \uC774\uBA54\uC77C: " + snapshot.emails + "\uAC1C\n\uD648\uD398\uC774\uC9C0 \uD655\uC778 \uCC98\uB9AC: " + snapshot.processed + "\uD68C\n\n\uBC1C\uAD74 \uACB0\uACFC\xB7\uC81C\uD488 \uAC1C\uC778\uD654\xB7\uAC8C\uC2DC \uCD9C\uCC98 \uB300\uC870 \uC0C1\uD0DC\uB97C \uC11C\uBE44\uC2A4\uC5D0\uC11C \uD655\uC778\uD558\uC138\uC694. \uC774\uBA54\uC77C \uD655\uBCF4 \uC644\uB8CC\uC640 \uD68C\uC0AC\xB7\uC0C1\uD488 \uAC80\uC99D \uC644\uB8CC\uB294 \uAD6C\uBD84\uB429\uB2C8\uB2E4.\nhttps://dothegy.github.io/sanji/workspace/#brands\n\n\uB9E4\uC77C \uD55C\uAD6D\uC2DC\uAC04 \uC790\uC815(00:00)\uC5D0 \uC0C8 \uB0A0\uC9DC\uC758 \uBC1C\uAD74\uC744 \uC2DC\uC791\uD569\uB2C8\uB2E4. \uC5C5\uCCB4 \uB300\uC0C1 \uC601\uC5C5 \uBA54\uC77C\uC740 \uBCC4\uB3C4 \uBC1C\uC1A1 \uC2B9\uC778 \uC804\uC5D0\uB294 \uC804\uC1A1\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.";
+      const raw = mime({ email: snapshot.recipient, subject, body, senderName: "\uC0B0\uC9C0 \xB7 \uBC1C\uAD74 \uC644\uB8CC \uC54C\uB9BC", messageId: "discovery-" + owner + "-" + snapshot.day, attachments: [] }, g.email);
+      submitting = true;
+      const r = await remote2("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", { method: "POST", headers: { Authorization: "Bearer " + g.access_token, "Content-Type": "application/json" }, body: JSON.stringify({ raw }) });
+      if (!r.id) throw Error("\uC81C\uACF5\uC790 \uBA54\uC2DC\uC9C0 ID\uB97C \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+      await query2(sb2.from("sanji_discovery_notifications").update({ status: "accepted", provider_id: r.id, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("day", snapshot.day));
+      await audit2(owner, "discovery_completion_notified", { day: snapshot.day, providerId: r.id });
+      return { status: "accepted", day: snapshot.day };
+    } catch (e) {
+      const status = submitting ? "outcome_unknown" : "failed";
+      await query2(sb2.from("sanji_discovery_notifications").update({ status, error: String(e.message).slice(0, 400), updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("day", snapshot.day));
+      await audit2(owner, "discovery_completion_notification_failed", { day: snapshot.day, status, error: String(e.message).slice(0, 200) });
+      return { status, error: String(e.message).slice(0, 200) };
+    }
+  };
+}
+
 // supabase/functions/_shared/mail-content.ts
 var normalize = (s) => String(s || "").replace(/\r\n?/g, "\n").trim();
 function mailContent(body, signature, settings = {}, email = true) {
@@ -11,14 +124,6 @@ function mailContent(body, signature, settings = {}, email = true) {
   if (phone && !text2.replace(/[\s()-]/g, "").includes(phone.replace(/[\s()-]/g, ""))) lines.push(phone);
   if (optOut && !text2.includes(optOut)) lines.push(optOut);
   return text2 + (lines.length ? "\n\n" + lines.join("\n") : "");
-}
-
-// supabase/functions/_shared/mail-recipients.ts
-function mailRecipients(d) {
-  const input = Array.isArray(d.emails) && d.emails.length ? d.emails : [d.email];
-  const out = [...new Set(input.map((x) => String(x || "").trim().toLowerCase()))];
-  if (!out.length || out.length > 20 || out.some((x) => !/^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(x) || /[\r\n,<>]/.test(x))) throw Error("\uC218\uC2E0 \uC774\uBA54\uC77C \uBAA9\uB85D\uC744 \uD655\uC778\uD558\uC138\uC694.");
-  return out;
 }
 
 // supabase/functions/_shared/mail-reply.ts
@@ -761,7 +866,8 @@ function discoveryService(deps) {
         const researched = !refreshed?.added && !searched && Math.floor(Date.now() / 3e5) % 2 === 0 ? await researchNext(owner) : null;
         result = refreshed?.added ? refreshed : searched || researched || await cycle(owner);
       }
-      await query2(sb2.from("sanji_discovery_config").update({ runtime: { lastStarted, lastFinished: (/* @__PURE__ */ new Date()).toISOString(), status: "idle", result }, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner));
+      const completionNotification = deps.notifyOwner ? await deps.notifyOwner(owner) : null;
+      await query2(sb2.from("sanji_discovery_config").update({ runtime: { lastStarted, lastFinished: (/* @__PURE__ */ new Date()).toISOString(), status: "idle", result, completionNotification }, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner));
       return result;
     } catch (e) {
       await query2(sb2.from("sanji_discovery_config").update({ runtime: { lastStarted, lastFinished: (/* @__PURE__ */ new Date()).toISOString(), status: "failed", error: String(e.message).slice(0, 400) } }).eq("owner", owner));
@@ -780,7 +886,8 @@ function discoveryService(deps) {
       const status = !settings.enabled ? "paused" : (today.companies || 0) >= settings.target ? "target_reached" : today.calls >= 240 ? "daily_limit" : !pending.length ? "sources_exhausted" : active ? "running" : "queued";
       const labels = { paused: "\uC790\uB3D9 \uC218\uC9D1 \uAEBC\uC9D0", target_reached: "\uC624\uB298 \uC2E0\uADDC \uC5C5\uCCB4 \uBAA9\uD45C \uB3C4\uB2EC", daily_limit: "\uC624\uB298 \uC2E4\uD589 \uD55C\uB3C4 \uB3C4\uB2EC", sources_exhausted: settings.enabled ? "\uD6C4\uBCF4 \uB300\uAE30\uC5F4 \uC18C\uC9C4 \xB7 \uAC80\uC0C9 \uBCF4\uCDA9 \uB300\uAE30" : "\uB300\uAE30\uC5F4 \uC18C\uC9C4 \xB7 \uC2E0\uADDC \uC18C\uC2A4 \uBCF4\uAC15 \uD544\uC694", running: "\uD648\uD398\uC774\uC9C0 \uACF5\uAC1C \uC774\uBA54\uC77C \uD655\uC778 \uC911", queued: "\uD648\uD398\uC774\uC9C0 \uD6C4\uBCF4 \uC21C\uCC28 \uC218\uC9D1 \uB300\uAE30 \xB7 5\uBD84 \uAC04\uACA9" };
       const activity = leads.filter((l) => l.status !== "new").sort((a, b2) => Date.parse(b2.updated) - Date.parse(a.updated)).slice(0, 12).map((l) => ({ id: l.id, name: l.data.name, checked: l.data.checked || l.updated, emailCount: l.data.contacts?.length || 0, pages: l.data.pages || 0, error: l.data.error || "" }));
-      return { settings, leads, usage: today, history, health: discoveryHealth(settings, today, leads), configured: false, engine: { status, label: labels[status], pending: pending.length, current: active ? pending[0]?.data.name || "" : "", heartbeat: settings.updated, lastCompleted: activity[0]?.checked || null, mode: "public_sources_and_homepages", refreshAt: "00:00", timezone: "Asia/Seoul", sourceState: settings.source_state || {}, searchState: settings.search_state || {}, nextRun: settings.enabled && pending.length && (today.companies || 0) < settings.target && today.calls < 240 ? new Date(Math.ceil((Date.now() + 1e3) / 3e5) * 3e5).toISOString() : null }, activity, scope: "\uD55C\uAD6D\uC2DC\uAC04 \uC624\uB298 \xB7 \uC774\uBA54\uC77C \uD655\uBCF4 \uC2E0\uADDC \uC5C5\uCCB4 / \uC774\uBA54\uC77C \uC8FC\uC18C \uC218 \uBCC4\uB3C4 \xB7 \uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804", llmCalls: 0 };
+      const notification = await query2(sb2.from("sanji_discovery_notifications").select("day,status,created,updated,error").eq("owner", u).eq("day", day()).maybeSingle());
+      return { settings, notification: notification || null, leads, usage: today, history, health: discoveryHealth(settings, today, leads), configured: false, engine: { status, label: labels[status], pending: pending.length, current: active ? pending[0]?.data.name || "" : "", heartbeat: settings.updated, lastCompleted: activity[0]?.checked || null, mode: "public_sources_and_homepages", refreshAt: "00:00", timezone: "Asia/Seoul", sourceState: settings.source_state || {}, searchState: settings.search_state || {}, nextRun: settings.enabled && pending.length && (today.companies || 0) < settings.target && today.calls < 240 ? new Date(Math.ceil((Date.now() + 1e3) / 3e5) * 3e5).toISOString() : null }, activity, scope: "\uD55C\uAD6D\uC2DC\uAC04 \uC624\uB298 \xB7 \uC774\uBA54\uC77C \uD655\uBCF4 \uC2E0\uADDC \uC5C5\uCCB4 / \uC774\uBA54\uC77C \uC8FC\uC18C \uC218 \uBCC4\uB3C4 \xB7 \uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804", llmCalls: 0 };
     }
     const b = await input();
     if (path === "/discovery/refresh" && method === "POST") return await refreshSources(u) || { status: "already_checked", message: "\uC624\uB298 \uC678\uBD80 \uBAA9\uB85D\uC744 \uD655\uC778\uD588\uC2B5\uB2C8\uB2E4. \uB9E4\uC77C \uD55C\uAD6D\uC2DC\uAC04 00:00\uC5D0 \uC0C8 \uD6C4\uBCF4\uB97C \uD655\uC778\uD569\uB2C8\uB2E4." };
@@ -800,7 +907,7 @@ function discoveryService(deps) {
       const target = Number(b.target);
       if (!Number.isInteger(target) || target < 1 || target > 100) throw Error("\uD558\uB8E8 \uBAA9\uD45C\uB294 1~100\uC785\uB2C8\uB2E4.");
       const keywords = Array.isArray(b.keywords) ? b.keywords.map((x) => String(x).trim().slice(0, 80)).filter(Boolean).slice(0, 20) : defaults.keywords;
-      await query2(sb2.from("sanji_discovery_config").upsert({ owner: u, enabled: b.enabled === true, target, keywords, updated: (/* @__PURE__ */ new Date()).toISOString() }, { onConflict: "owner" }));
+      await query2(sb2.from("sanji_discovery_config").upsert({ owner: u, enabled: b.enabled === true, target, keywords, ...typeof b.notifyCompletion === "boolean" ? { notify_completion: b.notifyCompletion } : {}, updated: (/* @__PURE__ */ new Date()).toISOString() }, { onConflict: "owner" }));
       return { ok: true };
     }
     if (path === "/discovery/seed" && method === "POST") {
@@ -819,7 +926,11 @@ function discoveryService(deps) {
       await query2(sb2.from("sanji_discovery_leads").update({ status: "new", data: { ...lead.data, website: url2.toString(), error: "" }, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", u).eq("id", lead.id));
       return { ok: true };
     }
-    if (path === "/discovery/run" && method === "POST") return await cycle(u);
+    if (path === "/discovery/run" && method === "POST") {
+      const result = await cycle(u);
+      if (deps.notifyOwner) await deps.notifyOwner(u);
+      return result;
+    }
     if ((path === "/discovery/import" || path === "/discovery/prepare-contact") && method === "POST") {
       const lead = await query2(sb2.from("sanji_discovery_leads").select("*").eq("owner", u).eq("id", b.id).single());
       if (lead.data.outreach?.sendBlockedReason) throw Error(lead.data.outreach.sendBlockedReason);
@@ -846,82 +957,6 @@ function discoveryService(deps) {
     throw Error("\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uBC1C\uAD74 \uC791\uC5C5\uC785\uB2C8\uB2E4.");
   }
   return { handle, scheduled, configured: async () => false };
-}
-
-// supabase/functions/_shared/mail-mime.ts
-import { Buffer } from "node:buffer";
-function attachmentType(content) {
-  const b = Buffer.from(content, "base64");
-  if (b.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
-  if (b[0] === 255 && b[1] === 216 && b[2] === 255) return "image/jpeg";
-  if (["GIF87a", "GIF89a"].includes(b.subarray(0, 6).toString())) return "image/gif";
-  if (b.subarray(0, 4).toString() === "RIFF" && b.subarray(8, 12).toString() === "WEBP") return "image/webp";
-  if (b.subarray(0, 5).toString() === "%PDF-") return "application/pdf";
-  return "application/octet-stream";
-}
-function messageIds(v) {
-  return (String(v || "").match(/<[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~@-]+>/g) || []).slice(-20).join(" ");
-}
-function encodedHeader(value) {
-  const parts = [];
-  let chunk = "";
-  if (/[\r\n]/.test(value)) throw Error("\uBA54\uC77C \uC81C\uBAA9\xB7\uBC1C\uC2E0\uC790\uBA85\uC5D0 \uC904\uBC14\uAFC8\uC744 \uB123\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
-  for (const char of String(value || "")) {
-    if (Buffer.byteLength(chunk + char, "utf8") > 42) {
-      parts.push(chunk);
-      chunk = "";
-    }
-    chunk += char;
-  }
-  if (chunk || !parts.length) parts.push(chunk);
-  return parts.map((p) => "=?UTF-8?B?" + Buffer.from(p).toString("base64") + "?=").join("\r\n ");
-}
-var base64Body = (text2) => Buffer.from(text2, "utf8").toString("base64").match(/.{1,76}/g)?.join("\r\n") || "";
-function mime(d, from) {
-  const lines = [
-    `From: ${d.senderName ? encodedHeader(d.senderName) + " <" + from + ">" : from}`,
-    `To: ${mailRecipients(d).join(", ")}`,
-    `Subject: ${encodedHeader(d.subject)}`,
-    `Message-ID: <${d.messageId}@sanji.local>`,
-    "MIME-Version: 1.0"
-  ];
-  if (d.inReplyTo)
-    lines.push(
-      "In-Reply-To: " + messageIds(d.inReplyTo),
-      "References: " + messageIds(d.references) + " " + messageIds(d.inReplyTo)
-    );
-  const attachments = d.attachments || [];
-  if (!attachments.length)
-    return Buffer.from(
-      [
-        ...lines,
-        "Content-Type: text/plain; charset=UTF-8",
-        "Content-Transfer-Encoding: base64",
-        "",
-        base64Body(d.body)
-      ].join("\r\n")
-    ).toString("base64url");
-  const boundary = "sanji_" + crypto.randomUUID();
-  lines.push(
-    `Content-Type: multipart/mixed; boundary="${boundary}"`,
-    "",
-    `--${boundary}`,
-    "Content-Type: text/plain; charset=UTF-8",
-    "Content-Transfer-Encoding: base64",
-    "",
-    base64Body(d.body)
-  );
-  for (const a of attachments)
-    lines.push(
-      `--${boundary}`,
-      "Content-Type: " + attachmentType(a.content),
-      `Content-Disposition: attachment; filename*=UTF-8''${encodeURIComponent(a.name)}`,
-      "Content-Transfer-Encoding: base64",
-      "",
-      a.content.match(/.{1,76}/g)?.join("\r\n") || ""
-    );
-  lines.push(`--${boundary}--`);
-  return Buffer.from(lines.join("\r\n")).toString("base64url");
 }
 
 // supabase/functions/_shared/instagram-token.ts
@@ -1345,7 +1380,8 @@ async function saveConnection(u, p, data) {
     )
   );
 }
-var discovery = discoveryService({ sb, query, connection, saveConnection, env, audit, putRecord });
+var notifyOwner = discoveryCompletionNotifier({ sb, query, gmailToken, remote, audit, env });
+var discovery = discoveryService({ sb, query, connection, saveConnection, env, audit, putRecord, notifyOwner });
 async function remote(url2, options = {}, stage = "") {
   const r = await fetch(url2, {
     ...options,

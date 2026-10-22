@@ -1,3 +1,4 @@
+import { discoveryCompletionNotifier } from "../_shared/discovery-notification.ts";
 import { mailContent } from "../_shared/mail-content.ts";
 import { mailRecipients } from "../_shared/mail-recipients.ts";
 import { singleMailbox, replyRecipient } from "../_shared/mail-reply.ts";
@@ -138,7 +139,8 @@ async function saveConnection(u: string, p: string, data: any) {
     ),
   );
 }
-const discovery = discoveryService({sb,query,connection,saveConnection,env,audit,putRecord});
+const notifyOwner = discoveryCompletionNotifier({sb,query,gmailToken,remote,audit,env});
+const discovery = discoveryService({sb,query,connection,saveConnection,env,audit,putRecord,notifyOwner});
 async function remote(url: string, options: any = {}, stage = "") {
   const r = await fetch(url, {
       ...options,

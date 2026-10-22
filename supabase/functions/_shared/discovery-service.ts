@@ -237,7 +237,8 @@ export function discoveryService(deps:any){
     const researched=(!refreshed?.added&&!searched&&Math.floor(Date.now()/300000)%2===0)?await researchNext(owner):null;
     result=refreshed?.added?refreshed:searched||researched||await cycle(owner);
    }
-   await query(sb.from("sanji_discovery_config").update({runtime:{lastStarted,lastFinished:new Date().toISOString(),status:"idle",result},updated:new Date().toISOString()}).eq("owner",owner));
+   const completionNotification=deps.notifyOwner?await deps.notifyOwner(owner):null;
+   await query(sb.from("sanji_discovery_config").update({runtime:{lastStarted,lastFinished:new Date().toISOString(),status:"idle",result,completionNotification},updated:new Date().toISOString()}).eq("owner",owner));
    return result;
   }catch(e){await query(sb.from("sanji_discovery_config").update({runtime:{lastStarted,lastFinished:new Date().toISOString(),status:"failed",error:String(e.message).slice(0,400)}}).eq("owner",owner));throw e;}
 
@@ -254,7 +255,8 @@ export function discoveryService(deps:any){
    const status=!settings.enabled?"paused":(today.companies||0)>=settings.target?"target_reached":today.calls>=240?"daily_limit":!pending.length?"sources_exhausted":active?"running":"queued";
    const labels:any={paused:"자동 수집 꺼짐",target_reached:"오늘 신규 업체 목표 도달",daily_limit:"오늘 실행 한도 도달",sources_exhausted:settings.enabled?"후보 대기열 소진 · 검색 보충 대기":"대기열 소진 · 신규 소스 보강 필요",running:"홈페이지 공개 이메일 확인 중",queued:"홈페이지 후보 순차 수집 대기 · 5분 간격"};
    const activity=leads.filter((l:any)=>l.status!=="new").sort((a:any,b:any)=>Date.parse(b.updated)-Date.parse(a.updated)).slice(0,12).map((l:any)=>({id:l.id,name:l.data.name,checked:l.data.checked||l.updated,emailCount:l.data.contacts?.length||0,pages:l.data.pages||0,error:l.data.error||""}));
-   return {settings,leads,usage:today,history,health:discoveryHealth(settings,today,leads),configured:false,engine:{status,label:labels[status],pending:pending.length,current:active?pending[0]?.data.name||"":"",heartbeat:settings.updated,lastCompleted:activity[0]?.checked||null,mode:"public_sources_and_homepages",refreshAt:"00:00",timezone:"Asia/Seoul",sourceState:settings.source_state||{},searchState:settings.search_state||{},nextRun:settings.enabled&&pending.length&&(today.companies||0)<settings.target&&today.calls<240?new Date(Math.ceil((Date.now()+1000)/300000)*300000).toISOString():null},activity,scope:"한국시간 오늘 · 이메일 확보 신규 업체 / 이메일 주소 수 별도 · 소유 관계 검토 전",llmCalls:0};
+   const notification=await query(sb.from("sanji_discovery_notifications").select("day,status,created,updated,error").eq("owner",u).eq("day",day()).maybeSingle());
+   return {settings,notification:notification||null,leads,usage:today,history,health:discoveryHealth(settings,today,leads),configured:false,engine:{status,label:labels[status],pending:pending.length,current:active?pending[0]?.data.name||"":"",heartbeat:settings.updated,lastCompleted:activity[0]?.checked||null,mode:"public_sources_and_homepages",refreshAt:"00:00",timezone:"Asia/Seoul",sourceState:settings.source_state||{},searchState:settings.search_state||{},nextRun:settings.enabled&&pending.length&&(today.companies||0)<settings.target&&today.calls<240?new Date(Math.ceil((Date.now()+1000)/300000)*300000).toISOString():null},activity,scope:"한국시간 오늘 · 이메일 확보 신규 업체 / 이메일 주소 수 별도 · 소유 관계 검토 전",llmCalls:0};
   }
   const b=await input();
   if(path==="/discovery/refresh"&&method==="POST")return await refreshSources(u)||{status:"already_checked",message:"오늘 외부 목록을 확인했습니다. 매일 한국시간 00:00에 새 후보를 확인합니다."};
@@ -270,7 +272,7 @@ export function discoveryService(deps:any){
   if(path==="/discovery/settings"&&method==="POST"){
    const target=Number(b.target);if(!Number.isInteger(target)||target<1||target>100)throw Error("하루 목표는 1~100입니다.");
    const keywords=Array.isArray(b.keywords)?b.keywords.map((x:any)=>String(x).trim().slice(0,80)).filter(Boolean).slice(0,20):defaults.keywords;
-   await query(sb.from("sanji_discovery_config").upsert({owner:u,enabled:b.enabled===true,target,keywords,updated:new Date().toISOString()},{onConflict:"owner"}));return {ok:true};
+   await query(sb.from("sanji_discovery_config").upsert({owner:u,enabled:b.enabled===true,target,keywords,...(typeof b.notifyCompletion==="boolean"?{notify_completion:b.notifyCompletion}:{}),updated:new Date().toISOString()},{onConflict:"owner"}));return {ok:true};
   }
   if(path==="/discovery/seed"&&method==="POST"){
    const url=publicUrl(String(b.url||""));if(marketplace(url.toString()))throw Error("플랫폼 URL에서 이메일을 수집하지 않습니다. 회사 공식 홈페이지 URL을 입력하세요.");
@@ -283,7 +285,7 @@ export function discoveryService(deps:any){
    if(lead.status==="imported")throw Error("등록한 회사는 브랜드 목록에서 수정하세요.");
    await query(sb.from("sanji_discovery_leads").update({status:"new",data:{...lead.data,website:url.toString(),error:""},updated:new Date().toISOString()}).eq("owner",u).eq("id",lead.id));return {ok:true};
   }
-  if(path==="/discovery/run"&&method==="POST")return await cycle(u);
+  if(path==="/discovery/run"&&method==="POST"){const result=await cycle(u);if(deps.notifyOwner)await deps.notifyOwner(u);return result;}
   if((path==="/discovery/import"||path==="/discovery/prepare-contact")&&method==="POST"){
    const lead=await query(sb.from("sanji_discovery_leads").select("*").eq("owner",u).eq("id",b.id).single());
    if(lead.data.outreach?.sendBlockedReason)throw Error(lead.data.outreach.sendBlockedReason);

@@ -1095,3 +1095,26 @@ test("Automatic brand research grounds exact product, proposes content rather th
  const original={intro:"기존에 작성된 강화 개인화",body:"보존 본문",needsPersonalization:false};assert.deepEqual(m.exports.researchBrand({...lead,outreach:original},template).outreach,original);
  const noProduct=m.exports.researchBrand({...lead,publicEvidence:[{url:lead.website,title:"브랜드 공식몰",checked:"2026-10-22",description:"건강식품"}]},template);assert.equal(noProduct.outreach.needsPersonalization,true);
 });
+
+test("Discovery completion claim requires opted-in owner and actual KST target, reserves once, and is tenant private",async()=>{
+ const db=await database();try{
+ for(const name of ['202610210003_discovery','202610220001_mail_refresh','202610220005_discovery_notifications'])await db.exec(fs.readFileSync('supabase/migrations/'+name+'.sql','utf8'));
+ await db.query('insert into auth.users(id,email) values($1,$2),($3,$4)',[u1,'one@example.test',u2,'two@example.test']);await db.query('insert into sanji_members(user_id) values($1),($2)',[u1,u2]);await db.query('insert into sanji_discovery_config(owner,enabled,target) values($1,true,40)',[u1]);
+ await db.query("insert into sanji_discovery_usage(owner,day,companies,emails,processed) values($1,(now() at time zone 'Asia/Seoul')::date,39,50,120)",[u1]);
+ const claim=async()=>(await db.query('select sanji_claim_discovery_notification($1) s',[u1])).rows[0].s;
+ assert.equal(await claim(),null);await db.query('update sanji_discovery_config set notify_completion=true');assert.equal(await claim(),null);
+ await db.query('update sanji_discovery_usage set companies=40');const r=await claim();assert.equal(r.recipient,'one@example.test');assert.equal(r.companies,40);assert.equal(r.target,40);assert.equal(await claim(),null);assert.equal((await db.query('select count(*) n from sanji_discovery_notifications')).rows[0].n,1);
+ await login(db,u2);assert.equal((await db.query('select * from sanji_discovery_notifications')).rows.length,0);await assert.rejects(()=>db.query('select sanji_claim_discovery_notification($1)',[u1]),/permission denied/);
+ }finally{await db.close();}
+});
+
+test("Completion notifier sends one real MIME contract to the owner only, preserves unknown outcomes and does not retry",async()=>{
+ const c=esbuild.buildSync({entryPoints:['supabase/functions/_shared/discovery-notification.ts'],bundle:true,platform:'node',format:'cjs',write:false}),m={exports:{}};new Function('module','exports','require',c.outputFiles[0].text)(m,m.exports,require);
+ let claimed=false,updates=[],requests=[],fail=false;
+ const sb={rpc:()=>({claim:true}),from:()=>({update(v){updates.push(v);return this;},eq(){return this;}})};
+ const query=async q=>{if(q.claim){if(claimed)return null;claimed=true;return {day:'2026-10-22',recipient:'owner@example.test',target:40,companies:40,emails:53,processed:160};}return null;};
+ const notify=m.exports.discoveryCompletionNotifier({sb,query,gmailToken:async()=>({email:'sender@example.test',access_token:'mock-token'}),env:()=>"true",audit:async()=>{},remote:async(u,o)=>{requests.push({u,o});if(fail)throw Error('network timeout');return {id:'provider-id'};}});
+ assert.equal((await notify(u1)).status,'accepted');assert.equal((await notify(u1)).status,'not_due_or_already_attempted');assert.equal(requests.length,1);assert.equal(updates[0].status,'accepted');
+ const raw=Buffer.from(JSON.parse(requests[0].o.body).raw,'base64url').toString();assert.match(raw,/To: owner@example.test/);assert.equal(raw.includes('bcc:'),false);const body=Buffer.from(raw.split('\r\n\r\n')[1].replace(/\r\n/g,''),'base64').toString();assert.match(body,/매일 한국시간 자정/);assert.match(body,/이메일 확보 완료와 회사·상품 검증 완료는 구분/);assert.match(body,/40곳/);
+ claimed=false;fail=true;assert.equal((await notify(u1)).status,'outcome_unknown');assert.equal((await notify(u1)).status,'not_due_or_already_attempted');assert.equal(requests.length,2);assert.equal(updates.at(-1).status,'outcome_unknown');
+});
