@@ -289,6 +289,7 @@ export function discoveryService(deps:any){
   if((path==="/discovery/import"||path==="/discovery/prepare-contact")&&method==="POST"){
    const lead=await query(sb.from("sanji_discovery_leads").select("*").eq("owner",u).eq("id",b.id).single());
    if(lead.data.outreach?.sendBlockedReason)throw Error(lead.data.outreach.sendBlockedReason);
+   if(b.expectedCopy){const o=lead.data.outreach||{},v=b.expectedCopy;if(v.subject!==o.subject||v.body!==o.body||v.signature!==o.signature||(v.templateVersion&&v.templateVersion!==o.templateVersion))throw Error("초안이 변경됐습니다. 목록을 새로고침하고 내용을 확인한 뒤 보내세요.");}
    if(lead.status==="blocked")throw Error("중복·차단된 업체입니다. 기존 연락 이력을 확인하세요.");
    const eligible=(lead.data.contacts||[]).filter((c:any)=>!c.excluded&&!c.excludeFromOutreach);
    const selected=eligible.find((c:any)=>c.email===b.email)||eligible[0];

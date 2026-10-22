@@ -949,6 +949,10 @@ function discoveryService(deps) {
     if ((path === "/discovery/import" || path === "/discovery/prepare-contact") && method === "POST") {
       const lead = await query2(sb2.from("sanji_discovery_leads").select("*").eq("owner", u).eq("id", b.id).single());
       if (lead.data.outreach?.sendBlockedReason) throw Error(lead.data.outreach.sendBlockedReason);
+      if (b.expectedCopy) {
+        const o = lead.data.outreach || {}, v = b.expectedCopy;
+        if (v.subject !== o.subject || v.body !== o.body || v.signature !== o.signature || v.templateVersion && v.templateVersion !== o.templateVersion) throw Error("\uCD08\uC548\uC774 \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4. \uBAA9\uB85D\uC744 \uC0C8\uB85C\uACE0\uCE68\uD558\uACE0 \uB0B4\uC6A9\uC744 \uD655\uC778\uD55C \uB4A4 \uBCF4\uB0B4\uC138\uC694.");
+      }
       if (lead.status === "blocked") throw Error("\uC911\uBCF5\xB7\uCC28\uB2E8\uB41C \uC5C5\uCCB4\uC785\uB2C8\uB2E4. \uAE30\uC874 \uC5F0\uB77D \uC774\uB825\uC744 \uD655\uC778\uD558\uC138\uC694.");
       const eligible = (lead.data.contacts || []).filter((c2) => !c2.excluded && !c2.excludeFromOutreach);
       const selected = eligible.find((c2) => c2.email === b.email) || eligible[0];

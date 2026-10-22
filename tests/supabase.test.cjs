@@ -1043,22 +1043,22 @@ test("Search replenishment rotates engines after denial and queues new sites wit
  try{const service=m.exports.discoveryService({sb,query,audit:async()=>{},putRecord:async()=>{}});const r=await service.scheduled();assert.equal(r.added,1);assert.equal(state.queries,2);assert.equal(state.status,"replenished");assert.ok(fetches.some(u=>u.includes("naver.com")));assert.ok(queued[0].data.searchQuery);assert.equal(queued[0].data.contacts.length,0);}finally{global.fetch=oldFetch;}
 });
 
-test("Bulk email selects and approves two companies once, sends approved hashes and never resends on a second click",async()=>{
+test("Bulk email selects and approves four companies once, sends approved hashes and never resends on a second click",async()=>{
  const express=require("express"),app=express();app.use(express.json());
- const leads=["a","b"].map(id=>({id,data:{name:"브랜드"+id,contacts:[{email:id+"@brand.test",source:"https://"+id+".brand.test"}],outreach:{subject:"협업 "+id,body:"개인화 "+id+"\n공통 본문",signature:"서명",brandName:"브랜드"+id,productName:"제품"+id}}}));
- const state={candidates:[],deals:[],templates:[],threads:[],outbox:[],jobs:[],suppression:[],settings:{senderAddress:""}};const sent=[];
+ const leads=["a","b","c","d"].map(id=>({id,data:{name:"브랜드"+id,contacts:[{email:id+"@brand.test",source:"https://"+id+".brand.test"}],outreach:{subject:"협업 "+id,body:"개인화 "+id+"\n공통 본문",signature:"서명",brandName:"브랜드"+id,productName:"제품"+id}}}));
+ const state={candidates:[],deals:[],templates:[],threads:[],outbox:[],jobs:[],suppression:[],settings:{senderAddress:""}};const sent=[];let preparedCount=0,preparedAtFirstSend=null;
  app.all(/^\/api\/.*/,(req,res)=>{const p=req.path.replace("/api","");
  if(p==="/me")return res.json({email:"owner@example.test",csrf:"test"});if(p==="/state")return res.json(state);if(p==="/connections")return res.json({gmail:{connected:true,enabled:true},instagram:{},ai:{}});
  if(p==="/discovery")return res.json({settings:{enabled:true,target:40,keywords:[]},leads,usage:{emails:2},activity:[]});
- if(p==="/discovery/outreach")return res.json({ok:true});if(p==="/discovery/prepare-contact")return res.json({candidateId:req.body.id});
- if(p==="/drafts"){const id=req.body.target;return res.json({id,hash:"hash-"+id,target:id,email:id+"@brand.test",subject:req.body.subject,body:req.body.body,attachments:[]});}
- if(/^\/drafts\/[^/]+\/send$/.test(p)){sent.push({path:p,...req.body});return res.json({note:"Gmail 서버 접수"});}res.status(404).json({error:"unknown"});});
+ if(p==="/discovery/outreach")return res.json({ok:true});if(p==="/discovery/prepare-contact"){preparedCount++;return res.json({candidateId:req.body.id});}
+ if(p==="/drafts"){const id=req.body.target;return res.json({id,hash:"hash-"+id,target:id,email:id+"@brand.test",subject:req.body.subject,body:req.body.body+"\n\n"+req.body.signature,attachments:[]});}
+ if(/^\/drafts\/[^/]+\/send$/.test(p)){if(preparedAtFirstSend===null)preparedAtFirstSend=preparedCount;sent.push({path:p,...req.body});return res.json({note:"Gmail 서버 접수"});}res.status(404).json({error:"unknown"});});
  app.use("/app",express.static("private/ui"));const server=app.listen(0,"127.0.0.1");let browser;
  try{browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||"/usr/bin/chromium",args:["--no-sandbox"]});const page=await browser.newPage();await page.goto("http://127.0.0.1:"+server.address().port+"/app/#brands");
- await page.locator('[data-action="mail-select-all"]').click();assert.equal(await page.locator('[data-mail-select]:checked').count(),2);await page.locator('[data-action="mail-review-selected"]').click();
- await page.waitForSelector('#mail-approve-all');assert.equal(sent.length,0);assert.equal(await page.locator('[name=bulk-approve]:checked').count(),2);
- await page.locator('[data-action="mail-send-all"]').click();await page.waitForFunction(()=>document.querySelector('#mail-send-summary').textContent.includes('전송 처리 완료'));assert.equal(sent.length,2);assert.ok(sent.every(x=>x.approved&&x.hash==="hash-"+x.path.split("/")[2]));
- assert.ok((await page.locator('#bulk-result-1').textContent()).includes('Gmail 서버 접수'));assert.equal(await page.locator('[data-action="mail-send-all"]').isDisabled(),true);await page.evaluate(()=>document.querySelector('[data-action="mail-send-all"]').click());assert.equal(sent.length,2);
+ await page.locator('.mail-inline-copy summary').first().click();assert.ok((await page.locator('.mail-inline-copy .mail-letter').first().textContent()).includes('공통 본문'));assert.equal(sent.length,0);
+ await page.locator('[data-action="mail-select-all"]').click();assert.equal(await page.locator('[data-mail-select]:checked').count(),4);await page.locator('[data-action="mail-review-selected"]').click();
+ await page.waitForFunction(()=>document.querySelector('#inline-mail-summary').textContent.includes('전송 처리 완료'));assert.equal(sent.length,4);assert.ok(sent.every(x=>x.approved&&x.hash==="hash-"+x.path.split("/")[2]));assert.equal(await page.locator('#modal').getAttribute('open'),null);assert.ok(preparedAtFirstSend<4,'starts sending before all companies are prepared');
+ assert.ok((await page.locator('#mail-state-b').textContent()).includes('Gmail 서버 접수'));await page.locator('[data-action="mail-review-selected"]').click();assert.equal(sent.length,4);
 
  }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
 });
