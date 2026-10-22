@@ -1,3 +1,18 @@
+// supabase/functions/_shared/mail-content.ts
+var normalize = (s) => String(s || "").replace(/\r\n?/g, "\n").trim();
+function mailContent(body, signature, settings = {}, email = true) {
+  let text2 = normalize(body), sig = normalize(signature);
+  if (sig && !text2.includes(sig)) text2 += (text2 ? "\n\n" : "") + sig;
+  if (!email) return text2;
+  const lines = [], name = normalize(settings.senderName), address = normalize(settings.senderAddress), phone = normalize(settings.senderPhone), optOut = normalize(settings.optOut) || "\uD68C\uC2E0\uC73C\uB85C \uC218\uC2E0 \uAC70\uBD80\uB97C \uC694\uCCAD\uD558\uC2E4 \uC218 \uC788\uC2B5\uB2C8\uB2E4.";
+  const nameParts = name.split(/[·•|]/).map((s) => s.trim()).filter(Boolean);
+  if (name && (!nameParts.length || !nameParts.every((s) => text2.includes(s)))) lines.push(name);
+  if (address && !text2.includes(address)) lines.push(address);
+  if (phone && !text2.replace(/[\s()-]/g, "").includes(phone.replace(/[\s()-]/g, ""))) lines.push(phone);
+  if (optOut && !text2.includes(optOut)) lines.push(optOut);
+  return text2 + (lines.length ? "\n\n" + lines.join("\n") : "");
+}
+
 // supabase/functions/_shared/mail-recipients.ts
 function mailRecipients(d) {
   const input = Array.isArray(d.emails) && d.emails.length ? d.emails : [d.email];
@@ -407,6 +422,7 @@ function discoveryService(deps) {
             data.duplicateNote = "\uAE30\uC874 \uC5C5\uCCB4\uC640 \uC774\uBA54\uC77C \uC911\uBCF5 \xB7 \uBCC4\uB3C4 \uC2E0\uADDC \uC81C\uC548 \uCC28\uB2E8";
           }
           if (companies) {
+            data.firstEmailAt = data.firstEmailAt || (/* @__PURE__ */ new Date()).toISOString();
             data.discoveredDay = day();
             const ts = await query2(sb2.from("sanji_records").select("id,data,version,updated").eq("owner", u).eq("kind", "template").order("updated", { ascending: true }).limit(20));
             const t = ts.find((t2) => t2.data.channel === "\uC774\uBA54\uC77C");
@@ -454,12 +470,13 @@ function discoveryService(deps) {
       const leads = await query2(sb2.from("sanji_discovery_leads").select("*").eq("owner", u).order("created", { ascending: false }).limit(500));
       const usage = await query2(sb2.from("sanji_discovery_usage").select("*").eq("owner", u).eq("day", day()).maybeSingle());
       const today = usage || { calls: 0, added: 0, processed: 0, emails: 0 };
+      const history = await query2(sb2.rpc("sanji_discovery_history", { p_owner: u }));
       const pending = leads.filter((l) => l.status === "new");
       const active = !!usage?.lease_until && Date.parse(usage.lease_until) > Date.now();
       const status = !settings.enabled ? "paused" : (today.companies || 0) >= settings.target ? "target_reached" : today.calls >= 240 ? "daily_limit" : !pending.length ? "sources_exhausted" : active ? "running" : "queued";
       const labels = { paused: "\uC790\uB3D9 \uC218\uC9D1 \uAEBC\uC9D0", target_reached: "\uC624\uB298 \uC2E0\uADDC \uC5C5\uCCB4 \uBAA9\uD45C \uB3C4\uB2EC", daily_limit: "\uC624\uB298 \uC2E4\uD589 \uD55C\uB3C4 \uB3C4\uB2EC", sources_exhausted: "\uB300\uAE30\uC5F4 \uC18C\uC9C4 \xB7 \uC2E0\uADDC \uC18C\uC2A4 \uBCF4\uAC15 \uD544\uC694", running: "\uD648\uD398\uC774\uC9C0 \uACF5\uAC1C \uC774\uBA54\uC77C \uD655\uC778 \uC911", queued: "\uD648\uD398\uC774\uC9C0 \uD6C4\uBCF4 \uC21C\uCC28 \uC218\uC9D1 \uB300\uAE30 \xB7 5\uBD84 \uAC04\uACA9" };
       const activity = leads.filter((l) => l.status !== "new").sort((a, b2) => Date.parse(b2.updated) - Date.parse(a.updated)).slice(0, 12).map((l) => ({ id: l.id, name: l.data.name, checked: l.data.checked || l.updated, emailCount: l.data.contacts?.length || 0, pages: l.data.pages || 0, error: l.data.error || "" }));
-      return { settings, leads, usage: today, configured: false, engine: { status, label: labels[status], pending: pending.length, current: active ? pending[0]?.data.name || "" : "", heartbeat: settings.updated, lastCompleted: activity[0]?.checked || null, mode: "public_sources_and_homepages", refreshAt: "00:00", timezone: "Asia/Seoul", sourceState: settings.source_state || {}, nextRun: settings.enabled && pending.length && (today.companies || 0) < settings.target && today.calls < 240 ? new Date(Math.ceil((Date.now() + 1e3) / 3e5) * 3e5).toISOString() : null }, activity, scope: "\uD55C\uAD6D\uC2DC\uAC04 \uC624\uB298 \xB7 \uC774\uBA54\uC77C \uD655\uBCF4 \uC2E0\uADDC \uC5C5\uCCB4 / \uC774\uBA54\uC77C \uC8FC\uC18C \uC218 \uBCC4\uB3C4 \xB7 \uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804", llmCalls: 0 };
+      return { settings, leads, usage: today, history, configured: false, engine: { status, label: labels[status], pending: pending.length, current: active ? pending[0]?.data.name || "" : "", heartbeat: settings.updated, lastCompleted: activity[0]?.checked || null, mode: "public_sources_and_homepages", refreshAt: "00:00", timezone: "Asia/Seoul", sourceState: settings.source_state || {}, nextRun: settings.enabled && pending.length && (today.companies || 0) < settings.target && today.calls < 240 ? new Date(Math.ceil((Date.now() + 1e3) / 3e5) * 3e5).toISOString() : null }, activity, scope: "\uD55C\uAD6D\uC2DC\uAC04 \uC624\uB298 \xB7 \uC774\uBA54\uC77C \uD655\uBCF4 \uC2E0\uADDC \uC5C5\uCCB4 / \uC774\uBA54\uC77C \uC8FC\uC18C \uC218 \uBCC4\uB3C4 \xB7 \uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804", llmCalls: 0 };
     }
     const b = await input();
     if (path === "/discovery/refresh" && method === "POST") return await refreshSources(u) || { status: "already_checked", message: "\uC624\uB298 \uC678\uBD80 \uBAA9\uB85D\uC744 \uD655\uC778\uD588\uC2B5\uB2C8\uB2E4. \uB9E4\uC77C \uD55C\uAD6D\uC2DC\uAC04 00:00\uC5D0 \uC0C8 \uD6C4\uBCF4\uB97C \uD655\uC778\uD569\uB2C8\uB2E4." };
@@ -501,6 +518,7 @@ function discoveryService(deps) {
     if (path === "/discovery/run" && method === "POST") return await cycle(u);
     if ((path === "/discovery/import" || path === "/discovery/prepare-contact") && method === "POST") {
       const lead = await query2(sb2.from("sanji_discovery_leads").select("*").eq("owner", u).eq("id", b.id).single());
+      if (lead.data.outreach?.sendBlockedReason) throw Error(lead.data.outreach.sendBlockedReason);
       if (lead.status === "blocked") throw Error("\uC911\uBCF5\xB7\uCC28\uB2E8\uB41C \uC5C5\uCCB4\uC785\uB2C8\uB2E4. \uAE30\uC874 \uC5F0\uB77D \uC774\uB825\uC744 \uD655\uC778\uD558\uC138\uC694.");
       const eligible = (lead.data.contacts || []).filter((c2) => !c2.excluded && !c2.excludeFromOutreach);
       const selected = eligible.find((c2) => c2.email === b.email) || eligible[0];
@@ -540,11 +558,26 @@ function attachmentType(content) {
 function messageIds(v) {
   return (String(v || "").match(/<[A-Za-z0-9.!#$%&'*+\/=?^_`{|}~@-]+>/g) || []).slice(-20).join(" ");
 }
+function encodedHeader(value) {
+  const parts = [];
+  let chunk = "";
+  if (/[\r\n]/.test(value)) throw Error("\uBA54\uC77C \uC81C\uBAA9\xB7\uBC1C\uC2E0\uC790\uBA85\uC5D0 \uC904\uBC14\uAFC8\uC744 \uB123\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+  for (const char of String(value || "")) {
+    if (Buffer.byteLength(chunk + char, "utf8") > 42) {
+      parts.push(chunk);
+      chunk = "";
+    }
+    chunk += char;
+  }
+  if (chunk || !parts.length) parts.push(chunk);
+  return parts.map((p) => "=?UTF-8?B?" + Buffer.from(p).toString("base64") + "?=").join("\r\n ");
+}
+var base64Body = (text2) => Buffer.from(text2, "utf8").toString("base64").match(/.{1,76}/g)?.join("\r\n") || "";
 function mime(d, from) {
   const lines = [
-    `From: ${from}`,
+    `From: ${d.senderName ? encodedHeader(d.senderName) + " <" + from + ">" : from}`,
     `To: ${mailRecipients(d).join(", ")}`,
-    `Subject: =?UTF-8?B?${Buffer.from(d.subject).toString("base64")}?=`,
+    `Subject: ${encodedHeader(d.subject)}`,
     `Message-ID: <${d.messageId}@sanji.local>`,
     "MIME-Version: 1.0"
   ];
@@ -561,7 +594,7 @@ function mime(d, from) {
         "Content-Type: text/plain; charset=UTF-8",
         "Content-Transfer-Encoding: base64",
         "",
-        Buffer.from(d.body).toString("base64")
+        base64Body(d.body)
       ].join("\r\n")
     ).toString("base64url");
   const boundary = "sanji_" + crypto.randomUUID();
@@ -572,7 +605,7 @@ function mime(d, from) {
     "Content-Type: text/plain; charset=UTF-8",
     "Content-Transfer-Encoding: base64",
     "",
-    Buffer.from(d.body).toString("base64")
+    base64Body(d.body)
   );
   for (const a of attachments)
     lines.push(
@@ -1893,12 +1926,7 @@ Deno.serve(async (req) => {
           async (d2) => (await owned(u, d2.brand, "candidate")).name
         )
       );
-      const subject = render(inputData.subject, c, deals, brandNames), body = render(inputData.body, c, deals, brandNames) + "\n\n" + inputData.signature + (inputData.channel === "email" ? `
-
-${settings.senderName}
-${settings.senderAddress}
-${settings.senderPhone}
-${settings.optOut}` : "");
+      const subject = render(inputData.subject, c, deals, brandNames), body = mailContent(render(inputData.body, c, deals, brandNames), inputData.signature, settings, inputData.channel === "email");
       if (/\{\{/.test(subject + body)) fail(400, "\uBBF8\uD574\uACB0 \uBCC0\uC218\uAC00 \uC788\uC2B5\uB2C8\uB2E4.");
       if (/치료|예방|완치|항암|효능.{0,4}보장|혈당.{0,5}(낮|개선)/.test(
         subject + body
@@ -1947,6 +1975,7 @@ ${settings.optOut}` : "");
         email: recipient.email,
         emails: inputData.channel === "email" ? mailRecipients({ emails: !inputData.replyTo && inputData.recipientMode === "company_all" ? c.recipientEmails : void 0, email: recipient.email }) : [],
         replyRecipientNeedsReview: recipient.changed,
+        senderName: settings?.senderName || "",
         targetName: c.name,
         targetVersion: c.version,
         dealVersions: deals.map((d2) => ({

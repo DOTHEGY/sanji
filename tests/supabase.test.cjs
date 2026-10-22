@@ -854,8 +854,8 @@ test("Brand email workspace reviews all company addresses directly, preserves co
 test("Discovery works without search API keys and reports exhausted sources instead of pretending to collect", async()=>{
   const compiled=esbuild.buildSync({entryPoints:["supabase/functions/_shared/discovery-service.ts"],bundle:true,platform:"node",format:"cjs",write:false});
   const m={exports:{}};new Function("module","exports",compiled.outputFiles[0].text)(m,m.exports);
-  const stored={sanji_discovery_config:{enabled:true,target:30,keywords:[],updated:new Date().toISOString()},sanji_discovery_leads:[],sanji_discovery_usage:{calls:3,emails:1,processed:3}};
-  const sb={from(table){const q={table};for(const k of ["select","eq","order","limit","maybeSingle"])q[k]=()=>q;return q;}};
+  const stored={sanji_discovery_config:{enabled:true,target:30,keywords:[],updated:new Date().toISOString()},sanji_discovery_leads:[],sanji_discovery_usage:{calls:3,emails:1,processed:3},history:[]};
+  const sb={rpc:()=>({table:"history"}),from(table){const q={table};for(const k of ["select","eq","order","limit","maybeSingle"])q[k]=()=>q;return q;}};
   const service=m.exports.discoveryService({sb,query:async q=>stored[q.table],audit:async()=>{},putRecord:async()=>{}});
   const r=await service.handle("/discovery","GET","owner",async()=>({}));assert.equal(r.engine.status,"sources_exhausted");assert.equal(r.engine.nextRun,null);assert.equal(r.engine.mode,"public_sources_and_homepages");
   const result=await service.handle("/discovery/run","POST","owner",async()=>({}));assert.equal(result.status,"sources_exhausted");assert.equal(JSON.stringify(result).includes("네이버"),false);
@@ -972,4 +972,52 @@ test("New company collection prepares the current template and counts one compan
  try{const service=m.exports.discoveryService({sb,query:async q=>q.exec(),audit:async()=>{},putRecord:async()=>{}});const result=await service.handle('/discovery/run','POST','owner',async()=>({}));assert.equal(result.status,'processed');assert.equal(result.companiesAdded,1);assert.equal(result.emailCandidatesAdded,2);assert.equal(lead.data.outreach.templateVersion,3);assert.match(lead.data.outreach.body,/새 브랜드.*https:\/\/company.test\/intro/);assert.equal(lead.data.outreach.needsPersonalization,true);assert.equal(tables.sanji_discovery_usage[0].companies,1);
  await assert.rejects(()=>service.handle('/discovery/outreach','POST','owner',async()=>({id:lead.id,templateVersion:2,body:'stale'})),/템플릿이 변경/);
  }finally{global.fetch=prevFetch;global.Deno=prevDeno;}
+});
+
+test("Daily cap is removed while reservation remains approved-only, one-time and blocked-recipient aware; history uses KST",async()=>{
+ const db=await database();try{
+ await db.exec(fs.readFileSync('supabase/migrations/202610210002_automation.sql','utf8'));await db.exec(fs.readFileSync('supabase/migrations/202610210003_discovery.sql','utf8'));await db.exec(fs.readFileSync('supabase/migrations/202610220001_mail_refresh.sql','utf8'));await db.exec(fs.readFileSync('supabase/migrations/202610220002_mail_operations.sql','utf8'));
+ await db.query('insert into auth.users(id,email) values($1,$2)',[u1,'owner@example.test']);await db.query('insert into sanji_members(user_id) values($1)',[u1]);
+ const def=(await db.query("select pg_get_functiondef('sanji_reserve_dispatch(uuid,uuid,text,text)'::regprocedure) body")).rows[0].body;
+ assert.equal(def.includes('일일 제한 초과'),false);assert.match(def,/d.used/);assert.match(def,/sanji_blocked/);assert.match(def,/fingerprint/);
+ const saveDef=(await db.query("select pg_get_functiondef('sanji_save_record(text,jsonb,uuid,integer)'::regprocedure) body")).rows[0].body;assert.equal(saveDef.includes('dailyLimit'),false);
+ const stamp=new Date((await db.query("select ((now() at time zone 'Asia/Seoul')::date::timestamp at time zone 'Asia/Seoul')+interval '30 minutes' stamp")).rows[0].stamp).toISOString();
+ await db.query("insert into sanji_discovery_leads(owner,identity,data,created) values($1,'kst-yesterday',$2::jsonb,now()-interval '2 days')",[u1,JSON.stringify({name:'브랜드',firstEmailAt:stamp,contacts:[{email:'one@brand.test',checked:stamp,discoveryMethod:'public_page'},{email:'two@brand.test',checked:stamp,discoveryMethod:'public_page'}]})]);
+ const h=(await db.query('select sanji_discovery_history($1) history',[u1])).rows[0].history,day=h[0];assert.equal(day.companies,1);assert.equal(day.emails,2);assert.equal(day.publicCompanies,1);
+ const target=(await db.query("insert into sanji_records(owner,kind,data) values($1,'candidate',$2::jsonb) returning id",[u1,JSON.stringify({name:'대량 승인 대상',status:'미접촉',contact:{email:'one@brand.test'}})])).rows[0].id;
+ await db.query("insert into sanji_outbox(owner,target,channel,fingerprint,status,data) select $1,gen_random_uuid(),'email','prior-'||i,'accepted','{}' from generate_series(1,25) i",[u1]);
+ const did=(await db.query("insert into sanji_drafts(owner,data,hash,expires) values($1,$2::jsonb,'approved',now()+interval '1 hour') returning id",[u1,JSON.stringify({target,targetVersion:1,channel:'email',dealVersions:[]})])).rows[0].id;
+ assert.equal((await db.query("select * from sanji_reserve_dispatch($1,$2,'approved','over-old-cap')",[u1,did])).rows[0].status,'submitting');
+ await assert.rejects(()=>db.query("select * from sanji_reserve_dispatch($1,$2,'approved','duplicate-after-cap')",[u1,did]),/중복|만료/);
+ await login(db,u1);const saved=(await db.query("select * from sanji_save_record('settings',$1::jsonb,null,null)",[JSON.stringify({senderName:'운영자',senderAddress:'주소',senderPhone:'번호'})])).rows[0];assert.equal(saved.data.senderName,'운영자');assert.equal('dailyLimit' in saved.data,false);
+ }finally{await db.close();}
+});
+
+test("Production mail formatting keeps one signature and contact block and folds Korean headers without corruption",()=>{
+ const compile=file=>{const c=esbuild.buildSync({entryPoints:[file],bundle:true,platform:'node',format:'cjs',write:false}),m={exports:{}};new Function('module','exports','require',c.outputFiles[0].text)(m,m.exports,require);return m.exports;};
+ const {mailContent}=compile('supabase/functions/_shared/mail-content.ts'),{mime}=compile('supabase/functions/_shared/mail-mime.ts');
+ const signature='남준혁 드림\n두더지웍스 공동대표 · 변리사\n010-5231-0804\ndothegy2021@gmail.com',settings={senderName:'두더지웍스 · 남준혁',senderAddress:'실제 사업장 주소',senderPhone:'010-5231-0804'};
+ const text=mailContent('안녕하세요, 정관장 담당자님.\n\n확인된 제품 특징과 구체적인 콘텐츠 제안.\nhttps://littledore.kr/',signature,settings),subject='(광고) 도합 300만 크리에이터와 함께 일하는 남준혁 변리사입니다';
+ assert.equal(text.split('010-5231-0804').length-1,1);assert.equal(text.split('남준혁 드림').length-1,1);assert.equal(text.split('회신으로 수신 거부').length-1,1);assert.equal(mailContent(text,signature,settings),text);
+ const raw=Buffer.from(mime({subject,body:text,senderName:settings.senderName,email:'self@example.test',messageId:'format-check'},'sender@example.test'),'base64url').toString();
+ const head=raw.split('\r\n\r\n')[0].replace(/\r\n[ \t]+/g,' '),encoded=/^Subject: (.+)$/m.exec(head)[1].trim(),decoded=encoded.replace(/\?=\s+=\?/g,'?==?').replace(/=\?UTF-8\?B\?([^?]+)\?=/g,(_,b)=>Buffer.from(b,'base64').toString());
+ assert.equal(decoded,subject);assert.equal(Buffer.from(raw.split('\r\n\r\n')[1].replace(/\r\n/g,''),'base64').toString(),text);
+ for(const word of raw.match(/=\?UTF-8\?B\?[^?]+\?=/g))assert.ok(word.length<=75);
+ assert.equal(raw.split('\r\n').every(line=>Buffer.byteLength(line)<=998),true);
+});
+
+test("Brand list shows yesterday and today acquisition counts and filters the actual company rows",async()=>{
+ const express=require('express'),app=express();app.use(express.json());
+ const kst=n=>new Date(Date.now()-n*86400000).toLocaleDateString('en-CA',{timeZone:'Asia/Seoul'}),today=kst(0),yesterday=kst(1);
+ const leads=[['y','어제 브랜드',yesterday],['t','오늘 브랜드',today]].map(([id,name,day])=>({id,status:'review',data:{name,firstEmailAt:day+'T12:00:00+09:00',contacts:[{email:id+'@brand.test',source:'https://brand.test'}],outreach:{subject:'제안',body:'본문',intro:'공개 제품 근거. 콘텐츠 기획.',signature:'서명'}}}));
+ const state={candidates:[],deals:[],templates:[],threads:[],outbox:[],jobs:[],suppression:[],settings:{senderName:'운영자',senderAddress:'주소',senderPhone:'번호'}};
+ app.all(/^\/api\/.*/,(req,res)=>{const p=req.path.replace('/api','');if(p==='/me')return res.json({email:'owner@example.test'});if(p==='/state')return res.json(state);if(p==='/connections')return res.json({gmail:{connected:true,email:'owner@example.test'},instagram:{accounts:[]}});if(p==='/discovery')return res.json({settings:{target:40,enabled:true,keywords:[]},leads,history:[{day:today,companies:5,publicCompanies:5,emails:5,candidates:40},{day:yesterday,companies:28,publicCompanies:26,emails:41,candidates:91}],usage:{companies:99},activity:[]});return res.status(404).json({error:p});});app.use('/app',express.static('private/ui'));
+ const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.on('listening',r));let browser;
+ try{browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',headless:true,args:['--no-sandbox']});const page=await browser.newPage({viewport:{width:1365,height:950}});
+ await page.goto('http://127.0.0.1:'+server.address().port+'/app/#brands');await page.waitForSelector('#mail-yesterday-companies');assert.equal(await page.locator('#mail-yesterday-companies').textContent(),'28');assert.equal(await page.locator('#mail-today-companies').textContent(),'5');assert.equal(await page.locator('.mail-card').count(),2);
+ await page.locator('[data-action=mail-day][data-id=yesterday]').click();await page.waitForFunction(()=>document.querySelectorAll('.mail-card').length===1);assert.match(await page.locator('.mail-card h3').textContent(),/어제 브랜드/);
+ await page.locator('[data-action=mail-day][data-id=today]').click();await page.waitForFunction(()=>document.querySelector('.mail-card h3')?.textContent==='오늘 브랜드');
+ await page.screenshot({path:'/tmp/sanji-history-desktop.png',fullPage:true});await page.setViewportSize({width:390,height:844});await page.screenshot({path:'/tmp/sanji-history-mobile.png',fullPage:true});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ await page.goto('http://127.0.0.1:'+server.address().port+'/app/#settings');await page.waitForSelector('#settings-form');assert.equal(await page.locator('[name=dailyLimit]').count(),0);
+ }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
 });

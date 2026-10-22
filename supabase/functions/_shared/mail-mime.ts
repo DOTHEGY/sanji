@@ -14,11 +14,20 @@ function messageIds(v: string) {
     .slice(-20)
     .join(" ");
 }
+// RFC 2047 encoded words stay below 75 octets and split only at Unicode code points.
+export function encodedHeader(value:string){
+ const parts:string[]=[];let chunk="";
+ if(/[\r\n]/.test(value))throw Error("메일 제목·발신자명에 줄바꿈을 넣을 수 없습니다.");
+ for(const char of String(value||"")){if(Buffer.byteLength(chunk+char,"utf8")>42){parts.push(chunk);chunk="";}chunk+=char;}
+ if(chunk||!parts.length)parts.push(chunk);
+ return parts.map(p=>"=?UTF-8?B?"+Buffer.from(p).toString("base64")+"?=").join("\r\n ");
+}
+const base64Body=(text:string)=>Buffer.from(text,"utf8").toString("base64").match(/.{1,76}/g)?.join("\r\n")||"";
 export function mime(d: any, from: string) {
   const lines = [
-    `From: ${from}`,
+    `From: ${d.senderName?encodedHeader(d.senderName)+" <"+from+">":from}`,
     `To: ${mailRecipients(d).join(", ")}`,
-    `Subject: =?UTF-8?B?${Buffer.from(d.subject).toString("base64")}?=`,
+    `Subject: ${encodedHeader(d.subject)}`,
     `Message-ID: <${d.messageId}@sanji.local>`,
     "MIME-Version: 1.0",
   ];
@@ -35,7 +44,7 @@ export function mime(d: any, from: string) {
         "Content-Type: text/plain; charset=UTF-8",
         "Content-Transfer-Encoding: base64",
         "",
-        Buffer.from(d.body).toString("base64"),
+        base64Body(d.body),
       ].join("\r\n"),
     ).toString("base64url");
   const boundary = "sanji_" + crypto.randomUUID();
@@ -46,7 +55,7 @@ export function mime(d: any, from: string) {
     "Content-Type: text/plain; charset=UTF-8",
     "Content-Transfer-Encoding: base64",
     "",
-    Buffer.from(d.body).toString("base64"),
+    base64Body(d.body),
   );
   for (const a of attachments)
     lines.push(

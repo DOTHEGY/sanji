@@ -39,3 +39,5 @@ fs.copyFileSync("web/edge-diagnostics.js", "public/connect/diagnostics.js");
 fs.copyFileSync("supabase/migrations/202610210003_discovery.sql", "public/setup/discovery.sql");
 
 fs.copyFileSync("supabase/migrations/202610220001_mail_refresh.sql", "public/setup/mail-refresh.sql");
+
+fs.copyFileSync("supabase/migrations/202610220002_mail_operations.sql", "public/setup/mail-operations.sql");

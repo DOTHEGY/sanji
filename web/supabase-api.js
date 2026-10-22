@@ -186,7 +186,6 @@ export async function workspaceApi(path, method = "GET", body) {
       jobs: jobsResult.data || [],
       suppression,
       settings: records.find((r) => r._kind === "settings") || {
-        dailyLimit: 20,
         senderName: "",
         senderAddress: "",
         senderPhone: "",

@@ -1,3 +1,4 @@
+import { mailContent } from "../_shared/mail-content.ts";
 import { mailRecipients } from "../_shared/mail-recipients.ts";
 import { singleMailbox, replyRecipient } from "../_shared/mail-reply.ts";
 import { discoveryService } from "../_shared/discovery-service.ts";
@@ -1196,13 +1197,7 @@ Deno.serve(async (req: Request) => {
         ),
       );
       const subject = render(inputData.subject, c, deals, brandNames),
-        body =
-          render(inputData.body, c, deals, brandNames) +
-          "\n\n" +
-          inputData.signature +
-          (inputData.channel === "email"
-            ? `\n\n${settings.senderName}\n${settings.senderAddress}\n${settings.senderPhone}\n${settings.optOut}`
-            : "");
+        body = mailContent(render(inputData.body,c,deals,brandNames),inputData.signature,settings,inputData.channel==="email");
       if (/\{\{/.test(subject + body)) fail(400, "미해결 변수가 있습니다.");
       if (
         /치료|예방|완치|항암|효능.{0,4}보장|혈당.{0,5}(낮|개선)/.test(
@@ -1260,6 +1255,7 @@ Deno.serve(async (req: Request) => {
           email: recipient.email,
           emails: inputData.channel === "email" ? mailRecipients({emails: !inputData.replyTo && inputData.recipientMode === "company_all" ? c.recipientEmails : undefined,email:recipient.email}) : [],
           replyRecipientNeedsReview:recipient.changed,
+          senderName: settings?.senderName||"",
           targetName: c.name,
           targetVersion: c.version,
           dealVersions: deals.map((d: any) => ({

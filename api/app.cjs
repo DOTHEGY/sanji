@@ -466,7 +466,6 @@ function createApp(config = {}) {
         .prepare("SELECT identity,reason FROM suppression WHERE user_id=?")
         .all(req.user),
       settings: list(req.user, "settings")[0] || {
-        dailyLimit: 20,
         senderName: "",
         senderAddress: "",
         senderPhone: "",
@@ -563,17 +562,13 @@ function createApp(config = {}) {
     });
   }
   app.put("/api/settings", (req, res) => {
-    const b = req.body,
-      limit = Number(b.dailyLimit);
-    if (!Number.isInteger(limit) || limit < 1 || limit > 100)
-      fail(400, "일일 제한은 1~100입니다.");
+    const b = req.body;
     const old = list(req.user, "settings")[0];
     res.json(
       put(
         req.user,
         "settings",
         {
-          dailyLimit: limit,
           senderName: String(b.senderName || "").slice(0, 200),
           senderAddress: String(b.senderAddress || "").slice(0, 500),
           senderPhone: String(b.senderPhone || "").slice(0, 100),
@@ -1114,16 +1109,6 @@ function createApp(config = {}) {
       if (d.attachments.length || Buffer.byteLength(d.body) > 1000)
         fail(400, "현재 Instagram 회신은 1000바이트 이하 텍스트만 지원합니다.");
     }
-    const day = new Date().toISOString().slice(0, 10),
-      limit = list(req.user, "settings")[0]?.dailyLimit || 20;
-    if (
-      db
-        .prepare(
-          "SELECT COUNT(*) n FROM outbox WHERE user_id=? AND created LIKE ? AND status!='failed_before_send'",
-        )
-        .get(req.user, day + "%").n >= limit
-    )
-      fail(429, "일일 발송 제한에 도달했습니다.");
     let gmail, ig;
     if (d.channel === "email") gmail = await gmailToken(req.user);
     if (d.channel === "instagram") {
@@ -1155,14 +1140,6 @@ function createApp(config = {}) {
         )
       )
         fail(409, "승인 중 조건이 변경됐습니다.");
-      if (
-        db
-          .prepare(
-            "SELECT COUNT(*) n FROM outbox WHERE user_id=? AND created LIKE ? AND status!='failed_before_send'",
-          )
-          .get(req.user, day + "%").n >= limit
-      )
-        fail(429, "일일 발송 제한에 도달했습니다.");
       if (
         !db
           .prepare("UPDATE drafts SET used=1 WHERE id=? AND used=0")
