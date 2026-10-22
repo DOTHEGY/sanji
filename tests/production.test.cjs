@@ -878,7 +878,7 @@ test("copy editor keeps main template intact while AI changes intro only; schedu
       await p.locator("#compose-form [name=body]").inputValue(),
       main,
     );
-    await p.locator("[name=lawfulBasis]").fill("테스트용 사전 동의 확인 기록");
+
     await p.getByRole("button", { name: "수신자별 최종 미리보기" }).click();
     await p.waitForSelector("#send-approved");
     assert.match(

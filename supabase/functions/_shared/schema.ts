@@ -141,7 +141,7 @@ const draft = z.object({
   templateId:z.string().uuid().optional(),
   templateVersion:z.number().int().positive().optional(),
   recipientMode:z.enum(["primary","company_all"]).default("primary"),
-  lawfulBasis: text.min(5),
+  lawfulBasis: text.nullish().transform(value => value || ""),
   marketing: z.boolean().default(false),
 });
 export { candidate, deal, template, draft };

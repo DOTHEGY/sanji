@@ -1,5 +1,7 @@
 import { companyIdentity } from "./discovery.ts";
 import { leadOutreach } from "./mail-template.ts";
+export const concreteProductName=(s:any)=>{const t=String(s||"").trim();return t.length>=3&&!/제품군|완제품|협의 가능한|제안 가능|공식몰|쇼핑몰|헬스케어몰|라이프 솔루션|^SHOP$|^공식몰 특가$|가을맞이|Big 세일|브랜드 페스타|최근.*상품|진심을 담은 커피/i.test(t);};
+const nonFoodProduct=(s:any)=>/마스크팩|딥 마스크|선크림|바디로션|나이트크림|에센셜 오일|클로라겐 선/.test(String(s||""));
 const unsafe=/치료|예방|항암|완치|혈당|혈압|면역력|체지방|다이어트|키성장|키 성장|통증|개선|효능|효과|질병|성기능|발기/;
 const clean=(s:any)=>String(s||"").replace(/\[[^\]]*\]|★[^★]*★|[★☆]/g,"").replace(/단독구매상품[\s\S]*$|상품옵션[\s\S]*$/g,"").replace(/\s+/g," ").trim();
 export function researchBrand(lead:any,template:any,checked=new Date().toISOString()){
@@ -14,7 +16,7 @@ export function researchBrand(lead:any,template:any,checked=new Date().toISOStri
   for(const m of String(p.excerpt||"").matchAll(/상품명\s*:\s*(.{3,140}?)(?=상품요약정보|소비자가|판매가|상품명|타임세일|$)/g))candidates.push({name:clean(m[1]),quote:m[0],url:p.url});
   if(/\/product\/(?:detail|[^/]+)|[?&](?:product_no|goodsNo)=/i.test(p.url))candidates.push({name:clean(String(p.title||"").split(/\s+-\s+/)[0]),quote:p.title,url:p.url});
  }
- let product=candidates.find(p=>p.name.length>=4&&p.name.length<=95&&!unsafe.test(p.name)&&!/(로그인|쿠폰|배송비|판매가)/.test(p.name));
+ let product=candidates.find(p=>concreteProductName(p.name)&&p.name.length<=95&&!unsafe.test(p.name)&&!/(로그인|쿠폰|배송비|판매가|공식몰|쇼핑몰|헬스케어몰)/.test(p.name));
  if(!product){for(const p of pages){const text=[p.title,p.description,p.excerpt].join(" ");const group=["락토핏","아임비타","프로메가","아이클리어","올리브오일","단백질 쉐이크","유산균","프로폴리스","마누카꿀","스피루리나","초유","비타민","오메가3","견과","멸균우유","유제품","홍삼","콜라겐","효소","오트밀","디카페인 커피"].find(k=>text.includes(k));if(group){product={name:group+" 제품군",quote:text.slice(Math.max(0,text.indexOf(group)-30),text.indexOf(group)+90),url:p.url};break;}}}
  const oldName=String(lead.name||"");let brand=(lead.research?.method==="official_page_evidence"?oldName:old.brandName)||oldName;
  if(old.needsPersonalization&&home?.title&&/공식.*(?:몰|쇼핑몰)/.test(home.title)&&!old.sendBlockedReason&&!companyIdentity(home.title+" "+home.description).includes(companyIdentity(brand)))brand=clean(home.title.split(/\s+-\s+|\s*[|｜]\s*/)[0]).replace(/\s*공식.*$/,"");
@@ -31,11 +33,12 @@ export function researchBrand(lead:any,template:any,checked=new Date().toISOStri
  });
  const ownershipSupported=contactEvidence.length>0&&contactEvidence.every((c:any)=>c.supported);
  const research:any={checked,method:"official_page_evidence",ownership:ownershipSupported?"source_supported":"research_pending",contactEvidence,product:product?.name||"",productSource:product?.url||"",reason:device?"확인된 사이트는 식품이 아닌 기기 업체입니다. 동명 식품 브랜드를 자동 재검색합니다.":!food?"공식 페이지에서 식품 상품 근거를 찾지 못했습니다.":!product?"공식 페이지에서 특정 상품명을 추가 확인 중입니다.":!ownershipSupported?"제안 브랜드와 이메일이 게시된 회사의 연결 근거를 추가 조사 중입니다.":"공식 페이지의 브랜드·상품·이메일 게시 출처 대조 완료"};
- if(old.intro&&!old.needsPersonalization&&!old.sendBlockedReason){
+ if(old.intro&&!old.needsPersonalization&&!old.sendBlockedReason&&(!old.productName||concreteProductName(old.productName))&&!nonFoodProduct(old.productName)){
  const kept={...old};if(old.personalizationRevision===3&&old.brandName&&old.brandName!==brand){for(const k of ["subject","body","signature"])if(typeof kept[k]==="string")kept[k]=kept[k].split(old.brandName).join(brand);kept.brandName=brand;kept.companyName=brand;}
  return {research,outreach:kept};
  }
- if(!product||!food||device)return {research,outreach:{...(template?leadOutreach(template,lead,checked):old),needsPersonalization:!old.intro,researchStatus:"pending",researchReason:research.reason}};
+ if(product&&(!concreteProductName(product.name)||nonFoodProduct(product.name)))product=undefined;
+ if(!product||!food||device)return {research,outreach:{...(template?leadOutreach(template,lead,checked):old),needsPersonalization:true,researchStatus:"pending",researchReason:research.reason}};
  let idea="상품 구성과 사용 방법을 직접 보여주는 푸드·라이프스타일 콘텐츠로 공동구매를 제안드리고 싶습니다.";
  if(/견과|넛츠|넛트/.test(product.name))idea="베이킹 크리에이터가 실제 레시피에서 견과를 활용하고, 구성별 차이를 보여주는 콘텐츠로 공동구매를 제안드리고 싶습니다.";
  else if(/단백질|쉐이크|프로틴/.test(product.name))idea="운동·웰니스 크리에이터가 실제 조리·섭취 준비 과정과 제품별 구성을 보여주는 콘텐츠로 공동구매를 제안드리고 싶습니다.";

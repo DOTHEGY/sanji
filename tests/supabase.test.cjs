@@ -843,7 +843,7 @@ test("Brand email workspace reviews all company addresses directly, preserves co
  assert.equal(await page.locator('[name=companyName]').inputValue(),"브랜드A");
  assert.equal(await page.locator('[name=body]').inputValue(),copy.body);
  await page.locator('[data-action="mail-save"]').click();await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes("저장"));assert.equal(saved,1);assert.equal(prepared,0);assert.equal(scheduled,0);
- await page.locator('[name=ownership]').check();await page.locator('[name=lawfulBasis]').fill("사전 동의 기록 확인 완료");await page.locator('#mail-review-form button[type=submit]').click();await page.waitForSelector('[name=bulk-approve]');
+ await page.locator('[name=ownership]').check();await page.locator('#mail-review-form button[type=submit]').click();await page.waitForSelector('[name=bulk-approve]');
  assert.equal(drafted[0].marketing,false);assert.equal(drafted[0].recipientMode,"company_all");assert.equal(drafted[0].body,copy.body);assert.equal(drafted[0].subject,copy.subject);assert.equal(scheduled,0);
  assert.match(await page.locator('#mail-final').textContent(),/a@brand.example, cs@brand.example/);
  await page.locator('[name=body]').fill(copy.body+" 수정");assert.equal(await page.locator('[name=bulk-approve]').count(),0);
@@ -1056,7 +1056,7 @@ test("Bulk email selects and approves two companies once, sends approved hashes 
  app.use("/app",express.static("private/ui"));const server=app.listen(0,"127.0.0.1");let browser;
  try{browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||"/usr/bin/chromium",args:["--no-sandbox"]});const page=await browser.newPage();await page.goto("http://127.0.0.1:"+server.address().port+"/app/#brands");
  await page.locator('[data-action="mail-select-all"]').click();assert.equal(await page.locator('[data-mail-select]:checked').count(),2);await page.locator('[data-action="mail-review-selected"]').click();
- await page.locator('[data-action="mail-ownership-all"]').click();assert.equal(await page.locator('[name=ownership]:checked').count(),2);await page.locator('[name=lawfulBasis]').fill("협업 제안 발송 근거 확인");await page.locator('#mail-review-form button[type=submit]').click();await page.waitForSelector('#mail-approve-all');assert.equal(sent.length,0);
+ await page.locator('[data-action="mail-ownership-all"]').click();assert.equal(await page.locator('[name=ownership]:checked').count(),2);await page.locator('#mail-review-form button[type=submit]').click();await page.waitForSelector('#mail-approve-all');assert.equal(sent.length,0);
  await page.locator('[data-action="mail-send-all"]').click();assert.equal(sent.length,0);await page.locator('#mail-approve-all').check();assert.equal(await page.locator('[name=bulk-approve]:checked').count(),2);
  await page.locator('[data-action="mail-send-all"]').click();await page.waitForFunction(()=>document.querySelector('#bulk-result-1').textContent.includes('Gmail 서버 접수')&&!document.querySelector('[data-action=mail-send-all]').disabled);assert.equal(sent.length,2);assert.ok(sent.every(x=>x.approved&&x.hash==="hash-"+x.path.split("/")[2]));
  await page.locator('[data-action="mail-send-all"]').click();assert.equal(sent.length,2);

@@ -283,11 +283,24 @@ function renderLeadText(text2, brand, product, intro = "") {
   return body.includes("{{\uAC1C\uC778\uD654}}") ? body.split("{{\uAC1C\uC778\uD654}}").join(intro) : (intro ? intro + "\n\n" : "") + body;
 }
 function leadOutreach(template2, lead, time = (/* @__PURE__ */ new Date()).toISOString()) {
-  const old = lead.outreach || {}, brand = old.brandName || lead.name || lead.company || "\uC5C5\uCCB4", product = old.productName || lead.product || "\uACF5\uB3D9\uAD6C\uB9E4 \uD611\uC758 \uAC00\uB2A5\uD55C \uC0C1\uD488", intro = old.intro || "";
+  const old = lead.outreach || {}, brand = old.brandName || lead.name || lead.company || "\uC5C5\uCCB4", product = old.productName || lead.product || "\uACF5\uB3D9\uAD6C\uB9E4 \uD611\uC758 \uAC00\uB2A5\uD55C \uC0C1\uD488", intro = template2.data.copyFlow === "product_interest_v1" ? productInterestIntro(product, old.intro || "") : old.intro || "";
   return { ...old, brandName: brand, companyName: brand, productName: product, intro, subject: renderLeadText(template2.data.subject, brand, product), body: renderLeadText(template2.data.body, brand, product, intro), signature: renderLeadText(template2.data.signature, brand, product), templateId: template2.id, templateVersion: template2.version, templateUpdated: template2.updated, approved: false, needsPersonalization: !intro, updated: time };
+}
+function productInterestIntro(product, intro) {
+  const name = String(product || "").replace(/\s*\((?:단품|단일상품)\)\s*/g, "").trim();
+  if (!name || name === "\uACF5\uB3D9\uAD6C\uB9E4 \uD611\uC758 \uAC00\uB2A5\uD55C \uC0C1\uD488") return "";
+  if (String(intro).startsWith("\uADC0\uC0AC\uC758 \u2018")) return intro;
+  const lines = String(intro || "").split(/\n+/).map((s) => s.trim()).filter(Boolean);
+  const idea = lines.filter((s) => !/^공식(?:몰| 제품| 홈페이지| 사이트)/.test(s)).join(" ").replace(/푸드·라이프스타일/g, "\uB77C\uC774\uD504\uC2A4\uD0C0\uC77C").replace(/공동구매를 제안드리고 싶습니다\./g, "\uACF5\uB3D9\uAD6C\uB9E4\uB97C \uC9C4\uD589\uD574\uBCF4\uACE0 \uC2F6\uC2B5\uB2C8\uB2E4.");
+  return "\uADC0\uC0AC\uC758 \u2018" + name + "\u2019 \uC81C\uD488\uC5D0 \uAD00\uC2EC\uC774 \uC788\uC5B4 \uD06C\uB9AC\uC5D0\uC774\uD130 \uACF5\uB3D9\uAD6C\uB9E4\uB97C \uC81C\uC548\uB4DC\uB9BD\uB2C8\uB2E4." + (idea ? "\n" + idea : "");
 }
 
 // supabase/functions/_shared/brand-research.ts
+var concreteProductName = (s) => {
+  const t = String(s || "").trim();
+  return t.length >= 3 && !/제품군|완제품|협의 가능한|제안 가능|공식몰|쇼핑몰|헬스케어몰|라이프 솔루션|^SHOP$|^공식몰 특가$|가을맞이|Big 세일|브랜드 페스타|최근.*상품|진심을 담은 커피/i.test(t);
+};
+var nonFoodProduct = (s) => /마스크팩|딥 마스크|선크림|바디로션|나이트크림|에센셜 오일|클로라겐 선/.test(String(s || ""));
 var unsafe = /치료|예방|항암|완치|혈당|혈압|면역력|체지방|다이어트|키성장|키 성장|통증|개선|효능|효과|질병|성기능|발기/;
 var clean = (s) => String(s || "").replace(/\[[^\]]*\]|★[^★]*★|[★☆]/g, "").replace(/단독구매상품[\s\S]*$|상품옵션[\s\S]*$/g, "").replace(/\s+/g, " ").trim();
 function researchBrand(lead, template2, checked = (/* @__PURE__ */ new Date()).toISOString()) {
@@ -308,7 +321,7 @@ function researchBrand(lead, template2, checked = (/* @__PURE__ */ new Date()).t
     for (const m of String(p.excerpt || "").matchAll(/상품명\s*:\s*(.{3,140}?)(?=상품요약정보|소비자가|판매가|상품명|타임세일|$)/g)) candidates.push({ name: clean(m[1]), quote: m[0], url: p.url });
     if (/\/product\/(?:detail|[^/]+)|[?&](?:product_no|goodsNo)=/i.test(p.url)) candidates.push({ name: clean(String(p.title || "").split(/\s+-\s+/)[0]), quote: p.title, url: p.url });
   }
-  let product = candidates.find((p) => p.name.length >= 4 && p.name.length <= 95 && !unsafe.test(p.name) && !/(로그인|쿠폰|배송비|판매가)/.test(p.name));
+  let product = candidates.find((p) => concreteProductName(p.name) && p.name.length <= 95 && !unsafe.test(p.name) && !/(로그인|쿠폰|배송비|판매가|공식몰|쇼핑몰|헬스케어몰)/.test(p.name));
   if (!product) {
     for (const p of pages) {
       const text2 = [p.title, p.description, p.excerpt].join(" ");
@@ -340,7 +353,7 @@ function researchBrand(lead, template2, checked = (/* @__PURE__ */ new Date()).t
   });
   const ownershipSupported = contactEvidence.length > 0 && contactEvidence.every((c) => c.supported);
   const research = { checked, method: "official_page_evidence", ownership: ownershipSupported ? "source_supported" : "research_pending", contactEvidence, product: product?.name || "", productSource: product?.url || "", reason: device ? "\uD655\uC778\uB41C \uC0AC\uC774\uD2B8\uB294 \uC2DD\uD488\uC774 \uC544\uB2CC \uAE30\uAE30 \uC5C5\uCCB4\uC785\uB2C8\uB2E4. \uB3D9\uBA85 \uC2DD\uD488 \uBE0C\uB79C\uB4DC\uB97C \uC790\uB3D9 \uC7AC\uAC80\uC0C9\uD569\uB2C8\uB2E4." : !food ? "\uACF5\uC2DD \uD398\uC774\uC9C0\uC5D0\uC11C \uC2DD\uD488 \uC0C1\uD488 \uADFC\uAC70\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4." : !product ? "\uACF5\uC2DD \uD398\uC774\uC9C0\uC5D0\uC11C \uD2B9\uC815 \uC0C1\uD488\uBA85\uC744 \uCD94\uAC00 \uD655\uC778 \uC911\uC785\uB2C8\uB2E4." : !ownershipSupported ? "\uC81C\uC548 \uBE0C\uB79C\uB4DC\uC640 \uC774\uBA54\uC77C\uC774 \uAC8C\uC2DC\uB41C \uD68C\uC0AC\uC758 \uC5F0\uACB0 \uADFC\uAC70\uB97C \uCD94\uAC00 \uC870\uC0AC \uC911\uC785\uB2C8\uB2E4." : "\uACF5\uC2DD \uD398\uC774\uC9C0\uC758 \uBE0C\uB79C\uB4DC\xB7\uC0C1\uD488\xB7\uC774\uBA54\uC77C \uAC8C\uC2DC \uCD9C\uCC98 \uB300\uC870 \uC644\uB8CC" };
-  if (old.intro && !old.needsPersonalization && !old.sendBlockedReason) {
+  if (old.intro && !old.needsPersonalization && !old.sendBlockedReason && (!old.productName || concreteProductName(old.productName)) && !nonFoodProduct(old.productName)) {
     const kept = { ...old };
     if (old.personalizationRevision === 3 && old.brandName && old.brandName !== brand) {
       for (const k of ["subject", "body", "signature"]) if (typeof kept[k] === "string") kept[k] = kept[k].split(old.brandName).join(brand);
@@ -349,7 +362,8 @@ function researchBrand(lead, template2, checked = (/* @__PURE__ */ new Date()).t
     }
     return { research, outreach: kept };
   }
-  if (!product || !food || device) return { research, outreach: { ...template2 ? leadOutreach(template2, lead, checked) : old, needsPersonalization: !old.intro, researchStatus: "pending", researchReason: research.reason } };
+  if (product && (!concreteProductName(product.name) || nonFoodProduct(product.name))) product = void 0;
+  if (!product || !food || device) return { research, outreach: { ...template2 ? leadOutreach(template2, lead, checked) : old, needsPersonalization: true, researchStatus: "pending", researchReason: research.reason } };
   let idea = "\uC0C1\uD488 \uAD6C\uC131\uACFC \uC0AC\uC6A9 \uBC29\uBC95\uC744 \uC9C1\uC811 \uBCF4\uC5EC\uC8FC\uB294 \uD478\uB4DC\xB7\uB77C\uC774\uD504\uC2A4\uD0C0\uC77C \uCF58\uD150\uCE20\uB85C \uACF5\uB3D9\uAD6C\uB9E4\uB97C \uC81C\uC548\uB4DC\uB9AC\uACE0 \uC2F6\uC2B5\uB2C8\uB2E4.";
   if (/견과|넛츠|넛트/.test(product.name)) idea = "\uBCA0\uC774\uD0B9 \uD06C\uB9AC\uC5D0\uC774\uD130\uAC00 \uC2E4\uC81C \uB808\uC2DC\uD53C\uC5D0\uC11C \uACAC\uACFC\uB97C \uD65C\uC6A9\uD558\uACE0, \uAD6C\uC131\uBCC4 \uCC28\uC774\uB97C \uBCF4\uC5EC\uC8FC\uB294 \uCF58\uD150\uCE20\uB85C \uACF5\uB3D9\uAD6C\uB9E4\uB97C \uC81C\uC548\uB4DC\uB9AC\uACE0 \uC2F6\uC2B5\uB2C8\uB2E4.";
   else if (/단백질|쉐이크|프로틴/.test(product.name)) idea = "\uC6B4\uB3D9\xB7\uC6F0\uB2C8\uC2A4 \uD06C\uB9AC\uC5D0\uC774\uD130\uAC00 \uC2E4\uC81C \uC870\uB9AC\xB7\uC12D\uCDE8 \uC900\uBE44 \uACFC\uC815\uACFC \uC81C\uD488\uBCC4 \uAD6C\uC131\uC744 \uBCF4\uC5EC\uC8FC\uB294 \uCF58\uD150\uCE20\uB85C \uACF5\uB3D9\uAD6C\uB9E4\uB97C \uC81C\uC548\uB4DC\uB9AC\uACE0 \uC2F6\uC2B5\uB2C8\uB2E4.";
@@ -1262,7 +1276,7 @@ var draft = z.object({
   templateId: z.string().uuid().optional(),
   templateVersion: z.number().int().positive().optional(),
   recipientMode: z.enum(["primary", "company_all"]).default("primary"),
-  lawfulBasis: text.min(5),
+  lawfulBasis: text.nullish().transform((value) => value || ""),
   marketing: z.boolean().default(false)
 });
 
