@@ -237,7 +237,7 @@ function creatorDiscoveryService({ sb: sb2, query: query2, audit: audit2, env: e
     if (today.length >= c.target) return { status: "target_reached", found: today.length };
     const claimed = await query2(sb2.from("sanji_creator_config").update({ last_search: (/* @__PURE__ */ new Date()).toISOString(), search_cursor: c.search_cursor + 1, runtime: { status: "searching", checked: (/* @__PURE__ */ new Date()).toISOString() } }).eq("owner", owner).eq("search_cursor", c.search_cursor).select("owner"));
     if (!claimed?.length) return { status: "busy" };
-    const keyword = c.keywords[c.search_cursor % c.keywords.length] + ["", " \uD06C\uB9AC\uC5D0\uC774\uD130", " \uD611\uC5C5", " \uC778\uD50C\uB8E8\uC5B8\uC11C", " \uBE44\uC988\uB2C8\uC2A4"][Math.floor(c.search_cursor / c.keywords.length) % 5], term = "site:instagram.com " + keyword + " -inurl:/p/ -inurl:/reel/";
+    const keyword = c.keywords[c.search_cursor % c.keywords.length] + ["", " \uD06C\uB9AC\uC5D0\uC774\uD130", " \uD611\uC5C5", " \uC778\uD50C\uB8E8\uC5B8\uC11C", " \uBE44\uC988\uB2C8\uC2A4"][Math.floor(c.search_cursor / c.keywords.length) % 5], term = "site:instagram.com " + keyword;
     let rows = [], sources = [];
     for (const engine of ["Naver", "Google", "Bing", "DuckDuckGo"]) {
       const url2 = searchUrl(engine, term);
