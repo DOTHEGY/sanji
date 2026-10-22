@@ -4,7 +4,7 @@ const unsafe=/치료|예방|항암|완치|혈당|혈압|면역력|체지방|다�
 const clean=(s:any)=>String(s||"").replace(/\[[^\]]*\]|★[^★]*★|[★☆]/g,"").replace(/단독구매상품[\s\S]*$|상품옵션[\s\S]*$/g,"").replace(/\s+/g," ").trim();
 export function researchBrand(lead:any,template:any,checked=new Date().toISOString()){
  const pages=(lead.publicEvidence||[]).filter((p:any)=>p.url&&p.checked),old=lead.outreach||{};
- const home=pages.find((p:any)=>{try{return new URL(p.url).origin===new URL(lead.website).origin;}catch{return false;}});
+ const home=pages.find((p:any)=>{try{return new URL(p.url).hostname.replace(/^www\./,"")===new URL(lead.website).hostname.replace(/^www\./,"");}catch{return false;}});
  const pageText=pages.map((p:any)=>[p.title,p.description,p.excerpt].join(" ")).join(" ");
  const food=/건강기능식품|건강식품|견과|유산균|비타민|단백질|올리브|우유|유제품|선식|홍삼|오메가|콜라겐|효소|커피|차류|오트밀/.test(pageText);
  const device=/저주파|의료기기|안마기|마사지기|전기자극/.test(pageText)&&!/건강기능식품|유산균|비타민|견과/.test(pageText);
@@ -19,13 +19,15 @@ export function researchBrand(lead:any,template:any,checked=new Date().toISOStri
  const oldName=String(lead.name||"");let brand=(lead.research?.method==="official_page_evidence"?oldName:old.brandName)||oldName;
  if(old.needsPersonalization&&home?.title&&/공식.*(?:몰|쇼핑몰)/.test(home.title)&&!old.sendBlockedReason&&!companyIdentity(home.title+" "+home.description).includes(companyIdentity(brand)))brand=clean(home.title.split(/\s+-\s+|\s*[|｜]\s*/)[0]).replace(/\s*공식.*$/,"");
  if(/새\s*창\s*열림|›|https?:|\.(?:co\.kr|com)\b/.test(brand)&&home?.title)brand=clean(home.title.split(/\s+-\s+|\s*[|｜]\s*/)[0]).replace(/\s*공식.*$/,"");
- const identity=companyIdentity(brand.split(/[·|｜]/)[0]).replace(/(?:건강식품|공식몰|건강몰)$/, ""),sameName=!!identity&&!!home&&companyIdentity([home.title,home.description,home.excerpt].join(" ")).includes(identity);
+ const identities=Array.from(new Set([brand,old.brandName,lead.name].filter(Boolean).flatMap(s=>String(s).split(/[·|｜]/)).map(s=>companyIdentity(s).replace(/(?:건강식품|공식몰|건강몰)$/, "")).filter(s=>s.length>=2)));
+ const matches=(text:string)=>identities.some(s=>companyIdentity(text).includes(s));
+ const sameName=!!home&&matches([home.title,home.description,home.excerpt].join(" "));
  const contactEvidence=(lead.contacts||[]).map((c:any)=>{
-  const p=pages.find((p:any)=>p.url===c.source);
+  const p=pages.find((p:any)=>{try{return new URL(p.url).href===new URL(c.source).href;}catch{return false;}});
   // A link to another legal entity alone is insufficient. Require the target brand on the actual email source.
   const sameOrigin=!!p&&!!home&&new URL(p.url).origin===new URL(home.url).origin;
-  const sameSource=!!p&&(companyIdentity([p.title,p.description].join(" ")).includes(identity)||(sameOrigin&&String(p.excerpt||"").toLowerCase().includes(String(c.email||"").toLowerCase())));
-  return {email:c.email,source:c.source,supported:sameName&&sameSource&&!device&&food,checked};
+  const sameSource=!!p&&(matches([p.title,p.description].join(" "))||(sameOrigin&&String(p.excerpt||"").toLowerCase().includes(String(c.email||"").toLowerCase())));
+  return {email:c.email,source:c.source,supported:sameName&&sameSource&&!device,checked};
  });
  const ownershipSupported=contactEvidence.length>0&&contactEvidence.every((c:any)=>c.supported);
  const research:any={checked,method:"official_page_evidence",ownership:ownershipSupported?"source_supported":"research_pending",contactEvidence,product:product?.name||"",productSource:product?.url||"",reason:device?"확인된 사이트는 식품이 아닌 기기 업체입니다. 동명 식품 브랜드를 자동 재검색합니다.":!food?"공식 페이지에서 식품 상품 근거를 찾지 못했습니다.":!product?"공식 페이지에서 특정 상품명을 추가 확인 중입니다.":!ownershipSupported?"제안 브랜드와 이메일이 게시된 회사의 연결 근거를 추가 조사 중입니다.":"공식 페이지의 브랜드·상품·이메일 게시 출처 대조 완료"};

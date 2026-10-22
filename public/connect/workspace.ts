@@ -189,7 +189,7 @@ function researchBrand(lead, template2, checked = (/* @__PURE__ */ new Date()).t
   const pages = (lead.publicEvidence || []).filter((p) => p.url && p.checked), old = lead.outreach || {};
   const home = pages.find((p) => {
     try {
-      return new URL(p.url).origin === new URL(lead.website).origin;
+      return new URL(p.url).hostname.replace(/^www\./, "") === new URL(lead.website).hostname.replace(/^www\./, "");
     } catch {
       return false;
     }
@@ -218,12 +218,20 @@ function researchBrand(lead, template2, checked = (/* @__PURE__ */ new Date()).t
   let brand = (lead.research?.method === "official_page_evidence" ? oldName : old.brandName) || oldName;
   if (old.needsPersonalization && home?.title && /공식.*(?:몰|쇼핑몰)/.test(home.title) && !old.sendBlockedReason && !companyIdentity(home.title + " " + home.description).includes(companyIdentity(brand))) brand = clean(home.title.split(/\s+-\s+|\s*[|｜]\s*/)[0]).replace(/\s*공식.*$/, "");
   if (/새\s*창\s*열림|›|https?:|\.(?:co\.kr|com)\b/.test(brand) && home?.title) brand = clean(home.title.split(/\s+-\s+|\s*[|｜]\s*/)[0]).replace(/\s*공식.*$/, "");
-  const identity = companyIdentity(brand.split(/[·|｜]/)[0]).replace(/(?:건강식품|공식몰|건강몰)$/, ""), sameName = !!identity && !!home && companyIdentity([home.title, home.description, home.excerpt].join(" ")).includes(identity);
+  const identities2 = Array.from(new Set([brand, old.brandName, lead.name].filter(Boolean).flatMap((s) => String(s).split(/[·|｜]/)).map((s) => companyIdentity(s).replace(/(?:건강식품|공식몰|건강몰)$/, "")).filter((s) => s.length >= 2)));
+  const matches = (text2) => identities2.some((s) => companyIdentity(text2).includes(s));
+  const sameName = !!home && matches([home.title, home.description, home.excerpt].join(" "));
   const contactEvidence = (lead.contacts || []).map((c) => {
-    const p = pages.find((p2) => p2.url === c.source);
+    const p = pages.find((p2) => {
+      try {
+        return new URL(p2.url).href === new URL(c.source).href;
+      } catch {
+        return false;
+      }
+    });
     const sameOrigin = !!p && !!home && new URL(p.url).origin === new URL(home.url).origin;
-    const sameSource = !!p && (companyIdentity([p.title, p.description].join(" ")).includes(identity) || sameOrigin && String(p.excerpt || "").toLowerCase().includes(String(c.email || "").toLowerCase()));
-    return { email: c.email, source: c.source, supported: sameName && sameSource && !device && food, checked };
+    const sameSource = !!p && (matches([p.title, p.description].join(" ")) || sameOrigin && String(p.excerpt || "").toLowerCase().includes(String(c.email || "").toLowerCase()));
+    return { email: c.email, source: c.source, supported: sameName && sameSource && !device, checked };
   });
   const ownershipSupported = contactEvidence.length > 0 && contactEvidence.every((c) => c.supported);
   const research = { checked, method: "official_page_evidence", ownership: ownershipSupported ? "source_supported" : "research_pending", contactEvidence, product: product?.name || "", productSource: product?.url || "", reason: device ? "\uD655\uC778\uB41C \uC0AC\uC774\uD2B8\uB294 \uC2DD\uD488\uC774 \uC544\uB2CC \uAE30\uAE30 \uC5C5\uCCB4\uC785\uB2C8\uB2E4. \uB3D9\uBA85 \uC2DD\uD488 \uBE0C\uB79C\uB4DC\uB97C \uC790\uB3D9 \uC7AC\uAC80\uC0C9\uD569\uB2C8\uB2E4." : !food ? "\uACF5\uC2DD \uD398\uC774\uC9C0\uC5D0\uC11C \uC2DD\uD488 \uC0C1\uD488 \uADFC\uAC70\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4." : !product ? "\uACF5\uC2DD \uD398\uC774\uC9C0\uC5D0\uC11C \uD2B9\uC815 \uC0C1\uD488\uBA85\uC744 \uCD94\uAC00 \uD655\uC778 \uC911\uC785\uB2C8\uB2E4." : !ownershipSupported ? "\uC81C\uC548 \uBE0C\uB79C\uB4DC\uC640 \uC774\uBA54\uC77C\uC774 \uAC8C\uC2DC\uB41C \uD68C\uC0AC\uC758 \uC5F0\uACB0 \uADFC\uAC70\uB97C \uCD94\uAC00 \uC870\uC0AC \uC911\uC785\uB2C8\uB2E4." : "\uACF5\uC2DD \uD398\uC774\uC9C0\uC758 \uBE0C\uB79C\uB4DC\xB7\uC0C1\uD488\xB7\uC774\uBA54\uC77C \uAC8C\uC2DC \uCD9C\uCC98 \uB300\uC870 \uC644\uB8CC" };
