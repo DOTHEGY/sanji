@@ -1,3 +1,4 @@
+import { creatorDiscoveryService } from "../_shared/creator-discovery.ts";
 import {drainApprovedJobs} from "../_shared/job-batch.ts";
 import { discoveryCompletionNotifier } from "../_shared/discovery-notification.ts";
 import { mailContent } from "../_shared/mail-content.ts";
@@ -141,6 +142,7 @@ async function saveConnection(u: string, p: string, data: any) {
   );
 }
 const notifyOwner = discoveryCompletionNotifier({sb,query,gmailToken,remote,audit,env});
+const creatorDiscovery = creatorDiscoveryService({sb,query,audit,env});
 const discovery = discoveryService({sb,query,connection,saveConnection,env,audit,putRecord,notifyOwner});
 async function remote(url: string, options: any = {}, stage = "") {
   const r = await fetch(url, {
@@ -737,6 +739,10 @@ Deno.serve(async (req: Request) => {
       if (!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403, "발굴 실행기 인증 실패");
       return json(await discovery.scheduled(await req.json().catch(()=>({}))));
     }
+    if(path === "/creator-discovery/tick" && req.method === "POST"){
+      if(!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403,"발굴 실행기 인증 실패");
+      return json(await creatorDiscovery.scheduled());
+    }
     if (path === "/jobs/run" && req.method === "POST")
       return await runJobs(req);
     const bearer = req.headers.get("authorization") || "";
@@ -761,6 +767,9 @@ Deno.serve(async (req: Request) => {
         fail(413, "요청 크기 초과");
       return text ? JSON.parse(text) : {};
     };
+    if(path === "/creator-discovery" || path.startsWith("/creator-discovery/")){
+      try{return json(await creatorDiscovery.handle(path,req.method,u,input));}catch(e){fail(400,String(e.message||"크리에이터 발굴 실패"));}
+    }
     if (path === "/discovery" || path.startsWith("/discovery/")) {
       try { return json(await discovery.handle(path,req.method,u,input)); }
       catch(e) { fail(e instanceof HttpError ? e.status : 400, String(e.message || "발굴 작업 실패")); }

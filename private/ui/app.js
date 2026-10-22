@@ -210,6 +210,20 @@ function dashboard() {
 function outboxTable() {
   return `<div class="table-scroll"><table><thead><tr><th>대상</th><th>채널</th><th>상태</th><th>일시</th></tr></thead><tbody>${data.outbox.map((o) => `<tr><td>${esc(targetName(o.target))}</td><td>${esc(o.channel)}</td><td>${tag(o.status, o.status === "accepted" ? "" : "orange")}<small>${esc(o.data.error || "")}</small></td><td>${esc(new Date(o.created).toLocaleString("ko-KR"))}</td></tr>`).join("") || '<tr><td colspan="4" class="empty">실제 발송·수동 기록이 없습니다.</td></tr>'}</tbody></table></div>`;
 }
+async function creatorDiscoveryPage(){
+  $('#app').innerHTML=head('크리에이터 자동 발굴','공개 검색 결과에서 새 계정을 찾고, 중복을 제외해 저장합니다.');
+  try{
+    const r=await api('/creator-discovery'),c=r.config,rows=r.prospects;
+    const labels={found:'신규 후보 발견',no_new_results:'검색 완료 · 신규 없음',search_failed:'검색 실패 · 제공자 상태 확인',searching:'검색 요청 진행 중 · 1분 이상 지속 시 오류 여부 확인',disabled:'중단',target_reached:'오늘 목표 도달',cooldown:'다음 검색 대기'};
+    const runtime=c.runtime||{},today=new Date(Date.now()+9*3600000).toISOString().slice(0,10),yesterday=new Date(Date.now()+9*3600000-86400000).toISOString().slice(0,10),day=x=>new Date(Date.parse(x.checked)+9*3600000).toISOString().slice(0,10);
+    $('#app').innerHTML=head('크리에이터 자동 발굴','공개 검색 → 중복 제거 → 근거 저장 → 내 카피 준비. 검색 목표는 실제 발견 수를 보장하지 않습니다.')+
+    `<div class="grid"><div class="panel"><h2>${c.enabled?'자동 검색 켜짐':'자동 검색 꺼짐'}</h2><p>오늘 ${r.counts.today}명 · 어제 ${r.counts.yesterday}명 · 목록 최근 ${rows.length}명</p><p>${esc(labels[runtime.status]||'검색 이력 없음')} ${runtime.checked?esc(new Date(runtime.checked).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))+' KST':''}</p><p class="fine">5분 간격 · 일일 목표 ${esc(c.target)}명 · 유료 검색 API 호출 0회. 서버 사용량은 Supabase 요금제에 따릅니다.</p><details><summary>검색 진행·오류 상세</summary><p>${esc(runtime.query||'')}</p>${(runtime.sources||[]).map(x=>`<p>${esc(x.engine)}: ${esc(x.error||x.status||('후보 '+x.candidates+'명'))}</p>`).join('')}</details>${button('지금 검색','creator-auto-search')}${button('자동 검색 중지','creator-auto-stop')}</div>
+    <form id="creator-auto-settings" class="panel"><h2>검색 조건·DM 카피</h2>${field('enabled','주기적 자동 검색',c.enabled,'checkbox')}${field('target','하루 발굴 목표 · 최대 500명',c.target,'number')}${field('keywords','검색 주제 · 한 줄에 하나',c.keywords.join('\n'),'textarea')}${field('senderHandle','제안할 Instagram 계정',c.sender_handle)}${field('dmCopy','내 DM 카피 · {{아이디}} 변수 사용 가능',c.dm_copy,'textarea')}<button type="submit" class="primary">저장</button><p class="fine">신규 상대 선제 DM 자동 발송은 공식 API에서 지원하지 않습니다. 이 설정은 검색·문구 준비만 수행하며 DM을 보내지 않습니다. 수신 대화 회신은 기존 공식 연동을 사용합니다.</p></form></div>
+    <div class="panel"><h2>자동으로 찾은 계정 ${rows.length}명</h2>${rows.map(x=>`<details><summary>@${esc(x.handle)} · ${esc(x.status==='new'?'발굴 후보':x.status)}</summary><p>${esc(x.excerpt)}</p><p>${esc(x.reasons.join(' / '))}</p><p class="fine">${esc(x.uncertainties.join(' / '))}</p><a target="_blank" rel="noopener" href="${esc(x.profile)}">계정 ↗</a> · <a target="_blank" rel="noopener" href="${esc(x.source_url)}">검색 출처 ↗</a><small> 확인 ${esc(new Date(x.checked).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))} KST</small><h3>내 카피 미리보기</h3><pre style="white-space:pre-wrap">${esc(x.body||'위에서 DM 카피를 입력해 주세요.')}</pre></details>`).join('')||'<p class="empty">아직 발견된 계정이 없습니다. 자동 검색을 켜고 조건을 저장하세요.</p>'}</div><details class="panel"><summary>기존 저장 후보</summary><div id="creator-existing"></div></details>`;
+    const host=$('#creator-existing');host.innerHTML=data.candidates.filter(x=>x.type==='creator').map(x=>`<p>${esc(x.name)} ${esc(x.handle||'')}${button('상세','candidate',x.id)}</p>`).join('')||'기존 후보 없음';
+  }catch(e){$('#app').innerHTML+=`<div class="notice">${esc(e.message)}</div>`;}
+}
+
 function candidatesPage(type, embedded = false) {
   const creator = type === "creator";
   const destination = embedded ? $("#brand-saved") : $("#app");
@@ -758,7 +772,7 @@ const pages = {
   discovery: discoveryPage,
   brands: discoveryPage,
   deals: dealsPage,
-  creators: () => candidatesPage("creator"),
+  creators: () => creatorDiscoveryPage(),
   matching: matchingPage,
   templates: templatesPage,
   inbox: inboxPage,
@@ -778,6 +792,7 @@ document.addEventListener("submit", async (e) => {
   try {
     const f = formObject(form),
       fid = form.dataset.id;
+    if(form.id==="creator-auto-settings"){await api("/creator-discovery/settings","POST",{enabled:f.enabled==="on",target:Number(f.target),keywords:f.keywords.split(/\r?\n/).filter(Boolean),dmCopy:f.dmCopy,senderHandle:f.senderHandle,autoSend:false});toast("검색 조건·카피를 저장했습니다.");await creatorDiscoveryPage();return;}
     if (form.id === "mail-review-form") { await prepareMailReview(form); return; }
     if (form.id === "bulk-compose-form") { await bulkPrepare(form); return; }
     if (form.id.startsWith("discovery-")) {
@@ -902,6 +917,9 @@ document.addEventListener("submit", async (e) => {
   }
 });
 const actions = {
+  "creator-auto-search":async()=>{const r=await api("/creator-discovery/search","POST",{});toast(r.status==="cooldown"?"최근 검색 후 5분 간격으로 진행합니다.":"검색 완료 · 신규 "+(r.added||0)+"명");await creatorDiscoveryPage();},
+  "creator-auto-stop":async()=>{await api("/creator-discovery/stop","POST",{});await creatorDiscoveryPage();},
+
   close,
   "bulk-compose": bulkCompose,
   "bulk-schedule": bulkSchedule,
