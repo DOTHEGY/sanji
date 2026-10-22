@@ -184,8 +184,9 @@ export function discoveryService(deps:any){
  }
  async function researchNext(u:string,requestedId=""){
   const all=await query(sb.from("sanji_discovery_leads").select("*").eq("owner",u).order("updated").limit(500));
-  const lead=all.sort((a:any,b:any)=>Number(!a.data.outreach?.needsPersonalization&&!a.data.outreach?.sendBlockedReason)-Number(!b.data.outreach?.needsPersonalization&&!b.data.outreach?.sendBlockedReason)).find((l:any)=>(!requestedId||l.id===requestedId)&&l.data.contacts?.length&&(!l.data.research||l.data.outreach?.needsPersonalization||l.data.outreach?.sendBlockedReason||l.data.research?.ownership==="research_pending")&&Number(l.data.research?.attempts||0)<3&&(requestedId||Number(l.data.research?.attempts||0)===0||!l.data.research?.checked||Date.parse(l.data.research.checked)<Date.now()-6*3600000));
+  const lead=all.sort((a:any,b:any)=>Number(!a.data.outreach?.needsPersonalization&&!a.data.outreach?.sendBlockedReason)-Number(!b.data.outreach?.needsPersonalization&&!b.data.outreach?.sendBlockedReason)).find((l:any)=>l.status!=="blocked"&&(!requestedId||l.id===requestedId)&&l.data.contacts?.length&&(!l.data.research||l.data.outreach?.needsPersonalization||l.data.outreach?.sendBlockedReason||l.data.research?.ownership==="research_pending")&&Number(l.data.research?.attempts||0)<3&&(requestedId||Number(l.data.research?.attempts||0)===0||!l.data.research?.checked||Date.parse(l.data.research.checked)<Date.now()-6*3600000));
   if(!lead)return null;
+  const liveConfig=await config(u);await query(sb.from("sanji_discovery_config").update({runtime:{...liveConfig.runtime,currentResearch:lead.data.name}}).eq("owner",u));
   const data={...lead.data};let repaired=false;
   if(data.outreach?.sendBlockedReason){
    const target=String(data.outreach.sendBlockedReason).includes("종근당건강")?"종근당건강":data.name;

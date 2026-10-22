@@ -19,7 +19,7 @@ export function researchBrand(lead:any,template:any,checked=new Date().toISOStri
  const oldName=String(lead.name||"");let brand=(lead.research?.method==="official_page_evidence"?oldName:old.brandName)||oldName;
  if(old.needsPersonalization&&home?.title&&/공식.*(?:몰|쇼핑몰)/.test(home.title)&&!old.sendBlockedReason&&!companyIdentity(home.title+" "+home.description).includes(companyIdentity(brand)))brand=clean(home.title.split(/\s+-\s+|\s*[|｜]\s*/)[0]).replace(/\s*공식.*$/,"");
  if(/새\s*창\s*열림|›|https?:|\.(?:co\.kr|com)\b/.test(brand)&&home?.title)brand=clean(home.title.split(/\s+-\s+|\s*[|｜]\s*/)[0]).replace(/\s*공식.*$/,"");
- const identity=companyIdentity(brand).replace(/(?:건강식품|공식몰|건강몰)$/, ""),sameName=!!identity&&!!home&&companyIdentity([home.title,home.description,home.excerpt].join(" ")).includes(identity);
+ const identity=companyIdentity(brand.split(/[·|｜]/)[0]).replace(/(?:건강식품|공식몰|건강몰)$/, ""),sameName=!!identity&&!!home&&companyIdentity([home.title,home.description,home.excerpt].join(" ")).includes(identity);
  const contactEvidence=(lead.contacts||[]).map((c:any)=>{
   const p=pages.find((p:any)=>p.url===c.source);
   // A link to another legal entity alone is insufficient. Require the target brand on the actual email source.
