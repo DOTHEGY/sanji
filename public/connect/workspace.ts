@@ -240,7 +240,11 @@ function creatorDiscoveryService({ sb: sb2, query: query2, audit: audit2, env: e
     const keyword = c.keywords[c.search_cursor % c.keywords.length] + ["", " \uD06C\uB9AC\uC5D0\uC774\uD130", " \uD611\uC5C5", " \uC778\uD50C\uB8E8\uC5B8\uC11C", " \uBE44\uC988\uB2C8\uC2A4"][Math.floor(c.search_cursor / c.keywords.length) % 5], term = "site:instagram.com " + keyword;
     let rows = [], sources = [];
     for (const engine of ["Naver", "Google", "Bing", "DuckDuckGo"]) {
-      const url2 = searchUrl(engine, term);
+      const page = Math.floor(c.search_cursor / c.keywords.length) % 10, search = new URL(searchUrl(engine, term));
+      if (engine === "Naver") search.searchParams.set("start", String(1 + page * 10));
+      if (engine === "Google") search.searchParams.set("start", String(page * 10));
+      if (engine === "Bing") search.searchParams.set("first", String(1 + page * 10));
+      const url2 = search.toString();
       try {
         const r = await fetch(url2, { headers: { Accept: "text/html", "User-Agent": "SanjiResearch/1.0" }, signal: AbortSignal.timeout(8e3) });
         if (!r.ok) {
