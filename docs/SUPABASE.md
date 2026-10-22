@@ -165,3 +165,15 @@ Instagram 로그인은 공식 `force_reauth=true`, `enable_fb_login=false`로 �
 해당 기록에는 토큰을 넣지 않고 연결된 계정·메시지 발신자로 사용하지 않습니다.
 실제 프로필 검증이 완료된 계정만 기존 Instagram API 연결 목록에 포함됩니다.
 브랜드 이메일·발굴·회신 업무는 Instagram 설정과 독립적으로 동작합니다.
+
+### 매일 00:00 KST 신규 업체 발굴·템플릿 동기화
+
+기존 workspace / automation / discovery SQL 적용 후 `supabase/migrations/202610220001_mail_refresh.sql` (`public/setup/mail-refresh.sql`)을 적용합니다. 템플릿 저장 트리거는 연결된 발송 전 업체의 공통 카피를 갱신하고, 개인화·발송 원문은 유지합니다. 변경 전 미리보기는 만료되며 대기 예약은 취소되어 재승인이 필요합니다. 처리 중인 예약은 변경하지 않습니다.
+
+일일 발굴 목표 기본값은 **이메일을 새로 확보한 중복 없는 업체 40곳**입니다. 주소 40개 또는 목록 후보 40개와 구분합니다. `sanji_discovery_usage`는 한국시간 날짜별로 새로 집계하므로 이전 업체·메일·차단 기록을 초기화하지 않습니다. 회사명·공개 홈페이지 도메인·외부 엔터티·수집 이메일로 중복을 방지합니다.
+
+`sanji-email-discovery` 5분 실행기에 더해 `sanji-daily-discovery`를 UTC `0 15 * * *` (KST 자정)로 등록합니다. 두 작업은 기존 Vault의 `sanji_discovery_runner`를 사용해 동일 `/discovery/tick`을 호출하며, 일일 외부 목록 갱신은 DB lease로 1회 처리합니다. 외부 목록이 모두 실패하면 6시간 후 최대 3회만 재시도합니다. 자정에 목록을 갱신하고 이후 5분 단위로 홈페이지를 확인하며, 사이트 실패·후보 소진·목표 미달을 화면에 표시합니다.
+
+후보 공급원은 API 키가 없는 무료 Wikidata Query Service와 한국 식품 관련 협회·전시회 공개 목록입니다. 공개 정보는 조사 후보일 뿐 공식 소유·제품 분류·이메일 권한의 증명이 아닙니다. HTML 수집은 robots.txt와 공개 URL/IP 제한을 준수하며 폼 제출·로그인 우회·유료 검색/AI 호출을 하지 않습니다. 외부 데이터·사이트 상황에 따라 40곳 확보를 보장할 수 없습니다. 기존 서버 실행·트래픽 사용량은 Supabase 청구에 포함될 수 있습니다.
+
+Instagram은 **계정만 연결**(instagram_business_basic)과 대화 권한 추가(공식 로그인)를 구분합니다. 장기 토큰 교환 후 실제 계정 프로필을 검증하며, 읽기 전용 대화 조회 및 웹훅 구독 상태를 별도로 표시합니다. `POST /instagram/check`는 메일·DM을 보내지 않습니다. `POST /instagram/subscribe`는 연결된 본인 계정의 messages 웹훅 구독만 요청합니다. 토큰이 없는 과거 로그인 응답은 재인증이 필요하며 연결 완료로 표시하지 않습니다.

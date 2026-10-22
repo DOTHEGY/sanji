@@ -3,7 +3,7 @@ import { singleMailbox, replyRecipient } from "../_shared/mail-reply.ts";
 import { discoveryService } from "../_shared/discovery-service.ts";
 import { mime } from "../_shared/mail-mime.ts";
 import { instagramTokenResponse, instagramLoginPending } from "../_shared/instagram-token.ts";
-import { resolveInstagramSession } from "../_shared/instagram-session.ts";
+import { resolveInstagramSession, instagramProfile, instagramCapabilities } from "../_shared/instagram-session.ts";
 import { checkGmail } from "../_shared/gmail-check.ts";
 import { oauthLifetimeMs, oauthStateProblem, oauthErrorRedirect, providerErrorDetail } from "../_shared/oauth-status.ts";
 import { selectInstagramAccount, sameInstagramConversation } from "../_shared/instagram-accounts.ts";
@@ -128,6 +128,9 @@ async function saveConnection(u: string, p: string, data: any) {
                 tokenMode: data.tokenMode || "long",
                 warning: data.warning || "",
                 expiryKnown: data.expiryKnown !== false,
+                apiVerified: data.apiVerified === true,
+                capabilities: data.capabilities || null,
+                profileChecked: data.profileChecked || null,
               },
       },
       { onConflict: "owner,provider" },
@@ -434,7 +437,7 @@ async function callback(
         } catch { /* Existing session is no longer usable; keep the verified short session. */ }
       }
     }
-    if (!keepExisting) await saveConnection(row.owner, existing?.provider || "instagram:" + session.id, session);
+    if (!keepExisting) {session.capabilities=await instagramCapabilities(session,remote,env("META_GRAPH_VERSION")||"v24.0");await saveConnection(row.owner, existing?.provider || "instagram:" + session.id, session);}
     await audit(row.owner, "instagram_auth_diagnosis", { profileVerified:true, tokenMode:session.tokenMode, keptExisting:keepExisting, warning:session.warning });
     if (session.tokenMode === "short") {
       const back = new URL(frontend);
@@ -479,6 +482,7 @@ async function sendDraft(u: string, draftId: string, b: any, jobId?: string) {
   if (pending.some((x: any) => x.id !== jobId))
     fail(409, "이 미리보기에는 이미 승인된 예약이 있습니다.");
   const d = row.data;
+  if(d.templateId){const template=await owned(u,d.templateId,"template");if(template.version!==d.templateVersion)fail(409,"공통 템플릿이 변경됐습니다. 최신 내용으로 다시 승인하세요.");}
   if (d.marketing && d.channel !== "manual_dm") {
     const hour = Number(
       new Intl.DateTimeFormat("en-GB", {
@@ -866,6 +870,28 @@ Deno.serve(async (req: Request) => {
       await audit(u, "gmail_connection_checked", result);
       return json(result);
     }
+    if(path==="/instagram/subscribe"&&req.method==="POST"){
+      const b=await input(),accounts=await instagramAccounts(u),row=accounts.find((a:any)=>a.provider===b.key);if(!row)fail(404,"연결된 계정을 찾을 수 없습니다.");
+      const c=await decrypt(row.encrypted);if(c.expires<Date.now())fail(403,"공식 로그인으로 재인증하세요.");
+      const caps=await instagramCapabilities(c,remote,env("META_GRAPH_VERSION")||"v24.0");if(!caps.messagesReadable)fail(403,"대화 읽기 권한이 확인되지 않았습니다. Instagram에서 메시지 권한을 승인하세요.");
+      await remote("https://graph.instagram.com/"+(env("META_GRAPH_VERSION")||"v24.0")+"/"+c.id+"/subscribed_apps",{method:"POST",body:new URLSearchParams({subscribed_fields:"messages,messaging_postbacks",access_token:c.access_token})},"Instagram 웹훅 구독");
+      c.capabilities=await instagramCapabilities(c,remote,env("META_GRAPH_VERSION")||"v24.0");await saveConnection(u,row.provider,c);return json(c.capabilities);
+    }
+    if(path==="/instagram/check"&&req.method==="POST"){
+      const b=await input(),accounts=await instagramAccounts(u),row=accounts.find((a:any)=>a.provider===b.key);
+      if(!row){
+        const pending=await connection(u,"instagram_pending");
+        if(!pending?.access_token||pending.expires<Date.now())return json({connected:false,requiresLogin:true,message:"이전 로그인 응답의 임시 토큰이 만료됐습니다. Instagram 공식 로그인으로 다시 연결해 주세요."});
+        const session=await resolveInstagramSession(pending,remote,env("META_APP_SECRET"),env("META_GRAPH_VERSION")||"v24.0");
+        session.capabilities=await instagramCapabilities(session,remote,env("META_GRAPH_VERSION")||"v24.0");await saveConnection(u,"instagram:"+session.id,session);
+        await query(sb.from("sanji_connections").delete().eq("owner",u).eq("provider","instagram_pending"));
+        await query(sb.from("sanji_connections").delete().eq("owner",u).eq("provider","instagram_login:"+session.user_id));
+        return json({connected:true,username:session.username,capabilities:session.capabilities});
+      }
+      const old=await decrypt(row.encrypted);if(old.expires<Date.now())return json({connected:false,requiresLogin:true,message:"Instagram 인증이 만료됐습니다. 공식 로그인으로 재인증하세요."});
+      const profile=await instagramProfile(old,remote,env("META_GRAPH_VERSION")||"v24.0"),session={...old,...profile,apiVerified:true,profileChecked:now()};
+      session.capabilities=await instagramCapabilities(session,remote,env("META_GRAPH_VERSION")||"v24.0");await saveConnection(u,row.provider,session);return json({connected:true,username:session.username,capabilities:session.capabilities});
+    }
     if (path === "/connections" && req.method === "GET") {
       const gmail = await connection(u, "gmail"),
         accounts = await instagramAccounts(u);
@@ -884,7 +910,7 @@ Deno.serve(async (req: Request) => {
           connected: !!ig,
           username: ig?.username || "",
           accounts: accounts.map((a: any) => ({ key: a.provider, ...a.summary })),
-          loginPending:loginPending.map((a:any)=>({key:a.provider,...a.summary})),
+          loginPending:loginPending.map((a:any)=>({key:a.provider,...a.summary,requiresLogin:true})),
           enabled: env("INSTAGRAM_SENDING_ENABLED") === "true",
         },
         search: { configured: !!env("BRAVE_SEARCH_API_KEY") || await discovery.configured(u) },
@@ -918,6 +944,7 @@ Deno.serve(async (req: Request) => {
         fail(503, "공식 OAuth 앱 설정이 필요합니다.");
       if (!["gmail", "instagram"].includes(provider))
         fail(404, "알 수 없는 연결");
+      const oauthInput=await input();
       const state = uuid() + uuid(),
         verifier = Buffer.from(
           crypto.getRandomValues(new Uint8Array(32)),
@@ -957,7 +984,7 @@ Deno.serve(async (req: Request) => {
               redirect_uri: base + "/oauth/instagram/callback",
               response_type: "code",
               scope:
-                "instagram_business_basic,instagram_business_manage_messages",
+                oauthInput.profileOnly===true?"instagram_business_basic":"instagram_business_basic,instagram_business_manage_messages",
               state,
             });
       return json({
@@ -1139,6 +1166,7 @@ Deno.serve(async (req: Request) => {
     if (path === "/drafts" && req.method === "POST") {
       const inputData = draftSchema.parse(await input()),
         c = await owned(u, inputData.target, "candidate");
+      if(inputData.templateId){const template=await owned(u,inputData.templateId,"template");if(template.version!==inputData.templateVersion)fail(409,"템플릿이 변경됐습니다. 발송 전 목록을 새로고침하세요.");}
       if (await isBlocked(u, c)) fail(403, "거절·수신 거부 대상");
       if (
         inputData.channel === "email" &&

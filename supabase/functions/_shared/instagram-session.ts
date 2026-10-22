@@ -1,32 +1,35 @@
 import { instagramTokenResponse } from "./instagram-token.ts";
-// A short token is accepted only after a successful profile lookup. If its
-// expiry is absent, 15 minutes is our local session limit, not a provider claim.
-export async function resolveInstagramSession(response: any, request: any, appSecret: string, version: string, time = Date.now()) {
-  const token = instagramTokenResponse(response);
-  let profile: any, error: any;
-  // Both documented profile forms are read-only. Try the unversioned form only
-  // for the specific unsupported-method response, never for revoked tokens.
-  const paths = [version + "/me", "me"];
-  for (const path of paths) {
-    try {
-      profile = await request("https://graph.instagram.com/" + path + "?" + new URLSearchParams({fields:"user_id,username",access_token:token.access_token}), {}, "Instagram 단기 토큰 계정 검증");
-      break;
-    } catch (e) {
-      error = e;
-      if (!String(e?.message || "").includes("Unsupported request - method type: get")) throw e;
-    }
-  }
-  if (!profile) throw error;
-  if (!/^\d+$/.test(String(profile.user_id || profile.id || "")) || !profile.username)
-    throw new Error("Instagram 계정 ID·이름을 확인할 수 없습니다. 기존 연결은 유지됩니다.");
-  try {
-    const result = await request("https://graph.instagram.com/access_token?" + new URLSearchParams({grant_type:"ig_exchange_token",client_secret:appSecret,access_token:token.access_token}), {}, "Instagram 장기 토큰 교환");
-    const long = instagramTokenResponse(result, true);
-    return { ...long, ...profile, id:String(profile.user_id || profile.id), expires:time + Number(long.expires_in)*1000, tokenMode:"long", warning:"", expiryKnown:true };
-  } catch (e) {
-    const reported = Number(token.expires_in);
-    const duration = Number.isFinite(reported) && reported > 0 ? Math.min(reported*1000, 15*60*1000) : 15*60*1000;
-    return { ...token, ...profile, id:String(profile.user_id || profile.id), expires:time+duration, tokenMode:"short", expiryKnown:Number.isFinite(reported) && reported > 0,
-      warning:"단기 토큰으로 계정 확인은 완료됐지만 장기 인증은 실패했습니다. 서비스 임시 세션은 최대 15분이며 실제 토큰이 먼저 만료될 수 있습니다. 재인증이 필요합니다. " + String(e?.message || "장기 토큰 오류").slice(0,350) };
-  }
+export function instagramPermissions(value:any):string[]{return Array.isArray(value)?value.map(String):String(value||"").split(",").map(s=>s.trim()).filter(Boolean);}
+export async function instagramProfile(token:any,request:any,version:string){
+ // Official read-only forms. A login-scoped ID is never sufficient on its own.
+ const paths=[version+"/me","me",...(/^\d+$/.test(String(token.user_id||token.id||""))?[version+"/"+(token.user_id||token.id)]:[]),...(version!=="v24.0"?["v24.0/me"]:[])];
+ let error:any;
+ for(const path of paths){try{
+  const profile=await request("https://graph.instagram.com/"+path+"?"+new URLSearchParams({fields:"user_id,username",access_token:token.access_token}),{method:"GET"},"Instagram 계정 조회");
+  if(!/^\d+$/.test(String(profile.user_id||profile.id||""))||!profile.username)throw Error("Instagram 계정 ID·이름을 확인할 수 없습니다.");
+  return {...profile,id:String(profile.user_id||profile.id)};
+ }catch(e){error=e;if(!/Unsupported request|Unsupported get request|Unknown path|nonexisting field/i.test(String(e?.message||"")))throw e;}}
+ throw error;
+}
+export async function resolveInstagramSession(response:any,request:any,appSecret:string,version:string,time=Date.now()){
+ const token=instagramTokenResponse(response);
+ // Meta's documented order: exchange for a long token, then query the profile.
+ // If exchange fails, a short token is usable only after a real profile lookup.
+ let session:any=token,warning="",mode="long";
+ try{session=instagramTokenResponse(await request("https://graph.instagram.com/access_token?"+new URLSearchParams({grant_type:"ig_exchange_token",client_secret:appSecret,access_token:token.access_token}),{method:"GET"},"Instagram 장기 토큰 교환"),true);}
+ catch(e){mode="short";warning="장기 토큰 교환 미완료 · 임시 세션 최대 15분. "+String(e?.message||"").slice(0,350);}
+ const profile=await instagramProfile({...token,...session},request,version);
+ const duration=mode==="long"?Number(session.expires_in)*1000:Math.min(Number(token.expires_in)>0?Number(token.expires_in)*1000:900000,900000);
+ return {...token,...session,...profile,expires:time+duration,tokenMode:mode,warning,expiryKnown:mode==="long"||Number(token.expires_in)>0,permissions:instagramPermissions(token.permissions),apiVerified:true,profileChecked:new Date(time).toISOString()};
+}
+export async function instagramCapabilities(session:any,request:any,version:string){
+ const result:any={profileVerified:true,messagesReadable:false,webhookSubscribed:false,checked:new Date().toISOString(),errors:[]};
+ const params=new URLSearchParams({platform:"instagram",limit:"1",access_token:session.access_token});
+ try{await request("https://graph.instagram.com/"+version+"/"+session.id+"/conversations?"+params,{method:"GET"},"Instagram 대화 읽기 권한 확인");result.messagesReadable=true;}
+ catch(e){result.errors.push(String(e?.message||"").slice(0,400));}
+ if(result.messagesReadable){try{
+  const response=await request("https://graph.instagram.com/"+version+"/"+session.id+"/subscribed_apps?"+new URLSearchParams({access_token:session.access_token}),{method:"GET"},"Instagram 웹훅 구독 확인");
+  result.webhookSubscribed=(response.data||[]).some((a:any)=>(a.subscribed_fields||[]).includes("messages"));
+ }catch(e){result.errors.push(String(e?.message||"").slice(0,400));}}
+ return result;
 }

@@ -54,6 +54,8 @@ const assetHash = require("node:crypto")
   .digest("hex")
   .slice(0, 12);
 html = html.replace('src="./app.js"', 'src="./app.js?v=' + assetHash + '"');
+const styleHash = require("node:crypto").createHash("sha256").update(fs.readFileSync("private/ui/style.css")).digest("hex").slice(0,12);
+html = html.replace('href="./style.css"', 'href="./style.css?v=' + styleHash + '"');
 fs.writeFileSync("public/workspace/index.html", html);
 fs.copyFileSync("private/ui/style.css", "public/workspace/style.css");
 console.log("Supabase workspace built: public/workspace/");

@@ -728,7 +728,7 @@ test("Instagram token exchange supports current data-array and legacy responses,
   assert.throws(() => parse({access_token:"test-long-token",expires_in:-1},true), /유효기간/);
 });
 
-test("Instagram verifies short-token profile before long exchange and explicitly limits fallback sessions", async () => {
+test("Instagram follows the documented long-token exchange then verifies profile and bounds short sessions", async () => {
   const compiled = esbuild.buildSync({ entryPoints: ["supabase/functions/_shared/instagram-session.ts"], bundle: true, platform: "node", format: "cjs", write: false });
   const m = { exports: {} }; new Function("module", "exports", compiled.outputFiles[0].text)(m, m.exports);
   const resolve = m.exports.resolveInstagramSession;
@@ -739,11 +739,11 @@ test("Instagram verifies short-token profile before long exchange and explicitly
   }, "test-secret", "v24.0", 1000);
   assert.equal(temp.tokenMode,"short"); assert.equal(temp.id,"222");
   assert.equal(temp.expires,901000); assert.equal(temp.expiryKnown,false);
-  assert.match(temp.warning,/장기 인증은 실패/); assert.match(temp.warning,/15분/);
-  assert.ok(calls[0].includes("/me?")); assert.ok(calls[1].includes("/access_token?"));
+  assert.match(temp.warning,/장기 토큰 교환 미완료/); assert.match(temp.warning,/15분/);
+  assert.ok(calls[0].includes("/access_token?")); assert.ok(calls[1].includes("/me?"));
   let requests = 0;
   await assert.rejects(() => resolve({access_token:"test-invalid"}, async () => { requests++; throw Error("invalid profile token"); }, "test-secret", "v24.0"), /invalid profile/);
-  assert.equal(requests,1);
+  assert.equal(requests,2);
   const full = await resolve({access_token:"test-short"}, async (url) => url.includes("/me?") ? profile : {access_token:"test-long",expires_in:5183944}, "test-secret", "v24.0", 1000);
   assert.equal(full.tokenMode,"long"); assert.equal(full.warning,""); assert.equal(full.expires,5183945000);
 });
@@ -857,7 +857,7 @@ test("Discovery works without search API keys and reports exhausted sources inst
   const stored={sanji_discovery_config:{enabled:true,target:30,keywords:[],updated:new Date().toISOString()},sanji_discovery_leads:[],sanji_discovery_usage:{calls:3,emails:1,processed:3}};
   const sb={from(table){const q={table};for(const k of ["select","eq","order","limit","maybeSingle"])q[k]=()=>q;return q;}};
   const service=m.exports.discoveryService({sb,query:async q=>stored[q.table],audit:async()=>{},putRecord:async()=>{}});
-  const r=await service.handle("/discovery","GET","owner",async()=>({}));assert.equal(r.engine.status,"sources_exhausted");assert.equal(r.engine.nextRun,null);assert.equal(r.engine.mode,"homepage_queue");
+  const r=await service.handle("/discovery","GET","owner",async()=>({}));assert.equal(r.engine.status,"sources_exhausted");assert.equal(r.engine.nextRun,null);assert.equal(r.engine.mode,"public_sources_and_homepages");
   const result=await service.handle("/discovery/run","POST","owner",async()=>({}));assert.equal(result.status,"sources_exhausted");assert.equal(JSON.stringify(result).includes("네이버"),false);
 });
 
@@ -891,4 +891,85 @@ test("Company recipient groups deduplicate addresses and reject header injection
  const d={email:"a@brand.test",emails:["A@brand.test","cs@brand.test","a@brand.test"],subject:"제안",body:"내용",attachments:[],messageId:"group"};
  const raw=Buffer.from(m.exports.mime(d,"sender@example.test"),"base64url").toString();assert.match(raw,/To: a@brand.test, cs@brand.test\r\n/);
  assert.throws(()=>m.exports.mime({...d,emails:["a@brand.test\r\nBcc: b@other.test"]},"sender@example.test"),/수신 이메일/);
+});
+
+test("Template edits refresh only unsent owned leads, retain personalization, cancel old approval and preserve sent snapshots",async()=>{
+ const db=await database();try{
+ await db.exec(fs.readFileSync('supabase/migrations/202610210002_automation.sql','utf8'));
+ await db.exec(fs.readFileSync('supabase/migrations/202610210003_discovery.sql','utf8'));
+ await db.exec(fs.readFileSync('supabase/migrations/202610220001_mail_refresh.sql','utf8'));
+ await db.query('insert into auth.users(id,email) values($1,$2),($3,$4)',[u1,'one@example.test',u2,'two@example.test']);
+ await db.query('insert into sanji_members(user_id) values($1),($2)',[u1,u2]);
+ const tid=(await db.query("insert into sanji_records(owner,kind,data) values($1,'template',$2::jsonb) returning id",[u1,JSON.stringify({name:'카피',channel:'이메일',subject:'{{브랜드명}} 제안',body:'안녕하세요 {{브랜드명}}.\n{{개인화}}\n{{제품명}} 공통 카피',signature:'서명'})])).rows[0].id;
+ const targets=['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'];
+ for(let i=0;i<3;i++)await db.query("insert into sanji_discovery_leads(owner,identity,data,status) values($1,$2,$3::jsonb,'review')",[i===2?u2:u1,'brand'+i,JSON.stringify({name:'브랜드'+i,candidateId:targets[i]||'',contacts:[{email:'mail'+i+'@brand.test'}],outreach:{intro:'검증된 특징. 콘텐츠 적합성.',productName:'확인 제품',templateId:tid,body:'기존 원문'}})]);
+ await db.query("insert into sanji_outbox(owner,target,channel,fingerprint,status,data) values($1,$2,'email','immutable','accepted',$3::jsonb)",[u1,targets[1],JSON.stringify({email:'mail1@brand.test',body:'이미 발송된 원문'})]);
+ const draft=(await db.query("insert into sanji_drafts(owner,data,hash,expires) values($1,$2::jsonb,'old-hash',now()+interval '1 day') returning id",[u1,JSON.stringify({target:targets[0]})])).rows[0].id;
+ await db.query("insert into sanji_jobs(owner,draft_id,preview_hash,run_at) values($1,$2,'old-hash',now()+interval '1 hour')",[u1,draft]);
+ await db.query("update sanji_records set data=jsonb_set(data,'{body}',to_jsonb($1::text)),version=version+1 where id=$2",['안녕하세요 {{브랜드명}}.\n{{개인화}}\n{{제품명}} 공통 카피\nhttps://company.example/intro',tid]);
+ const leads=(await db.query('select owner,identity,data from sanji_discovery_leads order by identity')).rows;
+ assert.equal(leads[0].data.outreach.body,'안녕하세요 브랜드0.\n검증된 특징. 콘텐츠 적합성.\n확인 제품 공통 카피\nhttps://company.example/intro');assert.equal(leads[0].data.outreach.templateVersion,2);assert.equal(leads[0].data.outreach.approved,false);
+ assert.equal(leads[1].data.outreach.body,'기존 원문');assert.equal(leads[2].data.outreach.body,'기존 원문');
+ assert.equal((await db.query('select status from sanji_jobs')).rows[0].status,'cancelled');
+ assert.equal((await db.query('select expires<now() expired from sanji_drafts')).rows[0].expired,true);
+ assert.equal((await db.query('select data from sanji_outbox')).rows[0].data.body,'이미 발송된 원문');
+ await db.query('insert into sanji_discovery_config(owner,enabled,target) values($1,true,40)',[u1]);
+ assert.equal((await db.query('select sanji_claim_daily_sources($1) claimed',[u1])).rows[0].claimed,true);
+ assert.equal((await db.query('select sanji_claim_daily_sources($1) claimed',[u1])).rows[0].claimed,false);
+ await db.query("update sanji_discovery_config set source_state='{}'");assert.equal((await db.query('select sanji_claim_daily_sources($1) claimed',[u1])).rows[0].claimed,true);
+ const proposed=[{identity:'new-source',data:{name:'새 업체',website:'https://new-brand.co.kr/',sourceEntity:'https://www.wikidata.org/entity/Q111'}},{identity:'same-domain',data:{website:'https://www.new-brand.co.kr/products'}},{identity:'same-entity',data:{website:'https://alternate-brand.co.kr/',sourceEntity:'https://www.wikidata.org/entity/Q111'}}];
+ assert.equal((await db.query('select sanji_enqueue_discovery_sources($1,$2::jsonb) added',[u1,JSON.stringify(proposed)])).rows[0].added,1);
+ assert.equal((await db.query('select sanji_enqueue_discovery_sources($1,$2::jsonb) added',[u1,JSON.stringify(proposed)])).rows[0].added,0);
+
+ }finally{await db.close();}
+});
+
+test("Daily public sources deduplicate company names and domains without inventing contact addresses",()=>{
+ const compiled=esbuild.buildSync({entryPoints:['supabase/functions/_shared/discovery-sources.ts'],bundle:true,platform:'node',format:'cjs',write:false});const m={exports:{}};new Function('module','exports',compiled.outputFiles[0].text)(m,m.exports);
+ const known=[{identity:'기존회사',data:{website:'https://known-brand.co.kr/'}}];
+ const rows=m.exports.sourceProspects([{name:'신규브랜드',website:'https://new-brand.co.kr',source:'https://directory.co.kr'},{name:'신규브랜드 다른 표기',website:'https://www.new-brand.co.kr'},{name:'기존회사',website:'https://changed-brand.co.kr'},{name:'다른 이름',website:'https://known-brand.co.kr/store'},{name:'플랫폼',website:'https://coupang.com'},{name:'비공개',website:'https://127.0.0.1'},{name:'Q123',website:'https://unnamed.co.kr'}],known,'2026-10-22');
+ assert.equal(rows.length,1);assert.equal(rows[0].data.name,'신규브랜드');assert.deepEqual(rows[0].data.contacts,[]);assert.equal(rows[0].data.officialVerified,false);
+});
+
+test("Instagram capability checks distinguish real profile, conversation permission and webhook subscription without sending",async()=>{
+ const compiled=esbuild.buildSync({entryPoints:['supabase/functions/_shared/instagram-session.ts'],bundle:true,platform:'node',format:'cjs',write:false});const m={exports:{}};new Function('module','exports',compiled.outputFiles[0].text)(m,m.exports);
+ const calls=[];const yes=await m.exports.instagramCapabilities({id:'123',access_token:'mock-token'},async(url,opts)=>{calls.push({url,opts});return url.includes('/conversations?')?{data:[]}:{data:[{subscribed_fields:['messages']}]};},'v24.0');
+ assert.equal(yes.messagesReadable,true);assert.equal(yes.webhookSubscribed,true);assert.equal(calls.every(c=>c.opts.method==='GET'),true);assert.equal(calls.some(c=>/\/messages(?:\?|$)/.test(c.url)),false);
+ const no=await m.exports.instagramCapabilities({id:'123',access_token:'mock-token'},async()=>{throw Error('permission denied');},'v24.0');assert.equal(no.profileVerified,true);assert.equal(no.messagesReadable,false);assert.equal(no.webhookSubscribed,false);
+});
+
+test("Clean integration settings show expired Instagram auth honestly and offer profile-only login",async()=>{
+ const express=require('express'),app=express();app.use(express.json());let loginBody;
+ const state={candidates:[],deals:[],templates:[],threads:[],outbox:[],jobs:[],suppression:[],settings:{senderName:'운영자',senderAddress:'사업장',senderPhone:'번호',dailyLimit:20}};
+ app.all(/^\/api\/.*/,(req,res)=>{const p=req.path.replace('/api','');
+ if(p==='/me')return res.json({email:'owner@example.test'});if(p==='/state')return res.json(state);
+ if(p==='/connections')return res.json({gmail:{connected:true,email:'owner@example.test',enabled:true},instagram:{accounts:[],loginPending:[{key:'instagram_login:123',username:'valu_est',userDesignated:true,detail:'이전 계정 조회 오류'}]}});
+ if(p==='/discovery')return res.json({settings:{target:40,enabled:true,keywords:[]},engine:{sourceState:{checked:'2026-10-22T00:00:00Z',added:40}},leads:[],usage:{},activity:[]});
+ if(p==='/oauth/instagram'){loginBody=req.body;return res.json({url:'#settings'});}return res.status(404).json({error:p});});app.use('/app',express.static('private/ui'));
+ const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.on('listening',r));let browser;
+ try{browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',headless:true,args:['--no-sandbox']});const page=await browser.newPage({viewport:{width:1365,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.goto('http://127.0.0.1:'+server.address().port+'/app/#settings');await page.waitForSelector('#discovery-settings [name=target]');
+ assert.equal(await page.locator('#discovery-settings [name=target]').inputValue(),'40');assert.match(await page.locator('.account-pending').textContent(),/재로그인 필요/);assert.equal(await page.getByText('로그인 응답 수신 · 계정 조회 대기',{exact:true}).count(),0);
+ await page.locator('.account-pending [data-action=connect-instagram-basic]').click();assert.deepEqual(loginBody,{profileOnly:true});
+ await page.screenshot({path:'/tmp/sanji-settings-desktop.png',fullPage:true});await page.setViewportSize({width:390,height:844});await page.screenshot({path:'/tmp/sanji-settings-mobile.png',fullPage:true});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);assert.deepEqual(errors,[]);
+ }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
+});
+
+test("Public shell redirects are bounded literal same-origin URLs and never execute login or external scripts",()=>{
+ const {publicHtmlRedirect}=discoveryHelpers();
+ assert.equal(publicHtmlRedirect('<script>location.href="/user/main/main.do";</script>','https://brand.co.kr/'),'https://brand.co.kr/user/main/main.do');
+ assert.equal(publicHtmlRedirect('<script>location.replace("https://private.other.co.kr/")</script>','https://brand.co.kr/'),'');
+ assert.equal(publicHtmlRedirect('<script>location.href="/login"</script>','https://brand.co.kr/'),'');
+ assert.equal(publicHtmlRedirect('<script>location.href=compute()</script>','https://brand.co.kr/'),'');
+});
+
+test("New company collection prepares the current template and counts one company for several emails",async()=>{
+ const compiled=esbuild.buildSync({entryPoints:['supabase/functions/_shared/discovery-service.ts'],bundle:true,platform:'node',format:'cjs',write:false});const m={exports:{}};new Function('module','exports',compiled.outputFiles[0].text)(m,m.exports);
+ const lead={id:'new-lead',owner:'owner',status:'new',data:{name:'새 브랜드',website:'https://brand.co.kr/',contacts:[]}},tables={sanji_discovery_config:[{owner:'owner',target:40,enabled:true}],sanji_discovery_leads:[lead],sanji_discovery_usage:[{owner:'owner',day:'2026-10-22',calls:1,emails:0,companies:0,added:0,processed:0}],sanji_records:[{id:'current-copy',owner:'owner',kind:'template',version:3,updated:'2026-10-22',data:{channel:'이메일',subject:'{{브랜드명}} 제안',body:'안녕하세요 {{브랜드명}}. https://company.test/intro',signature:'서명'}}]};
+ class Q{constructor(table){this.table=table;this.filters=[];}select(){return this;}eq(k,v){this.filters.push([k,v]);return this;}order(column){if(this.table==='sanji_records')assert.notEqual(column,'created');return this;}limit(){return this;}maybeSingle(){this.one=true;return this;}single(){this.one=true;return this;}update(value){this.value=value;return this;}exec(){const rows=tables[this.table].filter(r=>this.filters.every(([k,v])=>r[k]===v));if(this.value)rows.forEach(r=>Object.assign(r,structuredClone(this.value)));return structuredClone(this.one?rows[0]:rows);}}
+ const sb={from:t=>new Q(t),rpc:()=>({exec:()=>structuredClone(tables.sanji_discovery_usage[0])})};const prevFetch=global.fetch,prevDeno=global.Deno;
+ global.Deno={resolveDns:async()=>['8.8.8.8']};global.fetch=async url=>new Response(String(url).endsWith('/robots.txt')?'User-agent: *\nDisallow:':'<footer>대표 이메일 info@brand.co.kr 고객센터 cs@brand.co.kr</footer>',{headers:{'content-type':'text/html'}});
+ try{const service=m.exports.discoveryService({sb,query:async q=>q.exec(),audit:async()=>{},putRecord:async()=>{}});const result=await service.handle('/discovery/run','POST','owner',async()=>({}));assert.equal(result.status,'processed');assert.equal(result.companiesAdded,1);assert.equal(result.emailCandidatesAdded,2);assert.equal(lead.data.outreach.templateVersion,3);assert.match(lead.data.outreach.body,/새 브랜드.*https:\/\/company.test\/intro/);assert.equal(lead.data.outreach.needsPersonalization,true);assert.equal(tables.sanji_discovery_usage[0].companies,1);
+ await assert.rejects(()=>service.handle('/discovery/outreach','POST','owner',async()=>({id:lead.id,templateVersion:2,body:'stale'})),/템플릿이 변경/);
+ }finally{global.fetch=prevFetch;global.Deno=prevDeno;}
 });

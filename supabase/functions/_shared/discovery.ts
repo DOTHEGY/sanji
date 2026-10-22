@@ -79,3 +79,11 @@ export function robotsAllowed(robots: string, path: string) {
   }
   return !rules.some(rule=>new RegExp("^"+rule.split("*").map(s=>s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")).join(".*").replace(/\\\$$/,"$")).test(path));
 }
+
+// Read a literal public redirect from a shell page; never execute website scripts.
+export function publicHtmlRedirect(html:string,source:string){
+ if(plainHtml(html).length>250)return "";
+ const target=/(?:window\.|document\.)?location(?:\.href)?\s*=\s*["']([^"']+)["']|(?:window\.)?location\.(?:replace|assign)\(\s*["']([^"']+)["']\s*\)/i.exec(html);
+ if(!target)return "";
+ try{const next=publicUrl(new URL(decodeHtml(target[1]||target[2]),source).toString());if(next.origin!==new URL(source).origin||marketplace(next.toString())||/login|signin|auth|logout/i.test(next.pathname))return "";return next.toString();}catch{return "";}
+}
