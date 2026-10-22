@@ -275,6 +275,14 @@ function creatorDiscoveryService({ sb: sb2, query: query2, audit: audit2, env: e
         sources.push({ engine, error: String(e.message).slice(0, 120) });
       }
     }
+    const existing = await query2(sb2.from("sanji_records").select("data").eq("owner", owner).eq("kind", "candidate"));
+    const suppression = await query2(sb2.from("sanji_suppression").select("identity").eq("owner", owner));
+    const excluded2 = new Set(existing.map((r) => normal(r.data?.handle)).filter(Boolean));
+    for (const row of suppression) {
+      const identity = normal(row.identity).replace(/^instagram:/, "");
+      if (/^[a-z0-9._]{2,30}$/.test(identity)) excluded2.add(identity);
+    }
+    rows = rows.filter((r) => !excluded2.has(r.handle));
     let added = 0;
     for (const r of rows.slice(0, Math.max(0, c.target - today.length))) {
       const body = renderCreatorCopy(c.dm_copy, r.handle);
