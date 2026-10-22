@@ -113,7 +113,7 @@ function discoveryCompletionNotifier({ sb: sb2, query: query2, gmailToken: gmail
 
 // supabase/functions/_shared/mail-content.ts
 var normalize = (s) => String(s || "").replace(/\r\n?/g, "\n").trim();
-function mailContent(body, signature, settings = {}, email = true) {
+function mailContent(body, signature, settings = {}, email = true, marketing = false) {
   let text2 = normalize(body), sig = normalize(signature);
   if (sig && !text2.includes(sig)) text2 += (text2 ? "\n\n" : "") + sig;
   if (!email) return text2;
@@ -122,7 +122,8 @@ function mailContent(body, signature, settings = {}, email = true) {
   if (name && (!nameParts.length || !nameParts.every((s) => text2.includes(s)))) lines.push(name);
   if (address && !text2.includes(address)) lines.push(address);
   if (phone && !text2.replace(/[\s()-]/g, "").includes(phone.replace(/[\s()-]/g, ""))) lines.push(phone);
-  if (optOut && !text2.includes(optOut)) lines.push(optOut);
+  if (marketing && optOut && !text2.includes(optOut)) lines.push(optOut);
+  if (!marketing) text2 = text2.replace(/(?:\n\s*)?회신으로 수신 거부를 요청하실 수 있습니다\./g, "").trim();
   return text2 + (lines.length ? "\n\n" + lines.join("\n") : "");
 }
 
@@ -2273,14 +2274,14 @@ Deno.serve(async (req) => {
       if (c.kind === "\uD06C\uB9AC\uC5D0\uC774\uD130" && !inputData.replyTo && !deals.length)
         fail(400, "\uC0C1\uD488 1~3\uAC1C\uB97C \uC120\uD0DD\uD558\uC138\uC694.");
       const settings = (await records(u, "settings"))[0];
-      if (inputData.channel === "email" && (!settings?.senderName || !settings.senderAddress || !settings.senderPhone))
+      if (inputData.channel === "email" && (!settings?.senderName || inputData.marketing && !settings.senderAddress || !settings.senderPhone))
         fail(400, "\uBC1C\uC2E0\uC790 \uC815\uBCF4\uB97C \uBA3C\uC800 \uB4F1\uB85D\uD558\uC138\uC694.");
       const brandNames = await Promise.all(
         deals.map(
           async (d2) => (await owned(u, d2.brand, "candidate")).name
         )
       );
-      const subject = render(inputData.subject, c, deals, brandNames), body = mailContent(render(inputData.body, c, deals, brandNames), inputData.signature, settings, inputData.channel === "email");
+      const subject = render(inputData.subject, c, deals, brandNames), body = mailContent(render(inputData.body, c, deals, brandNames), inputData.signature, settings, inputData.channel === "email", inputData.marketing);
       if (/\{\{/.test(subject + body)) fail(400, "\uBBF8\uD574\uACB0 \uBCC0\uC218\uAC00 \uC788\uC2B5\uB2C8\uB2E4.");
       if (/치료|예방|완치|항암|효능.{0,4}보장|혈당.{0,5}(낮|개선)/.test(
         subject + body

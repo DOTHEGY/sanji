@@ -998,7 +998,7 @@ test("Production mail formatting keeps one signature and contact block and folds
  const {mailContent}=compile('supabase/functions/_shared/mail-content.ts'),{mime}=compile('supabase/functions/_shared/mail-mime.ts');
  const signature='남준혁 드림\n두더지웍스 공동대표 · 변리사\n010-5231-0804\ndothegy2021@gmail.com',settings={senderName:'두더지웍스 · 남준혁',senderAddress:'실제 사업장 주소',senderPhone:'010-5231-0804'};
  const text=mailContent('안녕하세요, 정관장 담당자님.\n\n확인된 제품 특징과 구체적인 콘텐츠 제안.\nhttps://littledore.kr/',signature,settings),subject='(광고) 도합 300만 크리에이터와 함께 일하는 남준혁 변리사입니다';
- assert.equal(text.split('010-5231-0804').length-1,1);assert.equal(text.split('남준혁 드림').length-1,1);assert.equal(text.split('회신으로 수신 거부').length-1,1);assert.equal(mailContent(text,signature,settings),text);
+ assert.equal(text.split('010-5231-0804').length-1,1);assert.equal(text.split('남준혁 드림').length-1,1);assert.equal(text.split('회신으로 수신 거부').length-1,0);assert.ok(mailContent('광고 본문',signature,settings,true,true).includes('회신으로 수신 거부'));assert.equal(mailContent(text,signature,settings),text);
  const raw=Buffer.from(mime({subject,body:text,senderName:settings.senderName,email:'self@example.test',messageId:'format-check'},'sender@example.test'),'base64url').toString();
  const head=raw.split('\r\n\r\n')[0].replace(/\r\n[ \t]+/g,' '),encoded=/^Subject: (.+)$/m.exec(head)[1].trim(),decoded=encoded.replace(/\?=\s+=\?/g,'?==?').replace(/=\?UTF-8\?B\?([^?]+)\?=/g,(_,b)=>Buffer.from(b,'base64').toString());
  assert.equal(decoded,subject);assert.equal(Buffer.from(raw.split('\r\n\r\n')[1].replace(/\r\n/g,''),'base64').toString(),text);
@@ -1046,7 +1046,7 @@ test("Search replenishment rotates engines after denial and queues new sites wit
 test("Bulk email selects and approves two companies once, sends approved hashes and never resends on a second click",async()=>{
  const express=require("express"),app=express();app.use(express.json());
  const leads=["a","b"].map(id=>({id,data:{name:"브랜드"+id,contacts:[{email:id+"@brand.test",source:"https://"+id+".brand.test"}],outreach:{subject:"협업 "+id,body:"개인화 "+id+"\n공통 본문",signature:"서명",brandName:"브랜드"+id,productName:"제품"+id}}}));
- const state={candidates:[],deals:[],templates:[],threads:[],outbox:[],jobs:[],suppression:[],settings:{senderAddress:"주소"}};const sent=[];
+ const state={candidates:[],deals:[],templates:[],threads:[],outbox:[],jobs:[],suppression:[],settings:{senderAddress:""}};const sent=[];
  app.all(/^\/api\/.*/,(req,res)=>{const p=req.path.replace("/api","");
  if(p==="/me")return res.json({email:"owner@example.test",csrf:"test"});if(p==="/state")return res.json(state);if(p==="/connections")return res.json({gmail:{connected:true,enabled:true},instagram:{},ai:{}});
  if(p==="/discovery")return res.json({settings:{enabled:true,target:40,keywords:[]},leads,usage:{emails:2},activity:[]});
@@ -1056,10 +1056,10 @@ test("Bulk email selects and approves two companies once, sends approved hashes 
  app.use("/app",express.static("private/ui"));const server=app.listen(0,"127.0.0.1");let browser;
  try{browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||"/usr/bin/chromium",args:["--no-sandbox"]});const page=await browser.newPage();await page.goto("http://127.0.0.1:"+server.address().port+"/app/#brands");
  await page.locator('[data-action="mail-select-all"]').click();assert.equal(await page.locator('[data-mail-select]:checked').count(),2);await page.locator('[data-action="mail-review-selected"]').click();
- await page.locator('[data-action="mail-ownership-all"]').click();assert.equal(await page.locator('[name=ownership]:checked').count(),2);await page.locator('#mail-review-form button[type=submit]').click();await page.waitForSelector('#mail-approve-all');assert.equal(sent.length,0);
- await page.locator('[data-action="mail-send-all"]').click();assert.equal(sent.length,0);await page.locator('#mail-approve-all').check();assert.equal(await page.locator('[name=bulk-approve]:checked').count(),2);
- await page.locator('[data-action="mail-send-all"]').click();await page.waitForFunction(()=>document.querySelector('#bulk-result-1').textContent.includes('Gmail 서버 접수')&&!document.querySelector('[data-action=mail-send-all]').disabled);assert.equal(sent.length,2);assert.ok(sent.every(x=>x.approved&&x.hash==="hash-"+x.path.split("/")[2]));
- await page.locator('[data-action="mail-send-all"]').click();assert.equal(sent.length,2);
+ await page.waitForSelector('#mail-approve-all');assert.equal(sent.length,0);assert.equal(await page.locator('[name=bulk-approve]:checked').count(),2);
+ await page.locator('[data-action="mail-send-all"]').click();await page.waitForFunction(()=>document.querySelector('#mail-send-summary').textContent.includes('전송 처리 완료'));assert.equal(sent.length,2);assert.ok(sent.every(x=>x.approved&&x.hash==="hash-"+x.path.split("/")[2]));
+ assert.ok((await page.locator('#bulk-result-1').textContent()).includes('Gmail 서버 접수'));assert.equal(await page.locator('[data-action="mail-send-all"]').isDisabled(),true);await page.evaluate(()=>document.querySelector('[data-action="mail-send-all"]').click());assert.equal(sent.length,2);
+
  }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
 });
 

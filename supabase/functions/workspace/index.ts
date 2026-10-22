@@ -1189,7 +1189,7 @@ Deno.serve(async (req: Request) => {
       if (
         inputData.channel === "email" &&
         (!settings?.senderName ||
-          !settings.senderAddress ||
+          (inputData.marketing && !settings.senderAddress) ||
           !settings.senderPhone)
       )
         fail(400, "발신자 정보를 먼저 등록하세요.");
@@ -1199,7 +1199,7 @@ Deno.serve(async (req: Request) => {
         ),
       );
       const subject = render(inputData.subject, c, deals, brandNames),
-        body = mailContent(render(inputData.body,c,deals,brandNames),inputData.signature,settings,inputData.channel==="email");
+        body = mailContent(render(inputData.body,c,deals,brandNames),inputData.signature,settings,inputData.channel==="email",inputData.marketing);
       if (/\{\{/.test(subject + body)) fail(400, "미해결 변수가 있습니다.");
       if (
         /치료|예방|완치|항암|효능.{0,4}보장|혈당.{0,5}(낮|개선)/.test(

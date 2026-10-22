@@ -971,7 +971,7 @@ function createApp(config = {}) {
     if (
       input.channel === "email" &&
       (!settings?.senderName ||
-        !settings.senderAddress ||
+        (input.marketing && !settings.senderAddress) ||
         !settings.senderPhone)
     )
       fail(400, "설정에서 발신자명·주소·연락처를 먼저 등록하세요.");
@@ -981,7 +981,7 @@ function createApp(config = {}) {
         "\n\n" +
         input.signature +
         (input.channel === "email"
-          ? `\n\n${settings.senderName}\n${settings.senderAddress}\n${settings.senderPhone}\n${settings.optOut}`
+          ? `\n\n${settings.senderName}\n${settings.senderAddress}\n${settings.senderPhone}${input.marketing?"\n"+settings.optOut:""}`
           : "");
     if (/\{\{/.test(subject + body)) fail(400, "미해결 변수가 있습니다.");
     if (
