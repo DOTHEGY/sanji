@@ -483,7 +483,7 @@ function emailTrackingService({ sb: sb2, query: query2, env: env2, audit: audit2
     }
   }
   async function withNotice(owner, input, body, scope) {
-    if (input.channel !== "email" || input.trackingRequested === false || !activated()) return { input, body };
+    if (input.channel !== "email" || input.trackingRequested === false || input.trackingNoticeAcknowledged === false || !activated()) return { input, body };
     try {
       const p = await policy(owner);
       if (!p.enabled) return { input, body };
@@ -2713,7 +2713,7 @@ Deno.serve(async (req) => {
         )
       );
       const subject = render(inputData.subject, c, deals, brandNames), baseBody = mailContent(render(inputData.body, c, deals, brandNames), inputData.signature, settings, inputData.channel === "email", inputData.marketing);
-      const notice = await emailTracking.withNotice(u, { ...inputData, trackingRequested: rawInput.trackingRequested }, baseBody, c.kind === "\uD06C\uB9AC\uC5D0\uC774\uD130" ? "creator" : "brand");
+      const notice = await emailTracking.withNotice(u, { ...inputData, trackingRequested: rawInput.trackingRequested, trackingNoticeAcknowledged: rawInput.trackingNoticeAcknowledged }, baseBody, c.kind === "\uD06C\uB9AC\uC5D0\uC774\uD130" ? "creator" : "brand");
       inputData = { ...inputData, ...notice.input };
       const body = notice.body;
       if (/\{\{/.test(subject + body)) fail(400, "\uBBF8\uD574\uACB0 \uBCC0\uC218\uAC00 \uC788\uC2B5\uB2C8\uB2E4.");

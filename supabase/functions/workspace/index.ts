@@ -1116,7 +1116,7 @@ Deno.serve(async (req: Request) => {
       );
       const subject = render(inputData.subject, c, deals, brandNames),
         baseBody = mailContent(render(inputData.body,c,deals,brandNames),inputData.signature,settings,inputData.channel==="email",inputData.marketing);
-      const notice=await emailTracking.withNotice(u,{...inputData,trackingRequested:rawInput.trackingRequested},baseBody,c.kind==="크리에이터"?"creator":"brand");
+      const notice=await emailTracking.withNotice(u,{...inputData,trackingRequested:rawInput.trackingRequested,trackingNoticeAcknowledged:rawInput.trackingNoticeAcknowledged},baseBody,c.kind==="크리에이터"?"creator":"brand");
       inputData={...inputData,...notice.input};const body=notice.body;
       if (/\{\{/.test(subject + body)) fail(400, "미해결 변수가 있습니다.");
       if (

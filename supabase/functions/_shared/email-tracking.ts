@@ -39,7 +39,7 @@ export function emailTrackingService({sb,query,env,audit,baseUrl}:any){
   }catch{return no("추적 설정 조회 오류 · 이메일은 추적 없이 발송 가능");}
  }
  async function withNotice(owner:string,input:any,body:string,scope:string){
-  if(input.channel!=="email"||input.trackingRequested===false||!activated())return {input,body};
+  if(input.channel!=="email"||input.trackingRequested===false||input.trackingNoticeAcknowledged===false||!activated())return {input,body};
   try{const p=await policy(owner);if(!p.enabled)return {input,body};
    const rows=await query(sb.from("sanji_email_campaigns").select("*").eq("owner",owner).eq("scope",scope).eq("enabled",true).order("created"));
    const c=input.trackingCampaignId?rows.find((r:any)=>r.id===input.trackingCampaignId):rows[0];
