@@ -152,7 +152,7 @@ const notifyOwner = discoveryCompletionNotifier({sb,query,gmailToken,remote,audi
 const creatorDiscovery = creatorDiscoveryService({sb,query,audit,env});
 const saveManualReply=manualReplyService({sb,query,putRecord,audit});
 const creatorLocal=creatorLocalService({sb,query,audit,encrypt,decrypt,putRecord});
-const creatorServer=creatorServerService({sb,query,encrypt,decrypt,audit,creatorLocal});
+const creatorServer=creatorServerService({sb,query,encrypt,decrypt,audit,creatorLocal,creatorDiscovery});
 const discovery = discoveryService({sb,query,connection,saveConnection,env,audit,putRecord,notifyOwner});
 async function remote(url: string, options: any = {}, stage = "") {
   const r = await fetch(url, {
@@ -1010,6 +1010,10 @@ Deno.serve(async (req: Request) => {
       await audit(u, "connection_removed");
       return json({ ok: true });
     }
+    if(path==="/instagram/webhook-setup"&&req.method==="POST"){
+      if(!env("META_VERIFY_TOKEN"))fail(503,"서버 웹훅 검증 토큰 미설정");
+      return json({callbackUrl:base+"/instagram/webhook",redirectUri:base+"/oauth/instagram/callback",verifyToken:env("META_VERIFY_TOKEN"),fields:["messages","messaging_postbacks"],requiredScopes:["instagram_business_basic","instagram_business_manage_messages"],privacyUrl:origin+"/sanji/privacy/",dataDeletionUrl:origin+"/sanji/data-deletion/"});
+    }
     if (path.startsWith("/oauth/") && req.method === "POST") {
       await key();
       const provider = path.split("/")[2];
@@ -1056,7 +1060,7 @@ Deno.serve(async (req: Request) => {
               code_challenge_method: "S256",
             })
           : new URLSearchParams({
-              force_reauth: "true",
+              ...(oauthInput.forceReauth===true?{force_reauth:"true"}:{}),
               enable_fb_login: "false",
               client_id: env("META_APP_ID"),
               redirect_uri: base + "/oauth/instagram/callback",

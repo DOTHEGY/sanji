@@ -62,7 +62,8 @@ async function sendApproved(page,job,check,beforeClick){
  try{
   const profileText=await openProfile(page,job.handle);
   if(/비공개 계정|This account is private/i.test(profileText))return {status:'failed',note:'비공개 계정 · 전송하지 않음'};
-  const message=page.getByRole('button',{name:/^(메시지|메시지 보내기|Message|Send message)$/i}).first();
+  const message=page.getByRole('button',{name:/^(메시지|메시지 보내기|Message|Send message)$/i}).or(page.getByRole('link',{name:/^(메시지|메시지 보내기|Message|Send message)$/i})).first();
+  await message.waitFor({state:'visible',timeout:10000}).catch(()=>{});
   if(!await message.isVisible().catch(()=>false))return {status:'failed',note:'메시지 버튼 없음 · 팔로우하지 않고 중단'};
   await message.click();
   const editor=page.locator('div[role="textbox"][contenteditable="true"],textarea[placeholder="Message..."],textarea[placeholder="메시지 입력..."]').last();await editor.waitFor({timeout:12000});
