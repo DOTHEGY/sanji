@@ -183,6 +183,12 @@ function creatorServerService({ sb: sb2, query: query2, encrypt: encrypt2, decry
   const get = async (owner) => await query2(sb2.from("sanji_creator_config").select("*").eq("owner", owner).single());
   async function admin(path, owner, b) {
     const c = await get(owner);
+    if (path === "/creator-server/login-status") {
+      const s = c.sender_handle ? await query2(sb2.from("sanji_instagram_pc_sessions").select("handle,checked,expires").eq("owner", owner).eq("handle", c.sender_handle).maybeSingle()) : null;
+      const valid = !!s && Date.parse(s.expires) > Date.now(), runtime = c.server_runtime || {}, same = !!s && runtime.verifiedSender === c.sender_handle && Date.parse(runtime.sessionChecked) === Date.parse(s.checked), confirmed = valid && same && !runtime.requiresNewSession;
+      const state = !s ? "not_saved" : !valid ? "session_expired" : runtime.requiresNewSession && Date.parse(s.checked) <= Date.parse(runtime.checked) ? "reauth_required" : confirmed ? "identity_confirmed" : "saved_unverified";
+      return { sender: c.sender_handle || "", state, saved: !!s, sessionChecked: s?.checked || null, sessionExpires: s?.expires || null, identityConfirmed: confirmed, identityConfirmedAt: confirmed ? runtime.identityChecked || null : null, serverEnabled: !!c.server_enabled, serverResponding: c.server_enabled && Date.parse(c.server_lease_until) > Date.now(), runtimeReason: runtime.reason || "" };
+    }
     if (path === "/creator-server/approve-test") {
       if (!/^[a-z0-9._]{2,30}$/.test(c.sender_handle || "") || !c.server_enabled || c.server_runtime?.requiresNewSession || c.server_runtime?.workerVersion !== "server-test-v2" || !["ready", "idle", "daily_limit"].includes(c.server_runtime?.status)) throw Error("\uC11C\uBC84 \uC5C5\uB370\uC774\uD2B8\uC640 \uC0C8 \uC138\uC158 \uACC4\uC815 \uD655\uC778\uC744 \uBA3C\uC800 \uB9C8\uCE58\uC138\uC694.");
       const r = await query2(sb2.from("sanji_creator_prospects").select("*").eq("owner", owner).eq("id", "a6cedd56-dbab-43b0-a2a5-1f3f893e1606").single());
@@ -230,7 +236,7 @@ function creatorServerService({ sb: sb2, query: query2, encrypt: encrypt2, decry
     if (path === "/creator-server/worker/status") {
       const reasons = { ready: "DB \uC138\uC158\xB7\uBC1C\uC2E0 \uACC4\uC815 \uD655\uC778 \xB7 \uBBF8\uB9AC\uBCF4\uAE30 \uC804\uC6A9", reauth_required: "PC\uC5D0\uC11C \uCD94\uAC00 \uC778\uC99D \uD6C4 \uC0C8 \uC138\uC158 \uC800\uC7A5 \uD544\uC694", error: "\uC11C\uBC84 \uC624\uB958 \xB7 \uC791\uC5C5 \uC911\uC9C0, \uC218\uB3D9 \uC7AC\uAC1C \uD544\uC694", daily_limit: "\uC11C\uBC84 \uD504\uB85C\uD544 \uC77C\uC77C \uD655\uC778 \uD55C\uB3C4 \uB3C4\uB2EC", idle: "\uC0C8 \uD655\uC778 \uC791\uC5C5 \uC5C6\uC74C" };
       if (!reasons[b.status]) throw Error("\uC62C\uBC14\uB974\uC9C0 \uC54A\uC740 \uC11C\uBC84 \uC0C1\uD0DC");
-      const runtime = { status: b.status, reason: reasons[b.status], checked: (/* @__PURE__ */ new Date()).toISOString(), requiresNewSession: b.status === "reauth_required", instance: b.instance, sessionChecked: String(b.sessionChecked || "").slice(0, 40), workerVersion: String(b.workerVersion || "preview-v1").slice(0, 30) };
+      const runtime = { ...c.server_runtime, status: b.status, reason: reasons[b.status], checked: (/* @__PURE__ */ new Date()).toISOString(), requiresNewSession: b.status === "reauth_required", instance: b.instance, sessionChecked: String(b.sessionChecked || c.server_runtime?.sessionChecked || "").slice(0, 40), ...b.status === "ready" ? { verifiedSender: b.sender, identityChecked: (/* @__PURE__ */ new Date()).toISOString() } : {}, workerVersion: String(b.workerVersion || "preview-v1").slice(0, 30) };
       await query2(sb2.from("sanji_creator_config").update({ server_runtime: runtime, ...["error", "reauth_required"].includes(b.status) ? { server_enabled: false, server_lease_until: null } : {} }).eq("owner", owner));
       return { ok: true };
     }

@@ -7,6 +7,12 @@ export function creatorServerService({sb,query,encrypt,decrypt,audit,creatorLoca
  const get=async(owner:string)=>await query(sb.from("sanji_creator_config").select("*").eq("owner",owner).single());
  async function admin(path:string,owner:string,b:any){
   const c=await get(owner);
+  if(path==="/creator-server/login-status"){
+   const s=c.sender_handle?await query(sb.from("sanji_instagram_pc_sessions").select("handle,checked,expires").eq("owner",owner).eq("handle",c.sender_handle).maybeSingle()):null;
+   const valid=!!s&&Date.parse(s.expires)>Date.now(),runtime=c.server_runtime||{},same=!!s&&runtime.verifiedSender===c.sender_handle&&Date.parse(runtime.sessionChecked)===Date.parse(s.checked),confirmed=valid&&same&&!runtime.requiresNewSession;
+   const state=!s?"not_saved":!valid?"session_expired":runtime.requiresNewSession&&Date.parse(s.checked)<=Date.parse(runtime.checked)?"reauth_required":confirmed?"identity_confirmed":"saved_unverified";
+   return {sender:c.sender_handle||"",state,saved:!!s,sessionChecked:s?.checked||null,sessionExpires:s?.expires||null,identityConfirmed:confirmed,identityConfirmedAt:confirmed?runtime.identityChecked||null:null,serverEnabled:!!c.server_enabled,serverResponding:c.server_enabled&&Date.parse(c.server_lease_until)>Date.now(),runtimeReason:runtime.reason||""};
+  }
   if(path==="/creator-server/approve-test"){
    if(!/^[a-z0-9._]{2,30}$/.test(c.sender_handle||"")||!c.server_enabled||c.server_runtime?.requiresNewSession||c.server_runtime?.workerVersion!=="server-test-v2"||!["ready","idle","daily_limit"].includes(c.server_runtime?.status))throw Error("서버 업데이트와 새 세션 계정 확인을 먼저 마치세요.");
    const r=await query(sb.from("sanji_creator_prospects").select("*").eq("owner",owner).eq("id","a6cedd56-dbab-43b0-a2a5-1f3f893e1606").single());
@@ -48,7 +54,7 @@ export function creatorServerService({sb,query,encrypt,decrypt,audit,creatorLoca
   if(path==="/creator-server/worker/status"){
    const reasons:any={ready:"DB 세션·발신 계정 확인 · 미리보기 전용",reauth_required:"PC에서 추가 인증 후 새 세션 저장 필요",error:"서버 오류 · 작업 중지, 수동 재개 필요",daily_limit:"서버 프로필 일일 확인 한도 도달",idle:"새 확인 작업 없음"};
    if(!reasons[b.status])throw Error("올바르지 않은 서버 상태");
-   const runtime={status:b.status,reason:reasons[b.status],checked:new Date().toISOString(),requiresNewSession:b.status==="reauth_required",instance:b.instance,sessionChecked:String(b.sessionChecked||"").slice(0,40),workerVersion:String(b.workerVersion||"preview-v1").slice(0,30)};
+   const runtime={...c.server_runtime,status:b.status,reason:reasons[b.status],checked:new Date().toISOString(),requiresNewSession:b.status==="reauth_required",instance:b.instance,sessionChecked:String(b.sessionChecked||c.server_runtime?.sessionChecked||"").slice(0,40),...(b.status==="ready"?{verifiedSender:b.sender,identityChecked:new Date().toISOString()}:{} ),workerVersion:String(b.workerVersion||"preview-v1").slice(0,30)};
    await query(sb.from("sanji_creator_config").update({server_runtime:runtime,...(["error","reauth_required"].includes(b.status)?{server_enabled:false,server_lease_until:null}:{} )}).eq("owner",owner));return {ok:true};
   }
   if(["/creator-server/worker/test-check","/creator-server/worker/test-before-click","/creator-server/worker/test-result"].includes(path)){
