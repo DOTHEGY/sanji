@@ -29,6 +29,16 @@ async function identity(page,expected,navigate=true){
  throw Error('로그인 계정을 확인하지 못했습니다. @'+expected+' 프로필에서 「프로필 편집」이 보이는지 확인하세요. 다른 계정·확인 불가 상태에서는 진행하지 않습니다.');
 }
 
+function failureKind(error,url=''){
+ const text=String(error?.message||error||'');
+ if(/\/(?:challenge|checkpoint)|\/accounts\/login/.test(url)||/제한 또는 인증|로그인·다른|로그인 계정을 확인하지 못|^challenge$|^reauth$|Action Blocked|Try Again Later/i.test(text))return 'reauth';
+ if(/Target page, context or browser has been closed|browser has disconnected|net::ERR_|page.goto: Timeout/i.test(text))return 'transient';
+ return 'error';
+}
+function visibleMetrics(text){
+ const value=String(text||''),pick=re=>value.match(re)?.[0]||'';
+ return {followersText:pick(/(?:팔로워\s*[\d,.만천억KMB]+|[\d,.KMB]+\s+followers)/i),followingText:pick(/(?:팔로(?:잉|우)\s*[\d,.만천억KMB]+|[\d,.KMB]+\s+following)/i),postsText:pick(/(?:게시물\s*[\d,.만천억KMB]+|[\d,.KMB]+\s+posts)/i)};
+}
 async function openProfile(page,handle){if(!validHandle(handle))throw Error('올바르지 않은 수신자');await page.goto('https://www.instagram.com/'+handle+'/',{waitUntil:'domcontentloaded'});await page.locator('main').waitFor({timeout:12000});const u=new URL(page.url());if(u.hostname!=='www.instagram.com'||u.pathname.replace(/\/$/,'').toLowerCase()!=='/'+handle)throw Error('대상 프로필 대신 로그인·다른 페이지로 이동됨');const text=await page.locator('main').innerText();if(/확인해 주세요|계정이 제한|Try Again Later|Action Blocked|일시적으로 차단|Suspicious|challenge|잠시 후 다시/i.test(text))throw Error('제한 또는 인증 확인 화면 · 실행 중지');return text;}
 async function profile(page,job){
  try{const text=await openProfile(page,job.handle);if(/비공개 계정|This account is private|페이지를 사용할 수 없|Sorry, this page/i.test(text))return {status:'unavailable',reason:'비공개·접근 제한 계정 · 공개 정보 미수집'};
@@ -41,7 +51,7 @@ async function profile(page,job){
  const avatarEl=header.locator('img').first();if(await avatarEl.isVisible().catch(()=>false)){const a=await avatarEl.screenshot().catch(()=>null);if(a&&a.length<=80000)avatar=a.toString('base64');}
  if(box&&box.height>0&&box.width>0){const viewport=page.viewportSize()||{width:1100,height:1000};const x=Math.max(0,box.x),y=Math.max(0,box.y);const shot=await page.screenshot({clip:{x,y,width:Math.min(box.width,viewport.width-x),height:Math.min(box.height,viewport.height-y,950)}});if(shot.length<=400000)image=shot.toString('base64');}
  return {status:'checked',displayName,bio,followersText:(await stat('followers'))||(headerText.match(/(?:팔로워\s*[\d,.만천억KMB]+|[\d,.KMB]+\s+followers)/i)?.[0]||''),followingText:(await stat('following'))||(headerText.match(/(?:팔로잉\s*[\d,.만천억KMB]+|[\d,.KMB]+\s+following)/i)?.[0]||''),postsText:posts,image,avatar};
- }catch(e){return {status:'unavailable',reason:e.message.slice(0,200),halt:true};}
+ }catch(e){return {status:'unavailable',reason:e.message.slice(0,200),failureKind:failureKind(e,page.url()),halt:true};}
 }
 async function conversationRecipient(editor,expected,inDirect){
  return await editor.evaluate((el,{expected,inDirect})=>{
@@ -122,5 +132,5 @@ async function run(){
   }
  }finally{io.close();await context?.close();}
 }
-module.exports={conversationRecipient,instagramOnlyState,validHandle,identity,openProfile,profile,sendApproved,stateDirectory};
+module.exports={failureKind,visibleMetrics,conversationRecipient,instagramOnlyState,validHandle,identity,openProfile,profile,sendApproved,stateDirectory};
 if(require.main===module)run().catch(e=>{console.error(e.message);process.exitCode=1;});

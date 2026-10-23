@@ -195,10 +195,17 @@ export function discoveryService(deps:any){
  }
  async function enrich(u:string,id:string){
   const lead=await query(sb.from("sanji_discovery_leads").select("*").eq("owner",u).eq("id",id).single());
-  const source=(lead.data.contacts||[]).find((c:any)=>c.discoveryMethod==="public_page"&&c.source)?.source||lead.data.website;
-  const result=await crawl(publicUrl(source).origin+"/",2);
-  await query(sb.from("sanji_discovery_leads").update({data:{...lead.data,publicEvidence:result.publicEvidence||[],evidenceError:result.error||"",evidenceChecked:new Date().toISOString()},updated:new Date().toISOString()}).eq("owner",u).eq("id",id));
-  return {ok:true,pages:result.pages,evidenceCount:result.publicEvidence?.length||0,error:result.error||""};
+  const source=lead.data.website||(lead.data.contacts||[]).find((c:any)=>c.discoveryMethod==="public_page"&&c.source)?.source;
+  const checked=new Date().toISOString();
+  if(!source||editorialSource(source,lead.data.publicEvidence||[])||!validBrandName(lead.data.name)){
+   await query(sb.from("sanji_discovery_leads").update({status:"blocked",data:{...lead.data,officialRecheckRequested:false,officialRecheck:{status:"discovery_only",checked,reason:"언론사·기사·중간 사이트는 브랜드 발견 출처 전용"}}}).eq("owner",u).eq("id",id));return {status:"discovery_only",name:lead.data.name};
+  }
+  const result=await crawl(publicUrl(source).origin+"/",4),contacts=new Map();
+  for(const c of [...(lead.data.contacts||[]).filter((c:any)=>!editorialSource(c.source,lead.data.publicEvidence||[])),...(result.contacts||[])])contacts.set(String(c.email).toLowerCase()+"|"+c.source,c);
+  const evidence=Array.from(new Map([...(lead.data.publicEvidence||[]),...(result.publicEvidence||[])].map((p:any)=>[p.url,p])).values());
+  await query(sb.from("sanji_discovery_leads").update({...(lead.status==="new"?{status:"review"}:{}),data:{...lead.data,contacts:[...contacts.values()],publicEvidence:evidence,pages:result.pages,sourceAttempts:result.sourceAttempts||[],checked:result.checked||checked,error:result.error||"",evidenceError:result.error||"",evidenceChecked:checked,officialRecheckRequested:false,officialRecheck:{status:result.pages?"checked":"failed",checked,pages:result.pages,error:result.error||""}},updated:checked}).eq("owner",u).eq("id",id));
+  await audit(u,"official_page_rechecked",{lead:id,pages:result.pages,emailCandidates:result.contacts?.length||0,error:result.error||"",paidApiCalls:0});
+  return {status:"official_rechecked",name:lead.data.name,pages:result.pages,emailCandidates:result.contacts?.length||0,evidenceCount:result.publicEvidence?.length||0,error:result.error||""};
  }
  async function researchNext(u:string,requestedId="",productOnly=false){
   let leadsQuery=sb.from("sanji_discovery_leads").select("*").eq("owner",u);if(productOnly)leadsQuery=leadsQuery.eq("data->outreach->>draftMode","brand_first");
@@ -257,11 +264,16 @@ export function discoveryService(deps:any){
    else if(input.task==="enrich"&&typeof input.leadId==="string")result=await enrich(owner,input.leadId);
    else if(input.task==="research"&&typeof input.leadId==="string")result=await researchNext(owner,input.leadId)||{status:"research_wait"};
    else {
+    const rechecks=await query(sb.from("sanji_discovery_leads").select("id,data,updated").eq("owner",owner).eq("data->>officialRecheckRequested","true").order("updated").limit(1));
+    if(rechecks.length){const l=rechecks[0],claimed=await query(sb.from("sanji_discovery_leads").update({data:{...l.data,officialRecheckRequested:false,officialRecheck:{status:"running",checked:new Date().toISOString()}},updated:new Date().toISOString()}).eq("owner",owner).eq("id",l.id).eq("updated",l.updated).select("id"));
+     result=claimed.length?await enrich(owner,l.id):{status:"recheck_busy"};
+    }else{
     const refreshed=await refreshSources(owner);
     const searched=refreshed?.added?null:await refillSearch(owner);
     // Research backlog every other tick; new-contact research also happens inside cycle().
     const researched=(!refreshed?.added&&!searched&&Math.floor(Date.now()/300000)%2===0)?await researchNext(owner):null;
     result=refreshed?.added?refreshed:searched||researched||await cycle(owner);
+    }
    }
    const completionNotification=input.task!=="product"&&deps.notifyOwner?await deps.notifyOwner(owner):null;
    await query(sb.from("sanji_discovery_config").update({runtime:{lastStarted,lastFinished:new Date().toISOString(),status:"idle",result,completionNotification},updated:new Date().toISOString()}).eq("owner",owner));

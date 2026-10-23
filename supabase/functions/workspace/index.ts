@@ -1,3 +1,4 @@
+import {instagramSetupService} from "../_shared/instagram-setup.ts";
 import {creatorServerService} from "../_shared/creator-server.ts";
 import {manualReplyService} from "../_shared/manual-reply.ts";
 import {creatorLocalService} from "../_shared/creator-local.ts";
@@ -147,6 +148,7 @@ async function saveConnection(u: string, p: string, data: any) {
     ),
   );
 }
+const processInstagramSetup=instagramSetupService({sb,query,connection,saveConnection,remote,capabilities:instagramCapabilities,version:env("META_GRAPH_VERSION")||"v24.0",audit});
 const emailTracking=emailTrackingService({sb,query,env,audit,baseUrl:env("SUPABASE_URL")+"/functions/v1/"+(env("WORKSPACE_FUNCTION_NAME")||"bright-function")});
 const notifyOwner = discoveryCompletionNotifier({sb,query,gmailToken,remote,audit,env});
 const creatorDiscovery = creatorDiscoveryService({sb,query,audit,env});
@@ -775,7 +777,7 @@ Deno.serve(async (req: Request) => {
     }
     if(path === "/creator-discovery/tick" && req.method === "POST"){
       if(!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403,"발굴 실행기 인증 실패");
-      return json(await creatorDiscovery.scheduled());
+      return json({...await creatorDiscovery.scheduled(),officialSetup:await processInstagramSetup()});
     }
     if(path==="/gmail/tick"&&req.method==="POST"){
       if(!env("DISCOVERY_RUNNER_TOKEN")||req.headers.get("x-job-token")!==env("DISCOVERY_RUNNER_TOKEN"))fail(403,"회신 동기화 실행기 인증 실패");

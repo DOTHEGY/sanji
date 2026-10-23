@@ -948,9 +948,9 @@ test("Clean integration settings show expired Instagram auth honestly and offer 
  if(p==='/oauth/instagram'){loginBody=req.body;return res.json({url:'#settings'});}return res.status(404).json({error:p});});app.use('/app',express.static('private/ui'));
  const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.on('listening',r));let browser;
  try{browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',headless:true,args:['--no-sandbox']});const page=await browser.newPage({viewport:{width:1365,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.goto('http://127.0.0.1:'+server.address().port+'/app/#settings');await page.waitForSelector('#discovery-settings [name=target]');
+ await page.goto('http://127.0.0.1:'+server.address().port+'/app/#settings');await page.locator('#brand-discovery-settings > summary').click();await page.waitForSelector('#discovery-settings [name=target]');
  assert.equal(await page.locator('#discovery-settings [name=target]').inputValue(),'40');assert.match(await page.locator('.account-pending').textContent(),/재로그인 필요/);assert.equal(await page.getByText('로그인 응답 수신 · 계정 조회 대기',{exact:true}).count(),0);
- await page.locator('.account-pending [data-action=connect-instagram-basic]').click();assert.deepEqual(loginBody,{profileOnly:true});
+ await page.getByText('Instagram 공식 API · 받은 대화 연동 설정',{exact:false}).click();await page.locator('.account-pending [data-action=connect-instagram-basic]').click();assert.deepEqual(loginBody,{profileOnly:true});
  await page.screenshot({path:'/tmp/sanji-settings-desktop.png',fullPage:true});await page.setViewportSize({width:390,height:844});await page.screenshot({path:'/tmp/sanji-settings-mobile.png',fullPage:true});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);assert.deepEqual(errors,[]);
  }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
 });

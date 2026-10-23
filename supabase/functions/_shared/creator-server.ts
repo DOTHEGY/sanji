@@ -7,6 +7,12 @@ export function creatorServerService({sb,query,encrypt,decrypt,audit,creatorLoca
  const get=async(owner:string)=>await query(sb.from("sanji_creator_config").select("*").eq("owner",owner).single());
  async function admin(path:string,owner:string,b:any){
   const c=await get(owner);
+  if(path==="/creator-server/progress"){
+   const rows=await query(sb.from("sanji_creator_prospects").select("profile_preview").eq("owner",owner));
+   const snapshots=rows.map((r:any)=>r.profile_preview||{}),checked=snapshots.filter((p:any)=>p.status==="checked").length,captures=snapshots.filter((p:any)=>p.imagePath).length,followers=snapshots.filter((p:any)=>p.followersText).length,unavailable=snapshots.filter((p:any)=>p.status==="unavailable").length;
+   const r=c.server_runtime||{},responding=!!c.server_enabled&&Date.parse(c.server_lease_until)>Date.now();
+   return {sender:c.sender_handle,total:rows.length,checked,captures,followers,unavailable,pending:rows.length-checked-unavailable,lastProfileChecked:snapshots.map((p:any)=>p.checked).filter(Boolean).sort().at(-1)||null,state:!c.server_enabled?(r.requiresNewSession?"auth_required":r.status==="error"?"error":"paused"):!responding?"no_heartbeat":r.status==="recovering"?"recovering":r.status==="daily_limit"?"daily_limit":"running",reason:r.reason||"",lastWorkerChecked:r.checked||null,workerVersion:r.workerVersion||"미확인",discoveryEnabled:!!c.enabled,dailyDiscoveryTarget:c.target||50};
+  }
   if(path==="/creator-server/login-status"){
    const s=c.sender_handle?await query(sb.from("sanji_instagram_pc_sessions").select("handle,checked,expires").eq("owner",owner).eq("handle",c.sender_handle).maybeSingle()):null;
    const valid=!!s&&Date.parse(s.expires)>Date.now(),runtime=c.server_runtime||{},same=!!s&&runtime.verifiedSender===c.sender_handle&&Date.parse(runtime.sessionChecked)===Date.parse(s.checked),confirmed=valid&&same&&!runtime.requiresNewSession;
@@ -14,7 +20,7 @@ export function creatorServerService({sb,query,encrypt,decrypt,audit,creatorLoca
    return {sender:c.sender_handle||"",state,saved:!!s,sessionChecked:s?.checked||null,sessionExpires:s?.expires||null,identityConfirmed:confirmed,identityConfirmedAt:confirmed?runtime.identityChecked||null:null,serverEnabled:!!c.server_enabled,serverResponding:c.server_enabled&&Date.parse(c.server_lease_until)>Date.now(),runtimeReason:runtime.reason||""};
   }
   if(path==="/creator-server/approve-test"){
-   if(!/^[a-z0-9._]{2,30}$/.test(c.sender_handle||"")||!c.server_enabled||c.server_runtime?.requiresNewSession||!["server-test-v2","server-background-v3"].includes(c.server_runtime?.workerVersion)||!["ready","idle","daily_limit"].includes(c.server_runtime?.status))throw Error("서버 업데이트와 새 세션 계정 확인을 먼저 마치세요.");
+   if(!/^[a-z0-9._]{2,30}$/.test(c.sender_handle||"")||!c.server_enabled||c.server_runtime?.requiresNewSession||!["server-test-v2","server-background-v3","server-background-v4"].includes(c.server_runtime?.workerVersion)||!["ready","idle","daily_limit"].includes(c.server_runtime?.status))throw Error("서버 업데이트와 새 세션 계정 확인을 먼저 마치세요.");
    const r=await query(sb.from("sanji_creator_prospects").select("*").eq("owner",owner).eq("id","a6cedd56-dbab-43b0-a2a5-1f3f893e1606").single());
    const body="산지 Instagram DM 발송 기능 확인용 테스트 메시지입니다. 확인되시면 답장 부탁드립니다!";
    if(r.handle!=="taemin_dtg"||r.body!==body||r.status!=="failed"||r.result?.clickStarted)throw Error("발송 전 중단된 내부 테스트 1건만 허용합니다. 발송·처리 중·결과 미확인 건은 재시도하지 않습니다.");
@@ -57,10 +63,16 @@ export function creatorServerService({sb,query,encrypt,decrypt,audit,creatorLoca
    return await creatorDiscovery.collect(owner);
   }
   if(path==="/creator-server/worker/status"){
-   const reasons:any={ready:"DB 세션·발신 계정 확인 · 미리보기 전용",reauth_required:"PC에서 추가 인증 후 새 세션 저장 필요",error:"서버 오류 · 작업 중지, 수동 재개 필요",daily_limit:"서버 프로필 일일 확인 한도 도달",idle:"새 확인 작업 없음"};
+   const reasons:any={ready:"DB 세션·발신 계정 확인 · 미리보기 전용",reauth_required:"PC에서 추가 인증 후 새 세션 저장 필요",error:"서버 오류 · 작업 중지, 수동 재개 필요",daily_limit:"서버 프로필 일일 확인 한도 도달",idle:"새 확인 작업 없음",recovering:"브라우저 종료·일시 연결 오류 · 제한된 자동 복구 중"};
    if(!reasons[b.status])throw Error("올바르지 않은 서버 상태");
-   const runtime={...c.server_runtime,status:b.status,reason:reasons[b.status],checked:new Date().toISOString(),requiresNewSession:b.status==="reauth_required",instance:b.instance,sessionChecked:String(b.sessionChecked||c.server_runtime?.sessionChecked||"").slice(0,40),...(b.status==="ready"?{verifiedSender:b.sender,identityChecked:new Date().toISOString()}:{} ),workerVersion:String(b.workerVersion||"preview-v1").slice(0,30)};
-   await query(sb.from("sanji_creator_config").update({server_runtime:runtime,...(["error","reauth_required"].includes(b.status)?{server_enabled:false,server_lease_until:null}:{} )}).eq("owner",owner));return {ok:true};
+   let status=b.status,reason=reasons[b.status];
+   if(status==="reauth_required"){
+    const recent=await query(sb.from("sanji_creator_prospects").select("profile_preview").eq("owner",owner).order("profile_preview->>checked",{ascending:false}).limit(1));
+    const p=Array.isArray(recent)?recent[0]?.profile_preview:null;
+    if(p?.method==="server_visible_profile"&&/Target page, context or browser has been closed/.test(p.reason||"")&&Date.now()-Date.parse(p.checked)<30000){status="error";reason="브라우저가 종료됐습니다. 서버 실행기 업데이트·복구 필요 · 재로그인 오류 아님";}
+   }
+   const runtime={...c.server_runtime,status,reason,checked:new Date().toISOString(),requiresNewSession:status==="reauth_required",instance:b.instance,sessionChecked:String(b.sessionChecked||c.server_runtime?.sessionChecked||"").slice(0,40),...(status==="ready"?{verifiedSender:b.sender,identityChecked:new Date().toISOString()}:{} ),workerVersion:String(b.workerVersion||c.server_runtime?.workerVersion||"preview-v1").slice(0,30)};
+   await query(sb.from("sanji_creator_config").update({server_runtime:runtime,...(["error","reauth_required"].includes(status)?{server_enabled:false,server_lease_until:null}:{} )}).eq("owner",owner));return {ok:true};
   }
   if(["/creator-server/worker/test-check","/creator-server/worker/test-before-click","/creator-server/worker/test-result"].includes(path)){
    if(b.id!==c.server_test_id||Date.parse(c.server_test_deadline)<=Date.now()||b.sender!==c.server_test_sender)throw Error("승인된 내부 테스트 1건만 허용합니다.");
@@ -78,7 +90,7 @@ export function creatorServerService({sb,query,encrypt,decrypt,audit,creatorLoca
    return {ok:true};
   }
   if(path==="/creator-server/worker/test-next"){
-   if(!["server-test-v2","server-background-v3"].includes(b.workerVersion))throw Error("서버 실행기 업데이트 필요");
+   if(!["server-test-v2","server-background-v3","server-background-v4"].includes(b.workerVersion))throw Error("서버 실행기 업데이트 필요");
    if(!["ready","idle","daily_limit"].includes(c.server_runtime.status))throw Error("계정 확인 후 테스트하세요.");
    return {job:await query(sb.rpc("sanji_creator_server_test_claim",{p_owner:owner,p_sender:b.sender}))};
   }
@@ -87,7 +99,7 @@ export function creatorServerService({sb,query,encrypt,decrypt,audit,creatorLoca
   if(path==="/creator-server/worker/next"){
    if(b.live)throw Error("서버 DM 발송은 별도 검증·승인 전까지 비활성입니다.");
    const start=new Date(new Date(Date.now()+9*3600000).toISOString().slice(0,10)+"T00:00:00+09:00").toISOString();
-   const count=await query(sb.from("sanji_creator_prospects").select("id").eq("owner",owner).eq("profile_preview->>method","server_visible_profile").gte("profile_preview->>attempted",start));
+   const count=await query(sb.from("sanji_creator_prospects").select("id").eq("owner",owner).gte("profile_preview->>attempted",start));
    if(count.length>=50)return {job:null,dailyLimit:true};
    if(!["ready","idle","daily_limit"].includes(c.server_runtime.status))throw Error("세션 확인 후에만 프로필 작업을 시작합니다.");
    return {job:await query(sb.rpc("sanji_claim_local_creator",{p_owner:owner,p_sender:b.sender,p_send:false}))};
