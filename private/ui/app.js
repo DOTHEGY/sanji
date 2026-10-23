@@ -31,6 +31,7 @@ if (oauthNotice) {
   oauthNoticeUrl.searchParams.delete("oauth_notice");
   history.replaceState(null, "", oauthNoticeUrl.toString());
 }
+let trackingState=null;
 let csrf = "",
   me = null,
   data = {
@@ -53,6 +54,7 @@ const routes = {
   matching: ["⇄", "상품 매칭"],
   templates: ["▧", "템플릿"],
   inbox: ["✉", "통합 대화함"],
+  emailtracking:["◉","이메일 성과·추적"],
   settings: ["⚙", "연동 설정"],
 };
 const statuses = [
@@ -111,6 +113,7 @@ function modal(html) {
   $("#modal-content").innerHTML =
     html + '<div id="form-error" role="alert"></div>';
   $("#modal").showModal();
+  const emailForm=$("#compose-form")||$("#mail-review-form")||$("#bulk-compose-form");if(emailForm)mountTrackingForm(emailForm);
 }
 function close() {
   $("#modal").close();
@@ -131,6 +134,7 @@ function head(title, sub, buttons = "") {
 }
 async function reload() {
   [data, connections] = await Promise.all([api("/state"), api("/connections")]);
+  try{trackingState=await api("/email-tracking");}catch{trackingState=null;}
   $("#connection-banner").innerHTML =
     `<b>운영 데이터 · 서버 저장</b> Gmail ${connections.gmail.connected ? "연결됨" : "미연결"} · 실제 메일 ${connections.gmail.enabled ? "사용자 승인 후 발송" : "발송 비활성"} · 승인 전 자동 발송 없음`;
   render();
@@ -208,7 +212,7 @@ function dashboard() {
     }</div><div class="panel"><h2>성과와 집계 기준</h2><div class="task">긍정 회신율 <strong style="margin-left:auto">${rate(positive.size)}</strong></div><div class="task">협상 전환율 <strong style="margin-left:auto">${humanTargets.size ? Math.round((data.candidates.filter((c) => c.status === "협상" && humanTargets.has(c.id)).length / humanTargets.size) * 100) + "%" : "—"}</strong></div><div class="task">크리에이터 수락 <strong style="margin-left:auto">${data.candidates.filter((c) => c.kind === "크리에이터" && ["수락", "공동구매 확정"].includes(c.status)).length}</strong></div><div class="task">공동구매 확정 <strong style="margin-left:auto">${data.threads.filter((t) => t.classification === "공동구매 확정").length}</strong></div><p class="fine">전체 기록 기간 · 긍정/접수 대상 · 협상/사람 회신 대상 · 수동 DM 접수/열람 미집계 · 매출 수집 없음</p></div></div><div class="panel"><h2>발송·오류 현황</h2>${outboxTable()}</div>`;
 }
 function outboxTable() {
-  return `<div class="table-scroll"><table><thead><tr><th>대상</th><th>채널</th><th>상태</th><th>일시</th></tr></thead><tbody>${data.outbox.map((o) => `<tr><td>${esc(targetName(o.target))}</td><td>${esc(o.channel)}</td><td>${tag(o.status, o.status === "accepted" ? "" : "orange")}<small>${esc(o.data.error || "")}</small></td><td>${esc(new Date(o.created).toLocaleString("ko-KR"))}</td></tr>`).join("") || '<tr><td colspan="4" class="empty">실제 발송·수동 기록이 없습니다.</td></tr>'}</tbody></table></div>`;
+  return `<div class="table-scroll"><table><thead><tr><th>대상</th><th>채널</th><th>상태</th><th>일시</th></tr></thead><tbody>${data.outbox.map((o) => `<tr><td>${esc(targetName(o.target))}</td><td>${esc(o.channel)}</td><td>${tag(o.status, o.status === "accepted" ? "" : "orange")}<small>${esc(o.data.error || "")}</small></td><td>${esc(new Date(o.created).toLocaleString("ko-KR"))}${o.channel==="email"?button("추적·메일 상세","tracking-detail",o.id):""}</td></tr>`).join("") || '<tr><td colspan="4" class="empty">실제 발송·수동 기록이 없습니다.</td></tr>'}</tbody></table></div>`;
 }
 async function creatorDiscoveryPage(){
   $('#app').innerHTML=head('크리에이터 자동 발굴','공개 검색 결과에서 새 계정을 찾고, 중복을 제외해 저장합니다.');
@@ -265,7 +269,7 @@ function candidateForm(id = "", creator = false) {
   };
   const contact = c.contact;
   modal(
-    `<h2>${id ? "후보 상세·수정" : "실제 후보 추가"}</h2><p class="notice">실제로 확인한 사실과 공식 URL만 입력하세요. 모르는 분류·권한·수치는 미확인으로 남기세요. 공식 문의 폼은 대체 경로로 기록하며 자동 제출하지 않습니다.</p><form id="candidate-form" data-id="${esc(id)}" class="form-grid">${field("name", "브랜드 / 크리에이터명", c.name)}${field("kind", "관계", c.kind, "text", ["브랜드", "제조사", "공식 유통사", "크리에이터"])}${field("company", "소유 회사 / 소속 법인", c.company)}${field("companyKey", "법인 식별자|사업자번호 또는 동일 회사의 공통 식별자. 미입력 시 회사명으로 중복 확인.", c.companyKey)}${field("product", "제품명", c.product)}${field("category", "제품 분류", c.category, "text", ["건강기능식품", "일반 건강식품", "미확인"])}${field("classification", "법적 분류 확인 근거", c.classification || "미확인", "textarea")}${field("authority", "제조·판매·공식 유통 권한 근거", c.authority || "미확인", "textarea")}${field("website", "공식 홈페이지 / 문의 폼 URL", c.website, "url")}${field("channels", "판매 채널", c.channels)}<h3 class="form-section">공식 사업용 연락처</h3>${field("email", "공개 사업용 이메일|이메일을 추측하지 마세요. 플랫폼 고객센터를 입점 브랜드 연락처로 사용하지 마세요.", contact.email, "email")}${field("contactOwner", "이메일 소유 회사|위 소유 회사와 정확히 일치해야 검증 표시 가능", contact.owner)}${field("contactSource", "공식 연락처 출처 URL", contact.source, "url")}${field("contactChecked", "확인일", contact.checked, "date")}${field("contactPurpose", "공식 사용 목적", contact.purpose || "미확인", "text", ["미확인", "사업 제휴", "도매·유통", "비즈니스"])}${field("verified", "소유 회사·공식 출처·사업용 용도를 직접 확인함", contact.verified, "checkbox")}<h3 class="form-section">크리에이터 공개 콘텐츠 / 매칭 근거</h3>${field("handle", "Instagram 아이디", c.handle)}${field("profile", "공개 프로필 URL", c.profile, "url")}${field("agency", "크리에이터·소속사 관계", c.agency)}${field("topics", "공개 콘텐츠 주제|쉼표로 구분. 개인 건강·질병을 추정해 입력하지 마세요.", c.topics.join(", "))}${field("followers", "팔로워 (미확인은 빈칸)", c.followers ?? "", "number")}${field("metricsSource", "수치 출처 URL", c.metricsSource, "url")}${field("metricsChecked", "수치 확인일", c.metricsChecked, "date")}${field("reaction", "실제 공개 반응 / 조회수 근거", c.reaction || "미확인", "textarea")}${field("experience", "확인한 공동구매 경험", c.experience || "미확인", "textarea")}${field("active", "활동 상태", c.active || "미확인")}${field("schedule", "제안 가능 일정", c.schedule || "미확인")}${field("evidence", "확인한 콘텐츠 URL|한 줄에 URL 하나씩. 설명은 선정 이유에 기록.", c.evidence.map((e) => e.url).join("\n"), "textarea")}${field("reason", "선정 이유 / 공개 근거", c.reason, "textarea")}<h3 class="form-section">영업 관리</h3>${field("status", "상태", c.status, "text", statuses)}${field("owner", "담당자", c.owner)}${field("next", "다음 행동", c.next)}${field("due", "후속 연락일", c.due, "date")}${field("note", "내부 메모", c.note, "textarea")}<div class="full actions"><button class="primary" type="submit">서버에 저장</button>${id ? button("제안 작성", "compose", id) : ""}</div></form>`,
+    `<h2>${id ? "후보 상세·수정" : "실제 후보 추가"}</h2><p class="notice">실제로 확인한 사실과 공식 URL만 입력하세요. 모르는 분류·권한·수치는 미확인으로 남기세요. 공식 문의 폼은 대체 경로로 기록하며 자동 제출하지 않습니다.</p><form id="candidate-form" data-id="${esc(id)}" class="form-grid">${field("name", "브랜드 / 크리에이터명", c.name)}${field("kind", "관계", c.kind, "text", ["브랜드", "제조사", "공식 유통사", "크리에이터"])}${field("company", "소유 회사 / 소속 법인", c.company)}${field("companyKey", "법인 식별자|사업자번호 또는 동일 회사의 공통 식별자. 미입력 시 회사명으로 중복 확인.", c.companyKey)}${field("product", "제품명", c.product)}${field("category", "제품 분류", c.category, "text", ["건강기능식품", "일반 건강식품", "미확인"])}${field("classification", "법적 분류 확인 근거", c.classification || "미확인", "textarea")}${field("authority", "제조·판매·공식 유통 권한 근거", c.authority || "미확인", "textarea")}${field("website", "공식 홈페이지 / 문의 폼 URL", c.website, "url")}${field("channels", "판매 채널", c.channels)}<h3 class="form-section">공식 사업용 연락처</h3>${field("email", "공개 사업용 이메일|이메일을 추측하지 마세요. 플랫폼 고객센터를 입점 브랜드 연락처로 사용하지 마세요.", contact.email, "email")}${field("contactOwner", "이메일 소유 회사|위 소유 회사와 정확히 일치해야 검증 표시 가능", contact.owner)}${field("contactSource", "공식 연락처 출처 URL", contact.source, "url")}${field("contactChecked", "확인일", contact.checked, "date")}${field("contactPurpose", "공식 사용 목적", contact.purpose || "미확인", "text", ["미확인", "사업 제휴", "도매·유통", "비즈니스"])}${field("verified", "소유 회사·공식 출처·사업용 용도를 직접 확인함", contact.verified, "checkbox")}<h3 class="form-section">크리에이터 공개 콘텐츠 / 매칭 근거</h3>${field("handle", "Instagram 아이디", c.handle)}${field("profile", "공개 프로필 URL", c.profile, "url")}${field("agency", "크리에이터·소속사 관계", c.agency)}${field("topics", "공개 콘텐츠 주제|쉼표로 구분. 개인 건강·질병을 추정해 입력하지 마세요.", c.topics.join(", "))}${field("followers", "팔로워 (미확인은 빈칸)", c.followers ?? "", "number")}${field("metricsSource", "수치 출처 URL", c.metricsSource, "url")}${field("metricsChecked", "수치 확인일", c.metricsChecked, "date")}${field("reaction", "실제 공개 반응 / 조회수 근거", c.reaction || "미확인", "textarea")}${field("experience", "확인한 공동구매 경험", c.experience || "미확인", "textarea")}${field("active", "활동 상태", c.active || "미확인")}${field("schedule", "제안 가능 일정", c.schedule || "미확인")}${field("evidence", "확인한 콘텐츠 URL|한 줄에 URL 하나씩. 설명은 선정 이유에 기록.", c.evidence.map((e) => e.url).join("\n"), "textarea")}${field("reason", "선정 이유 / 공개 근거", c.reason, "textarea")}<h3 class="form-section">영업 관리</h3>${field("status", "상태", c.status, "text", statuses)}${field("owner", "담당자", c.owner)}${field("next", "다음 행동", c.next)}${field("due", "후속 연락일", c.due, "date")}${field("note", "내부 메모", c.note, "textarea")}<div class="full actions"><button class="primary" type="submit">서버에 저장</button>${id ? button("제안 작성", "compose", id)+button("이메일 성과·추적","tracking-company",id) : ""}</div></form>`,
   );
 }
 function dealsPage() {
@@ -402,6 +406,7 @@ async function preparePreview(form) {
   }
   const replyTo = form.dataset.reply;
   preview = await api("/drafts", "POST", {
+    ...trackingInputs(form),
     target: f.get("target"),
     dealIds: f.getAll("dealIds"),
     channel:
@@ -419,7 +424,7 @@ async function preparePreview(form) {
     ...(replyTo ? { replyTo } : {}),
   });
   $("#preview-area").innerHTML =
-    `<h3>최종 수신자·내용</h3>${preview.replyRecipientNeedsReview ? `<p class="notice">담당자의 실제 회신 주소 ${esc(preview.email)}로 보냅니다. 최초 등록한 이메일과 다르므로 소유 관계와 수신자를 확인한 후 승인하세요.</p>` : ""}<div class="preview" id="final-preview">${esc(`수신: ${preview.target} / ${preview.email || "Instagram 수동 또는 수신 대화"}\n채널: ${preview.channel}${preview.accountUsername ? " / 발신 @" + preview.accountUsername : ""}\n상품 버전: ${preview.dealVersions.map((x) => x.id + " v" + x.version).join(", ") || "없음"}\n제목: ${preview.subject}\n\n${preview.body}\n\n첨부: ${preview.attachments.map((a) => a.name + " (" + a.size + " bytes)").join(", ") || "없음"}`)}</div><p class="fine">15분 내 승인해야 합니다. 수정하면 다시 미리보기를 만드세요. 예약 메일은 예약 시각 이후 실행기가 확인할 때 처리됩니다(최대 약 5분 간격).</p><label class="field"><span><input id="send-approved" type="checkbox"> 위 수신자·내용·조건 버전·첨부파일을 확인하고 승인합니다.</span></label>${preview.channel === "manual_dm" ? '<label class="field"><span><input id="manually-sent" type="checkbox"> Instagram에서 직접 발송을 완료했습니다.</span></label>' : ""}<div class="actions">${preview.channel === "email" ? `<label class="field">예약 시간 (기기 시간 기준)<input id="schedule-at" type="datetime-local"></label>${button("승인한 내용 예약 자동 발송", "schedule")}` : ""}${button("문구 복사", "copy-preview")}${button(preview.channel === "manual_dm" ? "수동 발송 결과 기록" : "승인한 내용 실제 발송", "dispatch", "", true)}</div><div class="notice">${preview.channel === "email" && !connections.gmail.enabled ? "현재 실제 메일 발송은 서버에서 꺼져 있습니다. " : ""}접수·전달·열람 상태를 혼동하지 않습니다. 자동 재시도는 하지 않습니다.</div>`;
+    `<h3>최종 수신자·내용</h3>${preview.replyRecipientNeedsReview ? `<p class="notice">담당자의 실제 회신 주소 ${esc(preview.email)}로 보냅니다. 최초 등록한 이메일과 다르므로 소유 관계와 수신자를 확인한 후 승인하세요.</p>` : ""}${trackingPreviewNote(preview)}<div class="preview" id="final-preview">${esc(`수신: ${preview.target} / ${preview.email || "Instagram 수동 또는 수신 대화"}\n채널: ${preview.channel}${preview.accountUsername ? " / 발신 @" + preview.accountUsername : ""}\n상품 버전: ${preview.dealVersions.map((x) => x.id + " v" + x.version).join(", ") || "없음"}\n제목: ${preview.subject}\n\n${preview.body}\n\n첨부: ${preview.attachments.map((a) => a.name + " (" + a.size + " bytes)").join(", ") || "없음"}`)}</div><p class="fine">15분 내 승인해야 합니다. 수정하면 다시 미리보기를 만드세요. 예약 메일은 예약 시각 이후 실행기가 확인할 때 처리됩니다(최대 약 5분 간격).</p><label class="field"><span><input id="send-approved" type="checkbox"> 위 수신자·내용·조건 버전·첨부파일을 확인하고 승인합니다.</span></label>${preview.channel === "manual_dm" ? '<label class="field"><span><input id="manually-sent" type="checkbox"> Instagram에서 직접 발송을 완료했습니다.</span></label>' : ""}<div class="actions">${preview.channel === "email" ? `<label class="field">예약 시간 (기기 시간 기준)<input id="schedule-at" type="datetime-local"></label>${button("승인한 내용 예약 자동 발송", "schedule")}` : ""}${button("문구 복사", "copy-preview")}${button(preview.channel === "manual_dm" ? "수동 발송 결과 기록" : "승인한 내용 실제 발송", "dispatch", "", true)}</div><div class="notice">${preview.channel === "email" && !connections.gmail.enabled ? "현재 실제 메일 발송은 서버에서 꺼져 있습니다. " : ""}접수·전달·열람 상태를 혼동하지 않습니다. 자동 재시도는 하지 않습니다.</div>`;
   $("#preview-area").scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 function inboxPage() {
@@ -471,7 +476,8 @@ function showThread(id) {
               "",
             )}</select></label><button type="submit">확인한 후보에 연결</button></form>`
         : ""
-    }<form id="thread-form" data-id="${t.id}" class="form-grid">${field("owner", "담당자", t.owner)}${field("due", "후속 연락일", t.due, "date")}${field("next", "다음 행동·메모", t.next)}${field("classification", "회신 분류", t.classification, "text", ["미분류", "자동 응답", "관심 회신", "단순 안내", "거절", "수신 거부", "수락", "공동구매 확정"])}<button type="submit">관리 정보 저장</button></form>${t.messages.map((m) => `<div class="message ${m.out ? "out" : ""}">${tag(m.out ? "발신" : m.automatic ? "자동 응답" : "사람 회신 / 직접 확인 필요")}<small class="fine">${esc(m.at)}</small><br>${esc(m.text)}${m.hasAttachments ? '<p class="fine">첨부가 있습니다. 원본 Gmail에서 확인하세요.</p>' : ""}</div>`).join("")}${t.target ? button("직접 회신 작성", "reply", t.id, true) : '<div class="notice">수신 계정을 후보와 연결한 후 답장할 수 있습니다.</div>'}`;
+    }${t.channel==="email"?'<div id="thread-email-tracking"></div>':""}<form id="thread-form" data-id="${t.id}" class="form-grid">${field("owner", "담당자", t.owner)}${field("due", "후속 연락일", t.due, "date")}${field("next", "다음 행동·메모", t.next)}${field("classification", "회신 분류", t.classification, "text", ["미분류", "자동 응답", "관심 회신", "단순 안내", "거절", "수신 거부", "수락", "공동구매 확정"])}<button type="submit">관리 정보 저장</button></form>${t.messages.map((m) => `<div class="message ${m.out ? "out" : ""}">${tag(m.out ? "발신" : m.automatic ? "자동 응답" : "사람 회신 / 직접 확인 필요")}<small class="fine">${esc(m.at)}</small><br>${esc(m.text)}${m.hasAttachments ? '<p class="fine">첨부가 있습니다. 원본 Gmail에서 확인하세요.</p>' : ""}</div>`).join("")}${t.target ? button("직접 회신 작성", "reply", t.id, true) : '<div class="notice">수신 계정을 후보와 연결한 후 답장할 수 있습니다.</div>'}`;
+  if(t.channel==="email"&&$("#thread-email-tracking"))$("#thread-email-tracking").innerHTML=data.outbox.filter(o=>o.target===t.target&&o.channel==="email"&&(o.data.providerThread===t.providerId||t.messages.some(m=>m.outboxId===o.id||m.messageId==="<"+o.data.messageId+"@sanji.local>"))).map(o=>button("발송 "+localTime(o.created)+" · 열람 추정/메일 상세","tracking-detail",o.id)).join("");
 }
 function jobTable() {
   const jobs = data.jobs || [];
@@ -532,14 +538,14 @@ function discoveryCards(r) {
   }).join("")+'</div>'+(rows.length?"":'<div class="panel empty">표시할 업체가 없습니다.</div>')+(held.length?'<details class="panel"><summary>발송 보류 '+held.length+'곳 · 자료를 추가 확인해야 하는 업체</summary>'+held.map(l=>'<p><strong>'+esc(l.data.name)+'</strong> · '+esc(l.data.outreach.sendBlockedReason.replace(/^전체 초안 검수: /,""))+'</p>').join("")+'</details>':"");
 }
 function sentMailCards() {
-  const all=sentMailRows(),opened=new Map(mailOpenReport.filter(r=>r.label==="열람 추정"&&!r.is_test&&r.mode!=="shared"&&r.first_included).map(r=>[r.id,r]));
+  const all=sentMailRows(),opened=new Map(mailOpenReport.filter(r=>r.label==="열람 추정"&&!r.is_test&&r.first_included).map(r=>[r.id,r]));
   const replied=o=>data.threads.some(t=>t.target===o.target&&t.channel==="email"&&t.messages.some(m=>!m.out&&!m.automatic&&Date.parse(m.at)>=Date.parse(o.created)));
   const rows=all.filter(o=>brandTab==="opened"?opened.has(o.id):brandTab==="replied"?replied(o):true);
-  const notice=brandTab==="opened"?'<div class="notice">열람 추정은 담당자가 실제로 읽었다는 확정 정보가 아닙니다. 이미지 사전 로딩·보안 요청·차단·캐시·전달에 영향을 받습니다. 자동 요청 의심·내부 테스트·복수 수신자 공유 추적은 이 목록에서 제외합니다. '+(mailOpenReportAvailable?'추적이 적용된 발송건 중 감지가 기록된 메일만 표시합니다.':'현재 영업 메일의 열람 추적이 연결되지 않았습니다. 과거 미적용 메일은 소급 확인할 수 없습니다.')+'</div>':brandTab==="replied"?'<p class="notice">동기화된 연결 대화에 발송 이후 자동 응답으로 분류되지 않은 회신이 있는 메일입니다. 같은 대화의 개별 메일을 직접 읽었다는 확정 정보는 아닙니다.</p>':'';
+  const notice=brandTab==="opened"?'<div class="notice">열람 추정은 담당자가 실제로 읽었다는 확정 정보가 아닙니다. 이미지 사전 로딩·보안 요청·차단·캐시·전달에 영향을 받습니다. 자동 요청 의심·내부 테스트는 이 목록에서 제외합니다. 복수 수신자는 공용 본문으로 추적되며 개인별 열람을 구분할 수 없습니다. '+(mailOpenReportAvailable?'추적이 적용된 발송건 중 감지가 기록된 메일만 표시합니다.':'현재 영업 메일의 열람 추적이 연결되지 않았습니다. 과거 미적용 메일은 소급 확인할 수 없습니다.')+'</div>':brandTab==="replied"?'<p class="notice">동기화된 연결 대화에 발송 이후 자동 응답으로 분류되지 않은 회신이 있는 메일입니다. 같은 대화의 개별 메일을 직접 읽었다는 확정 정보는 아닙니다.</p>':'';
   return notice+'<div class="mail-list">'+rows.map(o=>{
     const c=candidate(o.target),thread=data.threads.find(t=>t.target===o.target&&t.channel==="email"),copy=o.data?.sentCopy||o.data;
     const old=thread?.messages.filter(m=>m.out).sort((a,b)=>Math.abs(Date.parse(a.at)-Date.parse(o.created))-Math.abs(Date.parse(b.at)-Date.parse(o.created)))[0];
-    return '<article class="panel sent-card"><div class="mail-card-top"><h3>'+esc(c?.name||"발송 대상")+'</h3>'+tag("Gmail 서버 접수")+(opened.has(o.id)?tag("열람 추정"):tag(o.data?.trackingResult?.applied?"감지 정보 미확인":"추적 미적용"))+(replied(o)?tag("연결 대화 회신 확인"):"")+'</div><p class="fine">'+esc(copy?.emails?.join(", ")||copy?.email||c?.contact?.email||"")+" · "+esc(localTime(o.created))+'</p><details><summary>'+esc(copy?.subject||thread?.subject||"보낸 메일")+'</summary><div class="mail-letter">'+esc(copy?.body||old?.text||"보낸 원문은 대화함에서 동기화해 확인하세요.")+'</div></details>'+(opened.has(o.id)?'<p class="fine">최초 이미지 감지 '+esc(localTime(opened.get(o.id).first_included))+' · 마지막 '+esc(localTime(opened.get(o.id).last_included))+' · 실제 읽은 시각 아님</p>':'<p class="fine">받은편지함 도착·열람 미확인 · Gmail API 발송에는 Mailsuite 확장 프로그램 추적이 자동 적용되지 않습니다.</p>')+''+(thread?button("대화·답장 보기","mail-open-thread",thread.id):"")+'</article>';
+    return '<article class="panel sent-card"><div class="mail-card-top"><h3>'+esc(c?.name||"발송 대상")+'</h3>'+tag("Gmail 서버 접수")+(opened.has(o.id)?tag(opened.get(o.id).mode==="shared"?"열람 추정 · 복수 수신자 공용":"열람 추정"):tag(o.data?.trackingResult?.applied?"감지 정보 미확인":"추적 미적용"))+(replied(o)?tag("연결 대화 회신 확인"):"")+'</div><p class="fine">'+esc(copy?.emails?.join(", ")||copy?.email||c?.contact?.email||"")+" · "+esc(localTime(o.created))+'</p><details><summary>'+esc(copy?.subject||thread?.subject||"보낸 메일")+'</summary><div class="mail-letter">'+esc(copy?.body||old?.text||"보낸 원문은 대화함에서 동기화해 확인하세요.")+'</div></details>'+(opened.has(o.id)?'<p class="fine">최초 이미지 감지 '+esc(localTime(opened.get(o.id).first_included))+' · 마지막 '+esc(localTime(opened.get(o.id).last_included))+' · 실제 읽은 시각 아님</p>':'<p class="fine">받은편지함 도착·열람 미확인 · Gmail API 발송에는 Mailsuite 확장 프로그램 추적이 자동 적용되지 않습니다.</p>')+''+button("열람 추정·메일 상세","tracking-detail",o.id)+(thread?button("대화·답장 보기","mail-open-thread",thread.id):"")+'</article>';
   }).join("")+'</div>'+(rows.length?"":'<div class="panel empty"><h3>조건에 해당하는 메일이 없습니다</h3><p>실제 기록이 있는 메일만 표시합니다. 감지 없음은 미열람·수신 실패를 의미하지 않습니다.</p></div>');
 }
 async function discoveryPage() {
@@ -565,7 +571,7 @@ function scheduleDiscoveryRefresh() {
   discoveryRefresh=setTimeout(async()=>{
     if(!me||!["brands","discovery"].includes(location.hash.slice(1)))return;
     try {
-      const r=await api("/discovery"),editing=$("#modal").open||document.activeElement?.closest("form");
+      const r=await api("/discovery");data=await api("/state");const editing=$("#modal").open||document.activeElement?.closest("form");
       if($("#discovery-health"))$("#discovery-health").innerHTML=discoveryHealthPanel(r);if($("#discovery-progress"))$("#discovery-progress").innerHTML=discoveryProgress(r);if($("#search-refill-status"))$("#search-refill-status").innerHTML=searchSummary(r);
       if($("#mail-today-companies"))$("#mail-today-companies").textContent=historyCount(r,0).companies;if($("#mail-yesterday-companies"))$("#mail-yesterday-companies").textContent=historyCount(r,1).companies;
       if(!editing){discoveryView=r;data=await api("/state");if($("#mail-pending-count"))$("#mail-pending-count").textContent=r.leads.filter(l=>l.status!=="blocked"&&l.data.contacts?.length&&!mailLeadSent(l)).length;if($("#mail-sent-count"))$("#mail-sent-count").textContent=sentMailRows().length;if($("#discovery-results"))$("#discovery-results").innerHTML=brandTab!=="pending"?sentMailCards():discoveryCards(r);}
@@ -596,7 +602,7 @@ function inlineMailBody(c){
  const norm=v=>String(v||"").replace(/\r\n?/g,"\n").trim();let text=norm(c.body),sig=norm(c.signature);if(sig&&!text.includes(sig))text+=(text?"\n\n":"")+sig;
  const name=norm(data.settings.senderName),address=norm(data.settings.senderAddress),phone=norm(data.settings.senderPhone),parts=name.split(/[·•|]/).map(s=>s.trim()).filter(Boolean),lines=[];
  if(name&&(!parts.length||!parts.every(s=>text.includes(s))))lines.push(name);if(address&&!text.includes(address))lines.push(address);if(phone&&!text.replace(/[\s()-]/g,"").includes(phone.replace(/[\s()-]/g,"")))lines.push(phone);
- text=text.replace(/(?:\n\s*)?회신으로 수신 거부를 요청하실 수 있습니다\./g,"").trim();return text+(lines.length?"\n\n"+lines.join("\n"):"");
+ text=text.replace(/(?:\n\s*)?회신으로 수신 거부를 요청하실 수 있습니다\./g,"").trim();const result=text+(lines.length?"\n\n"+lines.join("\n"):""),campaign=trackingState?.activationApproved&&trackingState?.policy?.enabled?trackingState.campaigns?.find(c=>c.enabled&&c.scope==="brand"&&!c.external_tracking):null;return campaign?.disclosure&&!result.includes(campaign.disclosure)?result+"\n\n"+campaign.disclosure:result;
 }
 function inlineMailButton(id){
  const state=inlineMailState.get(id);if(!state)return button("이 메일 지금 보내기","mail-direct-send",id,true);
@@ -679,11 +685,11 @@ async function prepareMailReview(form) {
       const prepared=await api("/discovery/prepare-contact","POST",{id:v.id,email:v.email,source:v.source,approved:true});
       const id=prepared.candidateId;
       if(!id)throw Error("업체 저장 결과를 확인할 수 없습니다.");
-      const p=await api("/drafts","POST",{target:id,channel:"email",recipientMode:"company_all",dealIds:[],subject:v.subject,body:v.body,signature:v.signature,templateId:prepared.templateId,templateVersion:prepared.templateVersion,lawfulBasis:f.get("lawfulBasis")||"",marketing:f.has("marketing"),attachments});
+      const p=await api("/drafts","POST",{target:id,channel:"email",recipientMode:"company_all",dealIds:[],subject:v.subject,body:v.body,signature:v.signature,templateId:prepared.templateId,templateVersion:prepared.templateVersion,lawfulBasis:f.get("lawfulBasis")||"",marketing:f.has("marketing"),attachments,...trackingInputs(form)});
       bulkPreviews.push({...p,candidateId:id});
     }catch(e){errors.push(l.data.name+": "+e.message);}
   }
-  $("#mail-final").innerHTML='<h3>최종 발송 내용</h3>'+errors.map(e=>'<p class="error">'+esc(e)+'</p>').join("")+bulkPreviews.map((p,i)=>'<article class="panel"><h3>'+esc(p.target)+'</h3><p class="fine">받는 주소: '+esc((p.emails||[p.email]).join(", "))+'</p><strong>'+esc(p.subject)+'</strong><div class="mail-letter">'+esc(p.body)+'</div><p class="fine">첨부: '+esc(p.attachments.map(a=>a.name).join(", ")||"없음")+'</p><label class="review-check"><input name="bulk-approve" type="checkbox" checked value="'+i+'"> 이 메일을 전송 대상에 포함</label><div id="bulk-result-'+i+'" role="status"></div></article>').join("")+(bulkPreviews.length?'<label class="review-check"><input id="mail-approve-all" type="checkbox" checked> 위 '+bulkPreviews.length+'개 메일을 모두 전송 대상에 포함</label><div class="actions">'+button("선택한 메일 승인·지금 보내기","mail-send-all","",true)+'</div><p class="fine">15분 안에 승인하세요. 내용을 수정하면 다시 확인해야 합니다.</p><label class="field">예약 시각<input id="bulk-run-at" type="datetime-local"></label>'+button("승인한 메일 예약","mail-schedule","",true):"");
+  $("#mail-final").innerHTML='<h3>최종 발송 내용</h3>'+errors.map(e=>'<p class="error">'+esc(e)+'</p>').join("")+bulkPreviews.map((p,i)=>'<article class="panel"><h3>'+esc(p.target)+'</h3><p class="fine">받는 주소: '+esc((p.emails||[p.email]).join(", "))+'</p><strong>'+esc(p.subject)+'</strong>'+trackingPreviewNote(p)+'<div class="mail-letter">'+esc(p.body)+'</div><p class="fine">첨부: '+esc(p.attachments.map(a=>a.name).join(", ")||"없음")+'</p><label class="review-check"><input name="bulk-approve" type="checkbox" checked value="'+i+'"> 이 메일을 전송 대상에 포함</label><div id="bulk-result-'+i+'" role="status"></div></article>').join("")+(bulkPreviews.length?'<label class="review-check"><input id="mail-approve-all" type="checkbox" checked> 위 '+bulkPreviews.length+'개 메일을 모두 전송 대상에 포함</label><div class="actions">'+button("선택한 메일 승인·지금 보내기","mail-send-all","",true)+'</div><p class="fine">15분 안에 승인하세요. 내용을 수정하면 다시 확인해야 합니다.</p><label class="field">예약 시각<input id="bulk-run-at" type="datetime-local"></label>'+button("승인한 메일 예약","mail-schedule","",true):"");
 }
 function invalidateMailReview(){if($("#mail-final")){$("#mail-final").innerHTML='<p class="fine">내용이 변경되었습니다. 최종 발송 내용을 다시 확인하세요.</p>';bulkPreviews=[];}}
 
@@ -749,7 +755,7 @@ async function bulkPrepare(form) {
     $("#bulk-previews").textContent = `최종 메일 생성 중 ${bulkPreviews.length + errors.length + 1} / ${targets.length} · 실제 발송 없음`;
     try {
       const body = assemblePersonalization(f.get("body"), f.get("intro-" + target));
-      const p = await api("/drafts", "POST", {target,dealIds:[],channel:"email",subject:f.get("subject"),body,signature:f.get("signature"),lawfulBasis:f.get("lawfulBasis")||"",marketing:f.has("marketing"),attachments});
+      const p = await api("/drafts", "POST", {target,dealIds:[],channel:"email",subject:f.get("subject"),body,signature:f.get("signature"),lawfulBasis:f.get("lawfulBasis")||"",marketing:f.has("marketing"),attachments,...trackingInputs(form)});
       bulkPreviews.push({...p,candidateId:target});
     } catch(e) { errors.push({name:targetName(target),error:e.message}); }
   }
@@ -774,7 +780,44 @@ async function bulkSchedule() {
   toast(`예약 완료 ${success}건 · 실패 ${failed}건. 실패한 메일은 예약되지 않았습니다.`);
 }
 
+var emailTrackingState=null,trackingSelectedTarget="",trackingSelectedCampaign="";
+const trackingCaveat="열람 추정은 실제 사람의 열람 확인이 아닙니다. Apple Mail 사전 로딩·보안 자동 요청·이미지 프록시·차단·캐시·전달에 영향을 받습니다. 감지 없음은 미열람·수신 실패가 아닙니다. 앱 미리보기는 추적하지 않지만 Gmail 보낸편지함이나 전달본의 본인 이미지 요청은 구분할 수 없습니다.";
+function trackingInputs(form){if(!form.querySelector('[name="trackingRequested"]'))return {};const f=new FormData(form);return {trackingRequested:f.has("trackingRequested"),...(f.get("trackingCampaignId")?{trackingCampaignId:f.get("trackingCampaignId")} :{}),trackingNoticeAcknowledged:f.has("trackingNoticeAcknowledged"),trackingInternalTest:f.has("trackingInternalTest")};}
+async function mountTrackingForm(form){
+ if(!form)return;const box=document.createElement("details");box.className="tracking-options";box.innerHTML='<summary>열람 추정 · 발송별 해제 가능</summary><p class="fine">설정 확인 중…</p>';form.insertBefore(box,form.lastElementChild);
+ try{const state=await api("/email-tracking");if(!box.isConnected)return;emailTrackingState=state;const targetId=form.dataset.target||new FormData(form).get("target")||form.dataset.id,scope=candidate(targetId)?.kind==="크리에이터"?"creator":"brand",selectedCampaign=state.campaigns?.find(c=>c.enabled&&c.scope===scope&&!c.external_tracking)?.id;
+ box.innerHTML='<summary>열람 추정 · 발송별 해제 가능</summary><p class="fine">'+esc(state.activationApproved?"캠페인·서비스 설정과 발송별 승인을 모두 확인합니다.":"운영 활성화 승인 전입니다. 선택하더라도 실제 픽셀은 삽입되지 않습니다.")+'</p>'+field("trackingRequested","이 발송에 이메일 열람 추정 적용",state.activationApproved&&state.policy?.enabled,"checkbox")+'<label class="field">캠페인<select name="trackingCampaignId"><option value="">미선택 · 추적 미적용</option>'+(state.campaigns||[]).map(c=>'<option value="'+esc(c.id)+'" '+(c.id===selectedCampaign?'selected':'')+'>'+esc(c.name)+' / '+(c.scope==="creator"?"크리에이터":"브랜드")+'</option>').join("")+'</select></label>'+field("trackingNoticeAcknowledged","캠페인의 처리 근거·고지 안내를 확인함",state.activationApproved&&state.policy?.enabled,"checkbox")+field("trackingInternalTest","내부 테스트 메일 · 수신자 성과 지표 제외",false,"checkbox")+'<p class="fine">복수 수신자는 공용 본문 단위로 감지되며 개인별 구분을 제공하지 않습니다. 추적을 선택하면 저장된 안내 문구가 서명 뒤에 붙으며 최종 미리보기에 표시됩니다. '+esc(trackingCaveat)+'</p><a href="#emailtracking">캠페인·고지 설정 ↗</a>';
+ }catch{box.innerHTML='<summary>열람 추정 미연결 · 미적용</summary><p class="fine">추적 설정을 불러오지 못했습니다. 기존 이메일 발송은 그대로 이용할 수 있습니다.</p>';}
+}
+function trackingPreviewNote(p){return '<p class="notice">열람 추정: '+esc(p.tracking?.eligible?"적용 예정 · "+(p.tracking.testOnly?"관리자 자기앞 테스트만 · ":"")+(p.tracking.campaignName||""):"추적 미적용 · "+(p.tracking?.reason||"기존 발송"))+'</p>';}
+const trackingSendStatus=s=>({accepted:"Gmail 서버 접수",provider_rejected:"제공자 거절",outcome_unknown:"발송 결과 미확인",submitting:"제공자 요청 중"})[s]||s;
+const trackingPercent=(n,d)=>d?Math.round(n/d*1000)/10+"%":"—";
+function trackingDates(row){return '<span>최초 이미지 요청 '+esc(localTime(row.first_request))+'</span><br><span>마지막 이미지 요청 '+esc(localTime(row.last_request))+'</span>';}
+function trackingStatusDetail(r){return tag(r.label||"추적 미적용")+'<p>추적 '+(r.tracking_id?"적용":"미적용/종료")+' · 이미지 요청 횟수 '+Number(r.requests||0)+'회 (기록된 요청 · UTC 날짜당 최대 1,000회)</p>'+trackingDates(r)+'<p>자동 요청 의심 '+Number(r.suspected||0)+'회 · '+esc((r.reasonLabels||[]).join(" / ")||"분류 근거 없음")+'</p>'+(r.mode==="shared"?'<p class="notice">복수 수신자가 같은 본문을 공유하는 발송입니다. 어느 수신자가 요청했는지 개인별로 구분할 수 없습니다. 전달된 메일의 요청도 구분할 수 없습니다.</p>':"")+'<p class="fine">'+esc(trackingCaveat)+'</p>';}
+async function trackingMessage(id){
+ modal('<h2>개별 메일·열람 추정</h2><p>불러오는 중…</p>');
+ try{const r=await api("/email-tracking/messages/"+id);modal('<h2>'+esc(r.subject||"메일")+'</h2><p>'+esc((r.emails||[r.email]).join(", "))+'</p><p>발송 '+esc(r.status)+' · 반송 '+esc(r.bounce_status||"미확인 · Gmail 서버 접수와 별개")+' · '+(r.human_reply?"해당 메일에 사람 회신 확인":r.conversation_reply?"연결 대화에 사람 회신 · 해당 발송건 직접 귀속 미확인":"동기화된 사람 회신 감지 없음")+'</p>'+trackingStatusDetail(r)+(r.tracking_id?button("이 발송건 추적 중지·이벤트 삭제","tracking-stop",r.id):"")+'<p class="fine">이미 보낸 메일은 재발송하지 않습니다. 중지하면 기존 픽셀도 새 이벤트를 기록하지 않습니다.</p>');}catch(e){modal('<h2>추적 미적용/미연결</h2><p>'+esc(e.message)+'</p><p>과거 발송에는 소급 픽셀을 적용하지 않습니다.</p>');}
+}
+async function emailTrackingPage(){
+ $("#app").innerHTML=head("이메일 성과·열람 추정","사람의 회신을 우선 확인하고, 이미지 요청을 보조 지표로 사용합니다.")+'<div class="panel">불러오는 중…</div>';
+ try{const state=await api("/email-tracking");emailTrackingState=state;
+ $("#app").innerHTML=head("이메일 성과·열람 추정","사람 회신과 긍정 회신을 먼저 확인하세요.")+'<p class="notice">'+esc(state.activationApproved?"운영 추적 활성화 승인 적용됨":"운영 활성화 승인 전 · 실제 추적 기본 미적용")+'</p><p class="fine">'+esc(state.provider)+' · '+esc(trackingCaveat)+'</p><form id="tracking-report-form" class="form-grid"><label class="field">발송일 기준 최근 기간<select name="days"><option value="30">30일</option><option value="7">7일</option><option value="90">90일</option></select></label><label class="field">캠페인<select name="campaign"><option value="">전체</option>'+state.campaigns.map(c=>'<option value="'+esc(c.id)+'" '+(trackingSelectedCampaign===c.id?"selected":"")+'>'+esc(c.name)+'</option>').join("")+'</select></label><label class="field">회사·크리에이터<select name="target"><option value="">전체</option>'+data.candidates.map(c=>'<option value="'+esc(c.id)+'" '+(trackingSelectedTarget===c.id?"selected":"")+'>'+esc(c.name)+' / '+esc(c.kind)+'</option>').join("")+'</select></label>'+field("includeAutomated","자체 분류한 자동 요청 의심 이벤트도 열람 추정률에 포함",false,"checkbox")+'<button type="submit">집계 보기</button></form><div id="tracking-report"></div><details class="panel"><summary>서비스 추적·보관 기간</summary><form id="tracking-policy-form">'+field("enabled","서비스 이메일 추적 켜기",state.policy.enabled,"checkbox")+field("retentionDays","발송 건별 보관 기간 (7~90일) · 기존 메시지는 발송 시 설정 유지",state.policy.retention_days,"number")+'<p class="fine">운영 활성화 승인 전에는 설정을 켜도 픽셀을 삽입하지 않습니다. 서비스·캠페인을 끄면 이미 보낸 픽셀의 신규 수집도 중단됩니다.</p><button type="submit">설정 저장</button></form></details><section class="panel"><h2>브랜드·크리에이터 이메일 캠페인</h2>'+state.campaigns.map(c=>'<div class="task"><strong>'+esc(c.name)+'</strong><span>'+(c.scope==="creator"?"크리에이터":"브랜드")+' · '+(c.enabled?"설정 켜짐":"꺼짐")+'</span>'+button("설정·고지 편집","tracking-campaign",c.id)+'</div>').join("")+button("캠페인 추가","tracking-campaign")+'</section>';
+ await trackingLoadReport($("#tracking-report-form"));
+ }catch(e){$("#app").innerHTML=head("이메일 성과·추적","")+'<div class="notice">추적 서버·DB가 아직 적용되지 않았습니다. 기존 이메일 기능은 유지됩니다. '+esc(e.message)+'</div>';}
+}
+async function trackingLoadReport(form){
+ const f=new FormData(form),end=new Date(),start=new Date(+end-Number(f.get("days"))*86400000),params=new URLSearchParams({from:start.toISOString(),to:end.toISOString(),includeAutomated:String(f.has("includeAutomated"))});
+ if(f.get("campaign"))params.set("campaign",f.get("campaign"));if(f.get("target"))params.set("target",f.get("target"));
+ const report=await api("/email-tracking/report?"+params),s=report.summary||{};
+ $("#tracking-report").innerHTML='<div class="stats"><div class="stat"><label>사람의 회신율 · 연결 대화 기준</label><strong>'+trackingPercent(s.replied_targets,s.sent_targets)+'</strong><small>'+Number(s.replied_targets||0)+' / 접수 대상 '+Number(s.sent_targets||0)+' · 자동 응답 제외</small></div><div class="stat"><label>긍정 회신율 · 직접 분류한 대화</label><strong>'+trackingPercent(s.positive_targets,s.sent_targets)+'</strong><small>'+Number(s.positive_targets||0)+' / 접수 대상 '+Number(s.sent_targets||0)+'</small></div><div class="stat"><label>열람 추정률 · 발송 건 기준</label><strong>'+trackingPercent(s.estimated,s.tracked)+'</strong><small>'+Number(s.estimated||0)+' / 추적 적용·접수 '+Number(s.tracked||0)+'건</small></div></div><p class="fine">'+esc(localTime(report.from))+' ~ '+esc(localTime(report.to))+' 발송 기준 · 보관된 후속 이미지 요청도 현재 기준 반영 · 자동 요청 의심 '+(report.includeAutomated?"포함":"제외")+' · 내부 테스트·추적 미적용·보관기간 만료 '+Number(s.expired||0)+'건은 열람 추정률 분모에서 제외합니다. 복수 주소 공용 메일도 발송 한 건이며 개인별 열람률이 아닙니다. 사람 회신은 대상·연결 대화 기준이며 개별 메일의 직접 회신 귀속과 구분합니다.</p><div class="table-scroll"><table><thead><tr><th>대상·메일</th><th>발송·반송·회신</th><th>추적·열람 추정</th><th>이미지 요청 시각·횟수</th><th>자동 요청 의심</th></tr></thead><tbody>'+(report.rows||[]).map(r=>'<tr><td>'+esc(targetName(r.target))+'<br>'+button(esc(r.subject||"메일"),"tracking-detail",r.id)+'</td><td>'+esc(r.status)+'<br>반송 미확인<br>'+(r.human_reply?"직접 사람 회신":r.conversation_reply?"연결 대화 사람 회신":"동기화된 회신 감지 없음")+'</td><td>'+tag(r.label)+(r.mode==="shared"?'<small>공용 본문 · 수신자별 구분 불가</small>':"")+'</td><td>'+trackingDates(r)+'<br>'+Number(r.requests||0)+'회</td><td>'+Number(r.suspected||0)+'회<br>'+esc((r.reasonLabels||[]).join(" / ")||"근거 없음")+'</td></tr>').join("")+'</tbody></table></div>';
+}
+function trackingCampaignForm(id=""){
+ const c=emailTrackingState?.campaigns.find(c=>c.id===id)||{};
+ modal('<h2>캠페인·추적 고지</h2><form id="tracking-campaign-form" data-id="'+esc(id)+'">'+field("name","캠페인 이름",c.name)+'<label class="field">영업 범위<select name="scope"><option value="brand" '+(c.scope!=="creator"?"selected":"")+'>브랜드 영업</option><option value="creator" '+(c.scope==="creator"?"selected":"")+'>크리에이터 영업</option></select></label>'+field("enabled","캠페인 추적 켜기",c.enabled,"checkbox")+field("externalTracking","Mailsuite 등 외부 추적 사용 · 이 서비스 픽셀 중복 적용 금지",c.external_tracking,"checkbox")+field("disclosure","수신자 고지 문구·HTTPS 정책 링크 (20자 이상) · 작성한 본문에 직접 포함해야 적용",c.disclosure,"textarea")+field("basisNote","처리 근거·고지/동의 검토 기록 · 공개 이메일을 추적 동의로 간주하지 않음",c.basis_note,"textarea")+'<p class="fine">카피는 자동 수정하지 않습니다. 필요한 안내와 선택 방법을 확정한 뒤 본문·템플릿에 직접 넣어 주세요. 개별 처리 중지 요청은 메일 상세의 추적 중지로 반영할 수 있습니다.</p><button type="submit">캠페인 저장</button></form>');
+}
+
 const pages = {
+  emailtracking:emailTrackingPage,
   dashboard,
   discovery: discoveryPage,
   brands: discoveryPage,
@@ -799,6 +842,9 @@ document.addEventListener("submit", async (e) => {
   try {
     const f = formObject(form),
       fid = form.dataset.id;
+    if(form.id==="tracking-report-form"){await trackingLoadReport(form);return;}
+    if(form.id==="tracking-policy-form"){const f=new FormData(form);await api("/email-tracking/policy","POST",{enabled:f.has("enabled"),retentionDays:Number(f.get("retentionDays"))});await emailTrackingPage();return;}
+    if(form.id==="tracking-campaign-form"){const f=new FormData(form);await api("/email-tracking/campaigns","POST",{...(form.dataset.id?{id:form.dataset.id}:{}),name:f.get("name"),scope:f.get("scope"),enabled:f.has("enabled"),externalTracking:f.has("externalTracking"),disclosure:f.get("disclosure"),basisNote:f.get("basisNote")});close();await emailTrackingPage();return;}
     if(form.id==="creator-auto-settings"){await api("/creator-discovery/settings","POST",{enabled:f.enabled==="on",target:Number(f.target),keywords:f.keywords.split(/\r?\n/).filter(Boolean),dmCopy:f.dmCopy,senderHandle:f.senderHandle,autoSend:false});toast("검색 조건·카피를 저장했습니다.");await creatorDiscoveryPage();return;}
     if (form.id === "mail-review-form") { await prepareMailReview(form); return; }
     if (form.id === "bulk-compose-form") { await bulkPrepare(form); return; }
@@ -938,6 +984,10 @@ const actions = {
   "mail-schedule-selected": () => scheduleInlineMails([...selectedMailLeads]),
   "mail-quick-review": id => quickMailReview([id]),
   "mail-save": saveMailReview,
+  "tracking-detail":trackingMessage,
+  "tracking-campaign":trackingCampaignForm,
+  "tracking-stop":async id=>{await api("/email-tracking/messages/"+id,"DELETE");await trackingMessage(id);},
+  "tracking-company":id=>{trackingSelectedTarget=id;location.hash="emailtracking";},
   "mail-schedule": bulkSchedule,
   "mail-send-all": bulkSendNow,
   "mail-select-all": () => {const boxes=$$("#discovery-results [data-mail-select]");for(const e of boxes){const l=discoveryView.leads.find(l=>l.id===e.dataset.mailSelect);if(!l?.data.contacts?.length||l.data.outreach?.sendBlockedReason)continue;e.checked=true;selectedMailLeads.add(e.dataset.mailSelect);}toast(selectedMailLeads.size+"개 업체 선택 · 대상 회사 확인이 필요한 업체는 제외했습니다.");},
@@ -946,7 +996,7 @@ const actions = {
   "mail-settings": () => { close(); location.hash="settings"; },
   "mail-open-thread": id => { selectedThread=id; location.hash="inbox"; },
   "discovery-refresh": discoveryPage,
-  "brand-tab": async (tab) => { brandTab = tab; await discoveryPage(); },
+  "brand-tab": async (tab) => { brandTab = tab;data=await api("/state");await discoveryPage(); },
   "discovery-run": async () => { const r = await api("/discovery/run", "POST", {}); await discoveryPage(); toast(r.message || `신규 업체 ${r.added || 0}곳 · 이메일 후보 ${r.emailCandidatesAdded || 0}개 · 검토 ${r.processed || 0}곳`); },
   "discovery-filter": async () => { discoveryOnlyEmails = !discoveryOnlyEmails; await discoveryPage(); },
 

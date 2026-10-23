@@ -141,6 +141,10 @@ const draft = z.object({
   templateId:z.string().uuid().optional(),
   templateVersion:z.number().int().positive().optional(),
   recipientMode:z.enum(["primary","company_all"]).default("primary"),
+  trackingRequested:z.boolean().default(false),
+  trackingCampaignId:z.string().uuid().optional(),
+  trackingNoticeAcknowledged:z.boolean().default(false),
+  trackingInternalTest:z.boolean().default(false),
   lawfulBasis: text.nullish().transform(value => value || ""),
   marketing: z.boolean().default(false),
 });

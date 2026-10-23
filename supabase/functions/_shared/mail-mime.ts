@@ -23,6 +23,13 @@ export function encodedHeader(value:string){
  return parts.map(p=>"=?UTF-8?B?"+Buffer.from(p).toString("base64")+"?=").join("\r\n ");
 }
 const base64Body=(text:string)=>Buffer.from(text,"utf8").toString("base64").match(/.{1,76}/g)?.join("\r\n")||"";
+function trackingHtml(d:any){
+ const escape=(s:string)=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!));
+ let url;try{url=new URL(d.trackingPixelUrl);if(url.protocol!=="https:"||!/^\/functions\/v1\/[^/]+\/email-events\/pixel\/[A-Za-z0-9_-]{43}\.gif$/.test(url.pathname)||url.search||url.hash||url.username||url.password)return null;}catch{return null;}
+ const text=String(d.body),parts:string[]=[];let last=0;
+ for(const m of text.matchAll(/https?:\/\/[^\s<>"']+/g)){parts.push(escape(text.slice(last,m.index)));parts.push('<a href="'+escape(m[0])+'">'+escape(m[0])+'</a>');last=m.index!+m[0].length;}parts.push(escape(text.slice(last)));
+ return '<!doctype html><html><head><meta charset="utf-8"></head><body><div style="white-space:pre-wrap">'+parts.join('')+'</div><img src="'+escape(url.toString())+'" width="1" height="1" alt="" referrerpolicy="no-referrer" style="width:1px;height:1px;border:0" /></body></html>';
+}
 export function mime(d: any, from: string) {
   const lines = [
     `From: ${d.senderName?encodedHeader(d.senderName)+" <"+from+">":from}`,
@@ -36,26 +43,20 @@ export function mime(d: any, from: string) {
       "In-Reply-To: " + messageIds(d.inReplyTo),
       "References: " + messageIds(d.references) + " " + messageIds(d.inReplyTo),
     );
+  const html=trackingHtml(d),alternative="sanji_alt_"+crypto.randomUUID();
+  const bodyLines=html?[
+   `Content-Type: multipart/alternative; boundary="${alternative}"`, "",`--${alternative}`,
+   "Content-Type: text/plain; charset=UTF-8","Content-Transfer-Encoding: base64","",base64Body(d.body),
+   `--${alternative}`,"Content-Type: text/html; charset=UTF-8","Content-Transfer-Encoding: base64","",base64Body(html),`--${alternative}--`
+  ]:["Content-Type: text/plain; charset=UTF-8","Content-Transfer-Encoding: base64","",base64Body(d.body)];
   const attachments = d.attachments || [];
-  if (!attachments.length)
-    return Buffer.from(
-      [
-        ...lines,
-        "Content-Type: text/plain; charset=UTF-8",
-        "Content-Transfer-Encoding: base64",
-        "",
-        base64Body(d.body),
-      ].join("\r\n"),
-    ).toString("base64url");
+  if (!attachments.length)return Buffer.from([...lines,...bodyLines].join("\r\n")).toString("base64url");
   const boundary = "sanji_" + crypto.randomUUID();
   lines.push(
     `Content-Type: multipart/mixed; boundary="${boundary}"`,
     "",
     `--${boundary}`,
-    "Content-Type: text/plain; charset=UTF-8",
-    "Content-Transfer-Encoding: base64",
-    "",
-    base64Body(d.body),
+    ...bodyLines,
   );
   for (const a of attachments)
     lines.push(

@@ -1,3 +1,95 @@
+// supabase/functions/_shared/gmail-sync.ts
+function decodedPart(part) {
+  try {
+    return part?.body?.data ? new TextDecoder().decode(Uint8Array.from(atob(part.body.data.replace(/-/g, "+").replace(/_/g, "/")), (x) => x.charCodeAt(0))) : "";
+  } catch {
+    return "";
+  }
+}
+function deliveryFailures(payload) {
+  const parts = [];
+  const walk = (p) => {
+    if (!p) return;
+    parts.push(p);
+    for (const c of p.parts || []) walk(c);
+  };
+  walk(payload);
+  const texts = parts.filter((p) => /delivery-status|text\/plain/.test(p.mimeType || "")).map(decodedPart).join("\n");
+  const failures = [];
+  for (const block of texts.split(/\r?\n\s*\r?\n/)) {
+    const recipient = /(?:Final|Original)-Recipient:\s*rfc822;\s*([^\s<>;,]+)/i.exec(block)?.[1]?.toLowerCase(), status = /^Status:\s*(5\.\d+\.\d+)/im.exec(block)?.[1];
+    if (recipient && status && /^Action:\s*failed/im.test(block)) failures.push({ email: recipient, status, kind: "permanent", source: "delivery_status" });
+  }
+  return failures;
+}
+function gmailMessages(remoteThread, account, old, textBody2, hasAttachments) {
+  return (remoteThread.messages || []).map((m) => {
+    const h = Object.fromEntries((m.payload?.headers || []).map((h2) => [h2.name.toLowerCase(), h2.value])), failures = deliveryFailures(m.payload);
+    const mailbox = (s) => s.match(/<?([^\s<>]+@[^\s<>]+)>?/)?.[1] || "";
+    const automatic = failures.length > 0 || /mailer-daemon|postmaster@/i.test(h.from || "") || !!h["auto-submitted"] && h["auto-submitted"] !== "no" || /auto_reply|auto-replied|bulk/i.test(h.precedence || "");
+    return { id: m.id, ...old.find((o) => o.id === m.id)?.outboxId ? { outboxId: old.find((o) => o.id === m.id).outboxId } : {}, messageId: h["message-id"] || "", references: h.references || "", inReplyTo: h["in-reply-to"] || "", subject: h.subject || "", from: h.from || "", replyToHeader: h["reply-to"] || "", replyAddress: mailbox(h["reply-to"] || h.from || ""), out: mailbox(h.from || "").toLowerCase() === account.toLowerCase(), text: textBody2(m.payload) || m.snippet || "[\uBCF8\uBB38 \uBBF8\uC9C0\uC6D0]", hasAttachments: hasAttachments(m.payload), at: new Date(Number(m.internalDate)).toISOString(), automatic, bounceFailures: failures };
+  }).sort((a, b) => a.at.localeCompare(b.at));
+}
+function gmailSyncService({ sb: sb2, query: query2, records: records2, putRecord: putRecord2, gmailToken: gmailToken2, remote: remote2, textBody: textBody2, gmailHasAttachments: gmailHasAttachments2 }) {
+  async function sync(owner) {
+    const claimed = await query2(sb2.rpc("sanji_claim_gmail_sync", { p_owner: owner })), state = Array.isArray(claimed) ? claimed[0] : claimed;
+    if (!state?.owner) return { status: "busy", imported: 0 };
+    const now2 = (/* @__PURE__ */ new Date()).toISOString();
+    try {
+      const g = await gmailToken2(owner), threads = (await records2(owner, "thread")).filter((t) => t.channel === "email" && t.providerId && t.target).sort((a, b) => a.id.localeCompare(b.id));
+      const candidates = await records2(owner, "candidate");
+      const start = Number(state?.cursor || 0) % Math.max(1, threads.length), batch = threads.slice(start, start + 25), errors = [];
+      let imported = 0, humanReplies = 0;
+      for (let offset = 0; offset < batch.length; offset += 4) await Promise.all(batch.slice(offset, offset + 4).map(async (t) => {
+        try {
+          const rt = await remote2("https://gmail.googleapis.com/gmail/v1/users/me/threads/" + encodeURIComponent(t.providerId) + "?format=full", { headers: { Authorization: "Bearer " + g.access_token } }), messages = gmailMessages(rt, g.email, t.messages || [], textBody2, gmailHasAttachments2), inbound = messages.filter((m) => !m.out && !m.automatic);
+          const opted = inbound.some((m) => /수신\s*거부(합니다|할게|해\s*주세요|요청합니다)|^\s*수신\s*거부[.!]?\s*$|unsubscribe\s+me|please\s+(unsubscribe|stop)|연락.{0,8}(중단해|그만해|하지\s*마)/im.test(m.text));
+          await putRecord2(owner, "thread", { ...t, messages, classification: opted ? "\uC218\uC2E0 \uAC70\uBD80" : t.classification, synced: now2 }, t.id);
+          if (opted) {
+            const c = candidates.find((c2) => c2.id === t.target);
+            if (c) {
+              for (const email of c.recipientEmails?.length ? c.recipientEmails : [c.contact?.email]) if (email) await query2(sb2.from("sanji_suppression").upsert({ owner, identity: "email:" + email.toLowerCase(), reason: "\uC218\uC2E0 \uBA54\uC77C\uC758 \uC218\uC2E0 \uAC70\uBD80 \uC694\uCCAD" }, { onConflict: "owner,identity" }));
+              await putRecord2(owner, "candidate", { ...c, status: "\uC218\uC2E0 \uAC70\uBD80" }, c.id);
+            }
+          }
+          if (inbound.length) {
+            humanReplies++;
+            const c = candidates.find((c2) => c2.id === t.target);
+            if (c && !opted && !["\uAC70\uC808", "\uC218\uC2E0 \uAC70\uBD80"].includes(c.status)) await putRecord2(owner, "candidate", { ...c, status: "\uD68C\uC2E0" }, c.id);
+          }
+          imported++;
+        } catch (e) {
+          errors.push({ thread: t.id, error: String(e.message || e).slice(0, 180) });
+        }
+      }));
+      let bounceMessages = 0;
+      if (start === 0) {
+        try {
+          const listing = await remote2("https://gmail.googleapis.com/gmail/v1/users/me/messages?" + new URLSearchParams({ q: "{from:mailer-daemon from:postmaster} newer_than:90d", maxResults: "30" }), { headers: { Authorization: "Bearer " + g.access_token } });
+          for (const entry of listing.messages || []) {
+            const rm = await remote2("https://gmail.googleapis.com/gmail/v1/users/me/messages/" + encodeURIComponent(entry.id) + "?format=full", { headers: { Authorization: "Bearer " + g.access_token } }), failures = deliveryFailures(rm.payload);
+            if (!failures.length) continue;
+            const c = candidates.find((c2) => failures.some((f) => (c2.recipientEmails || [c2.contact?.email]).some((e) => String(e).toLowerCase() === f.email)));
+            if (!c) continue;
+            const old = (await records2(owner, "thread")).find((t) => t.channel === "email" && t.providerId === rm.threadId), messages = gmailMessages({ messages: [rm] }, g.email, old?.messages || [], textBody2, gmailHasAttachments2);
+            await putRecord2(owner, "thread", { ...old, target: c.id, channel: "email", providerId: rm.threadId, subject: messages[0]?.subject || "\uBC30\uB2EC \uC2E4\uD328 \uC54C\uB9BC", classification: "\uC790\uB3D9 \uC751\uB2F5", messages: [...(old?.messages || []).filter((m) => m.id !== rm.id), ...messages], synced: now2 }, old?.id);
+            bounceMessages++;
+          }
+        } catch (e) {
+          errors.push({ stage: "bounce_read", error: String(e.message || e).slice(0, 180) });
+        }
+      }
+      const next = start + batch.length >= threads.length ? 0 : start + batch.length;
+      await query2(sb2.from("sanji_gmail_sync").update({ cursor: next, last_checked: now2, lease_until: null, result: { imported, humanReplies, bounceMessages, total: threads.length, remaining: Math.max(0, threads.length - start - batch.length), errors } }).eq("owner", owner));
+      return { status: "synced", imported, humanReplies, bounceMessages, total: threads.length, remaining: Math.max(0, threads.length - start - batch.length), errors };
+    } catch (e) {
+      await query2(sb2.from("sanji_gmail_sync").update({ lease_until: null, result: { error: String(e.message || e).slice(0, 180) } }).eq("owner", owner));
+      throw e;
+    }
+  }
+  return { sync };
+}
+
 // supabase/functions/_shared/creator-discovery.ts
 import { Buffer } from "node:buffer";
 
@@ -338,7 +430,7 @@ async function drainApprovedJobs(processOne, maxJobs = 10, budgetMs = 45e3) {
   return { processed: results.length, results };
 }
 
-// supabase/functions/_shared/mail-mime.ts
+// supabase/functions/_shared/email-tracking.ts
 import { Buffer as Buffer2 } from "node:buffer";
 
 // supabase/functions/_shared/mail-recipients.ts
@@ -349,10 +441,143 @@ function mailRecipients(d) {
   return out;
 }
 
+// supabase/functions/_shared/email-tracking.ts
+var trackingLimitNotice = "\uC5F4\uB78C \uCD94\uC815\uC740 \uC0AC\uB78C\uC758 \uC2E4\uC81C \uC5F4\uB78C \uD655\uC778\uC774 \uC544\uB2D9\uB2C8\uB2E4. Apple Mail \uC0AC\uC804 \uB85C\uB529, \uC774\uBBF8\uC9C0 \uD504\uB85D\uC2DC\xB7\uBCF4\uC548 \uC2DC\uC2A4\uD15C, \uC774\uBBF8\uC9C0 \uCC28\uB2E8\xB7\uCE90\uC2DC\xB7\uC804\uB2EC\uC5D0 \uC601\uD5A5\uC744 \uBC1B\uC2B5\uB2C8\uB2E4. \uAC10\uC9C0 \uC5C6\uC74C\uC740 \uBBF8\uC5F4\uB78C\xB7\uC218\uC2E0 \uC2E4\uD328\uB97C \uB73B\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.";
+var trackingReasonLabels = { none: "\uBD84\uB958 \uADFC\uAC70 \uC5C6\uC74C", image_proxy: "\uBA54\uC77C \uC774\uBBF8\uC9C0 \uD504\uB85D\uC2DC User-Agent \uD328\uD134 \xB7 \uC790\uCCB4 \uCD94\uC815", prefetch_header: "\uC0AC\uC804 \uB85C\uB529 \uBAA9\uC801 \uD5E4\uB354 \xB7 \uC790\uCCB4 \uCD94\uC815", scanner_user_agent: "\uBCF4\uC548 \uC2A4\uCE90\uB108 User-Agent \uD328\uD134 \xB7 \uC790\uCCB4 \uCD94\uC815" };
+var gif = Uint8Array.from(Buffer2.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64"));
+var tokenHash = async (token) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)))).map((x) => x.toString(16).padStart(2, "0")).join("");
+var newTrackingToken = () => Buffer2.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
+function classifyImageRequest(headers) {
+  const ua = (headers.get("user-agent") || "").slice(0, 512), purpose = [headers.get("purpose"), headers.get("sec-purpose")].join(" ");
+  if (/prefetch|prerender/i.test(purpose)) return { classification: "suspected_automated", reason: "prefetch_header" };
+  if (/GoogleImageProxy|YahooMailProxy|ImageProxy/i.test(ua)) return { classification: "suspected_automated", reason: "image_proxy" };
+  if (/Proofpoint|Mimecast|Barracuda|urlscan|HeadlessChrome|bot\b|crawler|scanner/i.test(ua)) return { classification: "suspected_automated", reason: "scanner_user_agent" };
+  return { classification: "unknown", reason: "none" };
+}
+function trackingLabel(row, includeAutomated = false) {
+  if (row.tracking_result?.stopped) return "\uCD94\uC801 \uC911\uC9C0 \xB7 \uD1B5\uACC4 \uC81C\uC678";
+  if (row.tracking_result?.applied && (!row.tracking_id || Date.parse(row.expires) <= Date.now())) return "\uBCF4\uAD00\uAE30\uAC04 \uB9CC\uB8CC \xB7 \uD1B5\uACC4 \uC81C\uC678";
+  if (!row.tracking_id) return "\uCD94\uC801 \uBBF8\uC801\uC6A9";
+  if (row.is_test) return "\uB0B4\uBD80 \uD14C\uC2A4\uD2B8 \xB7 \uC218\uC2E0\uC790 \uD1B5\uACC4 \uC81C\uC678";
+  return (includeAutomated ? row.first_request : row.first_included) ? "\uC5F4\uB78C \uCD94\uC815" : "\uAC10\uC9C0 \uC5C6\uC74C";
+}
+function emailTrackingService({ sb: sb2, query: query2, env: env2, audit: audit2, baseUrl }) {
+  const activated = () => env2("EMAIL_TRACKING_ACTIVATION_APPROVED") === "true";
+  const policy = async (owner) => await query2(sb2.from("sanji_tracking_policy").select("*").eq("owner", owner).maybeSingle()) || { enabled: false, version: 0, retention_days: 30 };
+  async function preview(owner, input, scope) {
+    const no = (reason) => ({ requested: !!input.trackingRequested, eligible: false, reason, campaignId: input.trackingCampaignId || null });
+    if (input.channel !== "email") return no("\uC774\uBA54\uC77C \uC678 \uCC44\uB110 \xB7 \uCD94\uC801 \uBBF8\uC801\uC6A9");
+    if (!input.trackingRequested) return no("\uBC1C\uC1A1\uBCC4 \uCD94\uC801 \uC120\uD0DD \uC548 \uD568");
+    try {
+      const p = await policy(owner);
+      if (!activated()) return no("\uC6B4\uC601 \uCD94\uC801 \uD65C\uC131\uD654 \uC2B9\uC778 \uC804 \xB7 \uCD94\uC801 \uBBF8\uC801\uC6A9");
+      if (!p.enabled) return no("\uC11C\uBE44\uC2A4 \uCD94\uC801 \uAEBC\uC9D0");
+      if (!input.trackingCampaignId) return no("\uCEA0\uD398\uC778 \uBBF8\uC120\uD0DD");
+      const c = await query2(sb2.from("sanji_email_campaigns").select("*").eq("owner", owner).eq("id", input.trackingCampaignId).maybeSingle());
+      if (!c || c.scope !== scope || !c.enabled) return no("\uD574\uB2F9 \uC601\uC5C5 \uBC94\uC704\uC758 \uCEA0\uD398\uC778 \uCD94\uC801 \uAEBC\uC9D0");
+      if (c.external_tracking) return no("\uC678\uBD80 \uCD94\uC801 \uC801\uC6A9 \uCEA0\uD398\uC778 \xB7 \uC911\uBCF5 \uD53D\uC140 \uBBF8\uC0BD\uC785");
+      if (!input.trackingNoticeAcknowledged || c.basis_note.length < 5 || c.disclosure.length < 20 || !input.body.includes(c.disclosure)) return no("\uCC98\uB9AC \uADFC\uAC70\xB7\uACE0\uC9C0 \uD655\uC778 \uD544\uC694 \xB7 \uC800\uC7A5\uB41C \uACE0\uC9C0 \uBB38\uAD6C/\uB9C1\uD06C\uAC00 \uBCF8\uBB38\uC5D0 \uC788\uC5B4\uC57C \uC801\uC6A9");
+      return { requested: true, eligible: true, campaignId: c.id, campaignName: c.name, scope, policyVersion: p.version, campaignVersion: c.version, disclosure: c.disclosure, retentionDays: p.retention_days, testOnly: env2("EMAIL_TRACKING_TEST_ONLY") !== "false", internalTest: !!input.trackingInternalTest, reason: "\uC218\uC2E0\uC790\xB7\uBC1C\uC1A1 \uAC74\uBCC4 \uCD94\uC801 \xB7 \uBCF5\uC218 \uC218\uC2E0\uC790\uB294 \uACF5\uC6A9 \uBCF8\uBB38 \uB2E8\uC704" };
+    } catch {
+      return no("\uCD94\uC801 \uC124\uC815 \uC870\uD68C \uC624\uB958 \xB7 \uC774\uBA54\uC77C\uC740 \uCD94\uC801 \uC5C6\uC774 \uBC1C\uC1A1 \uAC00\uB2A5");
+    }
+  }
+  async function withNotice(owner, input, body, scope) {
+    if (input.channel !== "email" || input.trackingRequested === false || !activated()) return { input, body };
+    try {
+      const p = await policy(owner);
+      if (!p.enabled) return { input, body };
+      const rows = await query2(sb2.from("sanji_email_campaigns").select("*").eq("owner", owner).eq("scope", scope).eq("enabled", true).order("created"));
+      const c = input.trackingCampaignId ? rows.find((r) => r.id === input.trackingCampaignId) : rows[0];
+      if (!c || c.external_tracking || c.disclosure.length < 20 || c.basis_note.length < 5) return { input, body };
+      return { input: { ...input, trackingRequested: true, trackingCampaignId: c.id, trackingNoticeAcknowledged: true }, body: body.includes(c.disclosure) ? body : body + "\n\n" + c.disclosure };
+    } catch {
+      return { input, body };
+    }
+  }
+  async function prepare(owner, outboxId, d, sender) {
+    const none = (reason) => ({ draft: d, summary: { applied: false, reason } });
+    if (d.channel !== "email" || !d.tracking?.eligible || !activated()) return none("\uBBF8\uC801\uC6A9 \uB610\uB294 \uC6B4\uC601 \uD65C\uC131\uD654 \uC2B9\uC778 \uC804");
+    try {
+      const token = newTrackingToken(), hash2 = await tokenHash(token), url2 = new URL(baseUrl);
+      if (url2.protocol !== "https:" || url2.username || url2.password) return none("HTTPS \uCD94\uC801 \uC8FC\uC18C \uBBF8\uC124\uC815");
+      const t = await query2(sb2.rpc("sanji_register_email_tracking", { p_owner: owner, p_outbox: outboxId, p_hash: hash2, p_campaign: d.tracking.campaignId, p_policy_version: d.tracking.policyVersion, p_campaign_version: d.tracking.campaignVersion, p_sender: sender, p_test: !!d.tracking.internalTest, p_test_only: env2("EMAIL_TRACKING_TEST_ONLY") !== "false" }));
+      const row = Array.isArray(t) ? t[0] : t;
+      if (!row?.id) return none("\uC124\uC815\xB7\uACE0\uC9C0 \uBCC0\uACBD \uB610\uB294 \uCD94\uC801 \uC911\uB2E8 \xB7 \uBBF8\uC801\uC6A9");
+      const pixel2 = baseUrl.replace(/\/$/, "") + "/email-events/pixel/" + token + ".gif";
+      return { draft: { ...d, trackingPixelUrl: pixel2 }, summary: { applied: true, campaignId: row.campaign_id, mode: row.mode, recipientCount: mailRecipients(d).length, isTest: row.is_test, expires: row.expires } };
+    } catch {
+      try {
+        await audit2(owner, "email_tracking_skipped", { outboxId, reason: "tracking_unavailable" });
+      } catch {
+      }
+      return none("\uCD94\uC801 \uC7A5\uC560 \xB7 \uC6D0\uBB38 \uC774\uBA54\uC77C \uBC1C\uC1A1 \uC720\uC9C0");
+    }
+  }
+  async function pixel(req, token) {
+    if (req.method === "GET" && activated() && /^[A-Za-z0-9_-]{43}$/.test(token)) {
+      try {
+        const cls = classifyImageRequest(req.headers);
+        await query2(sb2.rpc("sanji_record_image_request", { p_hash: await tokenHash(token), p_classification: cls.classification, p_reason: cls.reason }));
+      } catch {
+      }
+    }
+    return new Response(req.method === "HEAD" ? null : gif, { status: 200, headers: { "Content-Type": "image/gif", "Content-Length": String(gif.length), "Cache-Control": "no-store, no-cache, max-age=0, must-revalidate", "Pragma": "no-cache", "X-Robots-Tag": "noindex, nofollow", "Referrer-Policy": "no-referrer", "Cross-Origin-Resource-Policy": "cross-origin", "Content-Security-Policy": "default-src 'none'" } });
+  }
+  async function handle(path, method, owner, input, params) {
+    if (path === "/email-tracking" && method === "GET") return { policy: await policy(owner), activationApproved: activated(), testOnly: env2("EMAIL_TRACKING_TEST_ONLY") !== "false", provider: "Gmail API \xB7 \uC81C\uACF5\uC790 \uC5F4\uB78C \uC6F9\uD6C5 \uC5C6\uC74C", campaigns: await query2(sb2.from("sanji_email_campaigns").select("id,name,scope,enabled,external_tracking,disclosure,basis_note,version").eq("owner", owner).order("created")), notice: trackingLimitNotice };
+    const stop = path.match(/^\/email-tracking\/messages\/([0-9a-f-]{36})$/);
+    if (stop && method === "GET") {
+      const o = await query2(sb2.from("sanji_outbox").select("id,created").eq("id", stop[1]).eq("owner", owner).single());
+      const report = await query2(sb2.rpc("sanji_email_tracking_report", { p_owner: owner, p_from: o.created, p_to: new Date(Date.parse(o.created) + 1).toISOString(), p_campaign: null, p_include_automated: false, p_target: null }));
+      const r = report.rows.find((r2) => r2.id === o.id);
+      if (!r) throw Error("\uBA54\uC77C \uAE30\uB85D\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+      return { ...r, label: trackingLabel(r), reasonLabels: (r.reasons || []).map((code) => trackingReasonLabels[code] || "\uADFC\uAC70 \uBBF8\uD655\uC778"), notice: trackingLimitNotice };
+    }
+    if (stop && method === "DELETE") {
+      const row = await query2(sb2.from("sanji_outbox").select("id,data").eq("id", stop[1]).eq("owner", owner).single());
+      await query2(sb2.from("sanji_email_tracking").delete().eq("outbox_id", row.id).eq("owner", owner));
+      await query2(sb2.from("sanji_outbox").update({ data: { ...row.data, trackingResult: { ...row.data.trackingResult, stopped: true } } }).eq("id", row.id).eq("owner", owner));
+      await audit2(owner, "email_tracking_message_stopped", { outboxId: row.id });
+      return { ok: true };
+    }
+    if (path === "/email-tracking/policy" && method === "POST") {
+      const b = await input(), days = Number(b.retentionDays);
+      if (!Number.isInteger(days) || days < 7 || days > 90) throw Error("\uBCF4\uAD00 \uAE30\uAC04\uC740 7~90\uC77C\uC785\uB2C8\uB2E4.");
+      const p = await policy(owner);
+      await query2(sb2.from("sanji_tracking_policy").upsert({ owner, enabled: b.enabled === true, retention_days: days, version: p.version + 1, updated: (/* @__PURE__ */ new Date()).toISOString() }, { onConflict: "owner" }));
+      await audit2(owner, "email_tracking_policy_changed", { enabled: b.enabled === true, retentionDays: days });
+      return { ok: true };
+    }
+    if (path === "/email-tracking/campaigns" && method === "POST") {
+      const b = await input();
+      if (!["brand", "creator"].includes(b.scope) || typeof b.name !== "string" || !b.name.trim() || b.name.length > 120) throw Error("\uCEA0\uD398\uC778 \uC774\uB984\xB7\uC601\uC5C5 \uBC94\uC704\uB97C \uD655\uC778\uD558\uC138\uC694.");
+      const data = { name: b.name.trim(), scope: b.scope, enabled: b.enabled === true, external_tracking: b.externalTracking === true, disclosure: String(b.disclosure || "").trim().slice(0, 2e3), basis_note: String(b.basisNote || "").trim().slice(0, 2e3), updated: (/* @__PURE__ */ new Date()).toISOString() };
+      if (data.enabled && (data.disclosure.length < 20 || data.basis_note.length < 5)) throw Error("\uCEA0\uD398\uC778 \uCD94\uC801\uC5D0\uB294 \uCC98\uB9AC \uADFC\uAC70\uC640 20\uC790 \uC774\uC0C1\uC758 \uACE0\uC9C0 \uBB38\uAD6C/\uB9C1\uD06C\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4. \uACF5\uAC1C \uC774\uBA54\uC77C\uC744 \uB3D9\uC758\uB85C \uAC04\uC8FC\uD558\uC9C0 \uB9C8\uC138\uC694.");
+      if (b.id) {
+        const old = await query2(sb2.from("sanji_email_campaigns").select("id,version").eq("id", b.id).eq("owner", owner).single());
+        await query2(sb2.from("sanji_email_campaigns").update({ ...data, version: old.version + 1 }).eq("id", old.id).eq("owner", owner));
+      } else await query2(sb2.from("sanji_email_campaigns").insert({ ...data, owner }));
+      await audit2(owner, "email_tracking_campaign_changed", { campaign: b.id || "new", enabled: data.enabled });
+      return { ok: true };
+    }
+    if (path === "/email-tracking/report" && method === "GET") {
+      const from = new Date(params.get("from") || Date.now() - 30 * 864e5), to = new Date(params.get("to") || Date.now()), campaign = params.get("campaign") || null;
+      if (params.get("target") && !/^[0-9a-f-]{36}$/.test(params.get("target"))) throw Error("\uB300\uC0C1 ID\uB97C \uD655\uC778\uD558\uC138\uC694.");
+      if (!Number.isFinite(+from) || !Number.isFinite(+to) || +to <= +from || +to - +from > 90 * 864e5 || campaign && !/^[0-9a-f-]{36}$/.test(campaign)) throw Error("\uC9D1\uACC4 \uAE30\uAC04\uC740 \uCD5C\uB300 90\uC77C\uC774\uBA70 \uCEA0\uD398\uC778\uC744 \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4.");
+      const report = await query2(sb2.rpc("sanji_email_tracking_report", { p_owner: owner, p_from: from.toISOString(), p_to: to.toISOString(), p_campaign: campaign, p_include_automated: params.get("includeAutomated") === "true", p_target: params.get("target") || null }));
+      return { ...report, rows: (report?.rows || []).map((r) => ({ ...r, label: trackingLabel(r, params.get("includeAutomated") === "true"), reasonLabels: (r.reasons || []).map((code) => trackingReasonLabels[code] || "\uADFC\uAC70 \uBBF8\uD655\uC778") })), notice: trackingLimitNotice };
+    }
+    throw Error("\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uCD94\uC801 \uC694\uCCAD");
+  }
+  return { preview, prepare, pixel, handle, withNotice };
+}
+
 // supabase/functions/_shared/mail-mime.ts
+import { Buffer as Buffer3 } from "node:buffer";
 function attachmentType(content) {
-  const b = Buffer2.from(content, "base64");
-  if (b.subarray(0, 8).equals(Buffer2.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
+  const b = Buffer3.from(content, "base64");
+  if (b.subarray(0, 8).equals(Buffer3.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
   if (b[0] === 255 && b[1] === 216 && b[2] === 255) return "image/jpeg";
   if (["GIF87a", "GIF89a"].includes(b.subarray(0, 6).toString())) return "image/gif";
   if (b.subarray(0, 4).toString() === "RIFF" && b.subarray(8, 12).toString() === "WEBP") return "image/webp";
@@ -367,16 +592,35 @@ function encodedHeader(value) {
   let chunk = "";
   if (/[\r\n]/.test(value)) throw Error("\uBA54\uC77C \uC81C\uBAA9\xB7\uBC1C\uC2E0\uC790\uBA85\uC5D0 \uC904\uBC14\uAFC8\uC744 \uB123\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
   for (const char of String(value || "")) {
-    if (Buffer2.byteLength(chunk + char, "utf8") > 42) {
+    if (Buffer3.byteLength(chunk + char, "utf8") > 42) {
       parts.push(chunk);
       chunk = "";
     }
     chunk += char;
   }
   if (chunk || !parts.length) parts.push(chunk);
-  return parts.map((p) => "=?UTF-8?B?" + Buffer2.from(p).toString("base64") + "?=").join("\r\n ");
+  return parts.map((p) => "=?UTF-8?B?" + Buffer3.from(p).toString("base64") + "?=").join("\r\n ");
 }
-var base64Body = (text2) => Buffer2.from(text2, "utf8").toString("base64").match(/.{1,76}/g)?.join("\r\n") || "";
+var base64Body = (text2) => Buffer3.from(text2, "utf8").toString("base64").match(/.{1,76}/g)?.join("\r\n") || "";
+function trackingHtml(d) {
+  const escape = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  let url2;
+  try {
+    url2 = new URL(d.trackingPixelUrl);
+    if (url2.protocol !== "https:" || !/^\/functions\/v1\/[^/]+\/email-events\/pixel\/[A-Za-z0-9_-]{43}\.gif$/.test(url2.pathname) || url2.search || url2.hash || url2.username || url2.password) return null;
+  } catch {
+    return null;
+  }
+  const text2 = String(d.body), parts = [];
+  let last = 0;
+  for (const m of text2.matchAll(/https?:\/\/[^\s<>"']+/g)) {
+    parts.push(escape(text2.slice(last, m.index)));
+    parts.push('<a href="' + escape(m[0]) + '">' + escape(m[0]) + "</a>");
+    last = m.index + m[0].length;
+  }
+  parts.push(escape(text2.slice(last)));
+  return '<!doctype html><html><head><meta charset="utf-8"></head><body><div style="white-space:pre-wrap">' + parts.join("") + '</div><img src="' + escape(url2.toString()) + '" width="1" height="1" alt="" referrerpolicy="no-referrer" style="width:1px;height:1px;border:0" /></body></html>';
+}
 function mime(d, from) {
   const lines = [
     `From: ${d.senderName ? encodedHeader(d.senderName) + " <" + from + ">" : from}`,
@@ -390,26 +634,30 @@ function mime(d, from) {
       "In-Reply-To: " + messageIds(d.inReplyTo),
       "References: " + messageIds(d.references) + " " + messageIds(d.inReplyTo)
     );
+  const html = trackingHtml(d), alternative = "sanji_alt_" + crypto.randomUUID();
+  const bodyLines = html ? [
+    `Content-Type: multipart/alternative; boundary="${alternative}"`,
+    "",
+    `--${alternative}`,
+    "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    base64Body(d.body),
+    `--${alternative}`,
+    "Content-Type: text/html; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    base64Body(html),
+    `--${alternative}--`
+  ] : ["Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", base64Body(d.body)];
   const attachments = d.attachments || [];
-  if (!attachments.length)
-    return Buffer2.from(
-      [
-        ...lines,
-        "Content-Type: text/plain; charset=UTF-8",
-        "Content-Transfer-Encoding: base64",
-        "",
-        base64Body(d.body)
-      ].join("\r\n")
-    ).toString("base64url");
+  if (!attachments.length) return Buffer3.from([...lines, ...bodyLines].join("\r\n")).toString("base64url");
   const boundary = "sanji_" + crypto.randomUUID();
   lines.push(
     `Content-Type: multipart/mixed; boundary="${boundary}"`,
     "",
     `--${boundary}`,
-    "Content-Type: text/plain; charset=UTF-8",
-    "Content-Transfer-Encoding: base64",
-    "",
-    base64Body(d.body)
+    ...bodyLines
   );
   for (const a of attachments)
     lines.push(
@@ -421,7 +669,7 @@ function mime(d, from) {
       a.content.match(/.{1,76}/g)?.join("\r\n") || ""
     );
   lines.push(`--${boundary}--`);
-  return Buffer2.from(lines.join("\r\n")).toString("base64url");
+  return Buffer3.from(lines.join("\r\n")).toString("base64url");
 }
 
 // supabase/functions/_shared/discovery-notification.ts
@@ -1392,7 +1640,7 @@ function validateIntro(value, context) {
 
 // supabase/functions/workspace/index.ts
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { Buffer as Buffer3 } from "node:buffer";
+import { Buffer as Buffer4 } from "node:buffer";
 
 // supabase/functions/_shared/schema.ts
 import { z } from "npm:zod@4.6.7";
@@ -1509,6 +1757,10 @@ var draft = z.object({
   templateId: z.string().uuid().optional(),
   templateVersion: z.number().int().positive().optional(),
   recipientMode: z.enum(["primary", "company_all"]).default("primary"),
+  trackingRequested: z.boolean().default(false),
+  trackingCampaignId: z.string().uuid().optional(),
+  trackingNoticeAcknowledged: z.boolean().default(false),
+  trackingInternalTest: z.boolean().default(false),
   lawfulBasis: text.nullish().transform((value) => value || ""),
   marketing: z.boolean().default(false)
 });
@@ -1551,7 +1803,7 @@ async function query(p) {
     throw new HttpError(error.code === "23505" ? 409 : 400, error.message);
   return data;
 }
-var digest = async (s) => Buffer3.from(
+var digest = async (s) => Buffer4.from(
   await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s))
 ).toString("hex");
 async function key() {
@@ -1574,10 +1826,10 @@ async function encrypt(v) {
     await key(),
     new TextEncoder().encode(JSON.stringify(v))
   );
-  return Buffer3.concat([Buffer3.from(iv), Buffer3.from(b)]).toString("base64");
+  return Buffer4.concat([Buffer4.from(iv), Buffer4.from(b)]).toString("base64");
 }
 async function decrypt(v) {
-  const b = Buffer3.from(v, "base64");
+  const b = Buffer4.from(v, "base64");
   return JSON.parse(
     new TextDecoder().decode(
       await crypto.subtle.decrypt(
@@ -1627,6 +1879,7 @@ async function saveConnection(u, p, data) {
     )
   );
 }
+var emailTracking = emailTrackingService({ sb, query, env, audit, baseUrl: env("SUPABASE_URL") + "/functions/v1/" + (env("WORKSPACE_FUNCTION_NAME") || "bright-function") });
 var notifyOwner = discoveryCompletionNotifier({ sb, query, gmailToken, remote, audit, env });
 var creatorDiscovery = creatorDiscoveryService({ sb, query, audit, env });
 var discovery = discoveryService({ sb, query, connection, saveConnection, env, audit, putRecord, notifyOwner });
@@ -1709,7 +1962,7 @@ function gmailHasAttachments(part) {
 }
 function textBody(p) {
   if (p.mimeType === "text/plain" && p.body?.data)
-    return Buffer3.from(p.body.data, "base64url").toString();
+    return Buffer4.from(p.body.data, "base64url").toString();
   return (p.parts || []).map(textBody).filter(Boolean).join("\n");
 }
 function render(text2, c, deals, brandNames) {
@@ -1746,7 +1999,7 @@ async function webhook(req, url2) {
   if (!/^sha256=[0-9a-f]{64}$/.test(signature) || !await crypto.subtle.verify(
     "HMAC",
     k,
-    Buffer3.from(signature.slice(7), "hex"),
+    Buffer4.from(signature.slice(7), "hex"),
     bytes
   ))
     fail(403, "\uC6F9\uD6C5 \uC11C\uBA85 \uBD88\uC77C\uCE58");
@@ -1933,7 +2186,7 @@ async function sendDraft(u, draftId, b, jobId) {
     const t = await owned(u, d.replyTo, "thread");
     if (!t.lastInbound || Date.now() - t.lastInbound > 864e5 || !t.senderId)
       fail(403, "\uB300\uD654 \uC2DC\uAC04 \uB610\uB294 \uC218\uC2E0\uC790 \uD655\uC778 \uD544\uC694");
-    if (Buffer3.byteLength(d.body) > 1e3 || d.attachments.length)
+    if (Buffer4.byteLength(d.body) > 1e3 || d.attachments.length)
       fail(400, "\uD604\uC7AC \uD68C\uC2E0\uC740 1000\uBC14\uC774\uD2B8 \uC774\uD558 \uD14D\uC2A4\uD2B8\uB9CC \uC9C0\uC6D0\uD569\uB2C8\uB2E4.");
     const account = await instagramForThread(u, t);
     if (d.connectionKey !== account.key) fail(409, "\uBC1C\uC2E0 \uACC4\uC815\uC774 \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uCD5C\uC885 \uBBF8\uB9AC\uBCF4\uAE30\uB97C \uB2E4\uC2DC \uC2B9\uC778\uD558\uC138\uC694.");
@@ -1954,6 +2207,11 @@ async function sendDraft(u, draftId, b, jobId) {
   if (!out?.id)
     fail(500, "\uBC1C\uC1A1 \uC608\uC57D \uACB0\uACFC\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4. \uC2E4\uC81C \uC804\uC1A1\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
   let response = {}, status = "manual_recorded";
+  const tracked = await emailTracking.prepare(u, out.id, d, gmail?.email || "");
+  try {
+    await query(sb.from("sanji_outbox").update({ data: { ...out.data, trackingResult: tracked.summary } }).eq("id", out.id).eq("owner", u));
+  } catch {
+  }
   try {
     if (d.channel === "email") {
       response = await remote(
@@ -1965,7 +2223,7 @@ async function sendDraft(u, draftId, b, jobId) {
             "Content-Type": "application/json"
           },
           body: JSON.stringify({
-            raw: mime(d, gmail.email),
+            raw: mime(tracked.draft, gmail.email),
             ...d.providerThread ? { threadId: d.providerThread } : {}
           })
         }
@@ -2006,6 +2264,7 @@ async function sendDraft(u, draftId, b, jobId) {
     t.messages.push({
       id: response.id || out.id,
       messageId: `<${d.messageId}@sanji.local>`,
+      outboxId: out.id,
       out: true,
       text: d.body,
       at: now(),
@@ -2033,6 +2292,8 @@ async function sendDraft(u, draftId, b, jobId) {
       sb.from("sanji_outbox").update({
         status: rejected ? "provider_rejected" : "outcome_unknown",
         data: {
+          ...out.data,
+          trackingResult: tracked.summary,
           subject: d.subject,
           targetName: d.targetName,
           error: rejected ? "provider_rejected" : "\uACB0\uACFC \uBD88\uD655\uC2E4 \xB7 \uC790\uB3D9 \uC7AC\uC2DC\uB3C4 \uC5C6\uC74C",
@@ -2051,10 +2312,14 @@ async function sendDraft(u, draftId, b, jobId) {
 async function runJobs(req) {
   const expected = env("JOB_RUNNER_TOKEN"), provided = req.headers.get("x-job-token") || "";
   if (expected.length < 32) fail(503, "\uC608\uC57D \uC791\uC5C5 \uC2E4\uD589 \uD1A0\uD070 \uC124\uC815\uC774 \uD544\uC694\uD569\uB2C8\uB2E4.");
-  const a = Buffer3.from(await digest(expected), "hex"), b = Buffer3.from(await digest(provided), "hex");
+  const a = Buffer4.from(await digest(expected), "hex"), b = Buffer4.from(await digest(provided), "hex");
   let different = 0;
   for (let i = 0; i < a.length; i++) different |= a[i] ^ b[i];
   if (different) fail(401, "\uC791\uC5C5 \uC2E4\uD589 \uAD8C\uD55C \uC5C6\uC74C");
+  try {
+    await query(sb.rpc("sanji_purge_email_tracking"));
+  } catch {
+  }
   return json(await drainApprovedJobs(async () => {
     const response = await runScheduledJob();
     return await response.json();
@@ -2098,9 +2363,12 @@ async function runScheduledJob() {
     });
   }
 }
+var gmailSync = gmailSyncService({ sb, query, records, putRecord, gmailToken, remote, textBody, gmailHasAttachments });
 Deno.serve(async (req) => {
   const url2 = new URL(req.url), { path, base } = functionRoute(req.url, env("SUPABASE_URL"));
   try {
+    const image = path.match(/^\/email-events\/pixel\/([^/]+)\.gif$/);
+    if (image) return await emailTracking.pixel(req, image[1]);
     if (req.headers.get("origin") && req.headers.get("origin") !== origin)
       fail(403, "\uD5C8\uC6A9\uB418\uC9C0 \uC54A\uC740 \uCD9C\uCC98");
     if (req.method === "OPTIONS")
@@ -2123,6 +2391,11 @@ Deno.serve(async (req) => {
       if (!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403, "\uBC1C\uAD74 \uC2E4\uD589\uAE30 \uC778\uC99D \uC2E4\uD328");
       return json(await creatorDiscovery.scheduled());
     }
+    if (path === "/gmail/tick" && req.method === "POST") {
+      if (!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403, "\uD68C\uC2E0 \uB3D9\uAE30\uD654 \uC2E4\uD589\uAE30 \uC778\uC99D \uC2E4\uD328");
+      const owners = await query(sb.from("sanji_connections").select("owner").eq("provider", "gmail").limit(5));
+      return json({ results: await Promise.all(owners.map((c) => gmailSync.sync(c.owner))) });
+    }
     if (path === "/jobs/run" && req.method === "POST")
       return await runJobs(req);
     const bearer = req.headers.get("authorization") || "";
@@ -2139,10 +2412,11 @@ Deno.serve(async (req) => {
     const u = user.id;
     const input = async () => {
       const text2 = await req.text();
-      if (Buffer3.byteLength(text2) > 10 * 1024 * 1024)
+      if (Buffer4.byteLength(text2) > 10 * 1024 * 1024)
         fail(413, "\uC694\uCCAD \uD06C\uAE30 \uCD08\uACFC");
       return text2 ? JSON.parse(text2) : {};
     };
+    if (path === "/email-tracking" || path.startsWith("/email-tracking/")) return json(await emailTracking.handle(path, req.method, u, input, url2.searchParams));
     if (path === "/creator-discovery" || path.startsWith("/creator-discovery/")) {
       try {
         return json(await creatorDiscovery.handle(path, req.method, u, input));
@@ -2333,7 +2607,7 @@ Deno.serve(async (req) => {
       if (!["gmail", "instagram"].includes(provider))
         fail(404, "\uC54C \uC218 \uC5C6\uB294 \uC5F0\uACB0");
       const oauthInput = await input();
-      const state = uuid() + uuid(), verifier = Buffer3.from(
+      const state = uuid() + uuid(), verifier = Buffer4.from(
         crypto.getRandomValues(new Uint8Array(32))
       ).toString("base64url");
       await query(
@@ -2353,7 +2627,7 @@ Deno.serve(async (req) => {
         access_type: "offline",
         prompt: "consent",
         state,
-        code_challenge: Buffer3.from(
+        code_challenge: Buffer4.from(
           await crypto.subtle.digest(
             "SHA-256",
             new TextEncoder().encode(verifier)
@@ -2410,105 +2684,12 @@ Deno.serve(async (req) => {
       await putRecord(u, "thread", { ...t, target: c.id }, t.id);
       return json({ ok: true });
     }
-    if (path === "/gmail/sync" && req.method === "POST") {
-      const g = await gmailToken(u), headers = { Authorization: "Bearer " + g.access_token }, targets = (await records(u, "candidate")).filter(
-        (c) => c.contact.email
-      );
-      let imported = 0, partial = targets.length > 30;
-      for (const c of targets.slice(0, 30)) {
-        const r = await remote(
-          "https://gmail.googleapis.com/gmail/v1/users/me/threads?" + new URLSearchParams({
-            q: `{${mailRecipients({ emails: c.recipientEmails, email: c.contact.email }).flatMap((e) => ["from:" + e, "to:" + e]).join(" ")}} newer_than:90d`,
-            maxResults: "20"
-          }),
-          { headers }
-        );
-        if (r.nextPageToken) partial = true;
-        for (const entry of r.threads || []) {
-          const remoteThread = await remote(
-            "https://gmail.googleapis.com/gmail/v1/users/me/threads/" + encodeURIComponent(entry.id) + "?format=full",
-            { headers }
-          );
-          const messages = remoteThread.messages.map((m) => {
-            const h = Object.fromEntries(
-              (m.payload.headers || []).map((h2) => [
-                h2.name.toLowerCase(),
-                h2.value
-              ])
-            );
-            return {
-              id: m.id,
-              messageId: h["message-id"] || "",
-              references: h.references || "",
-              subject: h.subject || "",
-              from: h.from || "",
-              replyToHeader: h["reply-to"] || "",
-              replyAddress: singleMailbox(h["reply-to"] || h.from || ""),
-              out: singleMailbox(h.from || "").toLowerCase() === g.email.toLowerCase(),
-              text: textBody(m.payload) || m.snippet || "[\uBCF8\uBB38 \uBBF8\uC9C0\uC6D0]",
-              hasAttachments: gmailHasAttachments(m.payload),
-              at: new Date(Number(m.internalDate)).toISOString(),
-              automatic: !!h["auto-submitted"] && h["auto-submitted"] !== "no" || /auto_reply|auto-replied|bulk/i.test(h.precedence || "")
-            };
-          }).sort((a, b) => a.at.localeCompare(b.at));
-          const old = (await records(u, "thread")).find(
-            (t) => t.providerId === entry.id && t.channel === "email"
-          ), inbound = messages.filter((m) => !m.out), optout = inbound.some(
-            (m) => !m.automatic && /수신\s*거부(합니다|할게|해\s*주세요|요청합니다)|^\s*수신\s*거부[.!]?\s*$|unsubscribe\s+me|please\s+(unsubscribe|stop)|연락.{0,8}(중단해|그만해|하지\s*마)/im.test(
-              m.text
-            )
-          );
-          await putRecord(
-            u,
-            "thread",
-            {
-              ...old,
-              target: c.id,
-              channel: "email",
-              providerId: entry.id,
-              subject: messages[0]?.subject || "(\uC81C\uBAA9 \uC5C6\uC74C)",
-              owner: old?.owner || "",
-              next: old?.next || "",
-              due: old?.due || "",
-              classification: optout ? "\uC218\uC2E0 \uAC70\uBD80" : old?.classification || (inbound.length && inbound.every((m) => m.automatic) ? "\uC790\uB3D9 \uC751\uB2F5" : "\uBBF8\uBD84\uB958"),
-              messages,
-              synced: now()
-            },
-            old?.id
-          );
-          if (optout) {
-            for (const identity of identities(c))
-              await query(
-                sb.from("sanji_suppression").upsert(
-                  {
-                    owner: u,
-                    identity,
-                    reason: "\uC218\uC2E0 \uBA54\uC77C\uC758 \uC218\uC2E0 \uAC70\uBD80 \uC694\uCCAD"
-                  },
-                  { onConflict: "owner,identity" }
-                )
-              );
-            await putRecord(
-              u,
-              "candidate",
-              { ...await owned(u, c.id, "candidate"), status: "\uC218\uC2E0 \uAC70\uBD80" },
-              c.id
-            );
-          } else if (inbound.length && !["\uAC70\uC808", "\uC218\uC2E0 \uAC70\uBD80"].includes(c.status))
-            await putRecord(
-              u,
-              "candidate",
-              { ...await owned(u, c.id, "candidate"), status: "\uD68C\uC2E0" },
-              c.id
-            );
-          imported++;
-        }
-      }
-      await audit(u, "gmail_synced", { imported });
-      return json({ imported, partial });
-    }
+    if (path === "/gmail/sync" && req.method === "POST") return json(await gmailSync.sync(u));
+    if (path === "/gmail/sync-status" && req.method === "GET") return json(await query(sb.from("sanji_gmail_sync").select("last_checked,cursor,result").eq("owner", u).maybeSingle()) || {});
     if (path === "/drafts" && req.method === "POST") {
-      const inputData = draft.parse(await input()), c = await owned(u, inputData.target, "candidate");
+      const rawInput = await input();
+      let inputData = draft.parse(rawInput);
+      const c = await owned(u, inputData.target, "candidate");
       if (inputData.templateId) {
         const template2 = await owned(u, inputData.templateId, "template");
         if (template2.version !== inputData.templateVersion) fail(409, "\uD15C\uD50C\uB9BF\uC774 \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4. \uBC1C\uC1A1 \uC804 \uBAA9\uB85D\uC744 \uC0C8\uB85C\uACE0\uCE68\uD558\uC138\uC694.");
@@ -2531,7 +2712,10 @@ Deno.serve(async (req) => {
           async (d2) => (await owned(u, d2.brand, "candidate")).name
         )
       );
-      const subject = render(inputData.subject, c, deals, brandNames), body = mailContent(render(inputData.body, c, deals, brandNames), inputData.signature, settings, inputData.channel === "email", inputData.marketing);
+      const subject = render(inputData.subject, c, deals, brandNames), baseBody = mailContent(render(inputData.body, c, deals, brandNames), inputData.signature, settings, inputData.channel === "email", inputData.marketing);
+      const notice = await emailTracking.withNotice(u, { ...inputData, trackingRequested: rawInput.trackingRequested }, baseBody, c.kind === "\uD06C\uB9AC\uC5D0\uC774\uD130" ? "creator" : "brand");
+      inputData = { ...inputData, ...notice.input };
+      const body = notice.body;
       if (/\{\{/.test(subject + body)) fail(400, "\uBBF8\uD574\uACB0 \uBCC0\uC218\uAC00 \uC788\uC2B5\uB2C8\uB2E4.");
       if (/치료|예방|완치|항암|효능.{0,4}보장|혈당.{0,5}(낮|개선)/.test(
         subject + body
@@ -2540,7 +2724,7 @@ Deno.serve(async (req) => {
       if (inputData.marketing && inputData.channel === "email" && !subject.startsWith("(\uAD11\uACE0)"))
         fail(400, "\uAD11\uACE0\uC131 \uC774\uBA54\uC77C \uC81C\uBAA9\uC740 (\uAD11\uACE0)\uB85C \uC2DC\uC791\uD574\uC57C \uD569\uB2C8\uB2E4.");
       if (inputData.attachments.reduce(
-        (n, a) => n + Buffer3.from(a.content, "base64").length,
+        (n, a) => n + Buffer4.from(a.content, "base64").length,
         0
       ) > 5 * 1024 * 1024)
         fail(400, "\uCCA8\uBD80 \uD569\uACC4\uB294 5MB \uC774\uD558\uC785\uB2C8\uB2E4.");
@@ -2572,8 +2756,10 @@ Deno.serve(async (req) => {
           fail(403, "24\uC2DC\uAC04 \uBA54\uC2DC\uC9D5 \uC2DC\uAC04\uC774 \uB9CC\uB8CC\uB410\uC2B5\uB2C8\uB2E4.");
       } else if (inputData.channel === "instagram")
         fail(403, "\uC2E0\uADDC \uC120\uC81C DM\uC740 \uC9C0\uC6D0\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+      const tracking = await emailTracking.preview(u, { ...inputData, body }, c.kind === "\uD06C\uB9AC\uC5D0\uC774\uD130" ? "creator" : "brand");
       const d = {
         ...inputData,
+        tracking,
         ...reply,
         subject,
         body,
@@ -2590,7 +2776,7 @@ Deno.serve(async (req) => {
         messageId: uuid(),
         attachmentSummary: inputData.attachments.map((a) => ({
           name: a.name,
-          size: Buffer3.from(a.content, "base64").length
+          size: Buffer4.from(a.content, "base64").length
         }))
       }, hash2 = await digest(JSON.stringify(d));
       if (inputData.channel === "email" && (await query(sb.from("sanji_suppression").select("identity").eq("owner", u).in("identity", mailRecipients(d).flatMap((e) => [e, "email:" + e])).limit(1))).length) fail(403, "\uD68C\uC2E0 \uC8FC\uC18C\uAC00 \uC218\uC2E0 \uAC70\uBD80 \uBAA9\uB85D\uC5D0 \uC788\uC2B5\uB2C8\uB2E4.");
@@ -2610,6 +2796,7 @@ Deno.serve(async (req) => {
           email: d.email,
           emails: d.emails,
           replyRecipientNeedsReview: d.replyRecipientNeedsReview,
+          tracking,
           channel: d.channel,
           accountUsername: d.accountUsername,
           subject,

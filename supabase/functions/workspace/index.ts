@@ -1,5 +1,7 @@
+import {gmailSyncService} from "../_shared/gmail-sync.ts";
 import { creatorDiscoveryService } from "../_shared/creator-discovery.ts";
 import {drainApprovedJobs} from "../_shared/job-batch.ts";
+import { emailTrackingService } from "../_shared/email-tracking.ts";
 import { discoveryCompletionNotifier } from "../_shared/discovery-notification.ts";
 import { mailContent } from "../_shared/mail-content.ts";
 import { mailRecipients } from "../_shared/mail-recipients.ts";
@@ -141,6 +143,7 @@ async function saveConnection(u: string, p: string, data: any) {
     ),
   );
 }
+const emailTracking=emailTrackingService({sb,query,env,audit,baseUrl:env("SUPABASE_URL")+"/functions/v1/"+(env("WORKSPACE_FUNCTION_NAME")||"bright-function")});
 const notifyOwner = discoveryCompletionNotifier({sb,query,gmailToken,remote,audit,env});
 const creatorDiscovery = creatorDiscoveryService({sb,query,audit,env});
 const discovery = discoveryService({sb,query,connection,saveConnection,env,audit,putRecord,notifyOwner});
@@ -538,6 +541,8 @@ async function sendDraft(u: string, draftId: string, b: any, jobId?: string) {
     fail(500, "발송 예약 결과가 없습니다. 실제 전송하지 않았습니다.");
   let response: any = {},
     status = "manual_recorded";
+  const tracked=await emailTracking.prepare(u,out.id,d,gmail?.email||"");
+  try{await query(sb.from("sanji_outbox").update({data:{...out.data,trackingResult:tracked.summary}}).eq("id",out.id).eq("owner",u));}catch{/* Tracking metadata is optional; approved sending continues. */}
   try {
     if (d.channel === "email") {
       response = await remote(
@@ -549,7 +554,7 @@ async function sendDraft(u: string, draftId: string, b: any, jobId?: string) {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            raw: mime(d, gmail.email),
+            raw: mime(tracked.draft, gmail.email),
             ...(d.providerThread ? { threadId: d.providerThread } : {}),
           }),
         },
@@ -600,6 +605,7 @@ async function sendDraft(u: string, draftId: string, b: any, jobId?: string) {
     t.messages.push({
       id: response.id || out.id,
       messageId: `<${d.messageId}@sanji.local>`,
+      outboxId:out.id,
       out: true,
       text: d.body,
       at: now(),
@@ -633,6 +639,8 @@ async function sendDraft(u: string, draftId: string, b: any, jobId?: string) {
         .update({
           status: rejected ? "provider_rejected" : "outcome_unknown",
           data: {
+            ...out.data,
+            trackingResult:tracked.summary,
             subject: d.subject,
             targetName: d.targetName,
             error: rejected
@@ -663,6 +671,7 @@ async function runJobs(req: Request) {
   let different = 0;
   for (let i = 0; i < a.length; i++) different |= a[i] ^ b[i];
   if (different) fail(401, "작업 실행 권한 없음");
+  try{await query(sb.rpc("sanji_purge_email_tracking"));}catch{/* Optional tracking cleanup must not block business dispatch. */}
   return json(await drainApprovedJobs(async()=>{const response=await runScheduledJob();return await response.json();}));
 }
 async function runScheduledJob(){
@@ -718,10 +727,13 @@ async function runScheduledJob(){
     });
   }
 }
+const gmailSync=gmailSyncService({sb,query,records,putRecord,gmailToken,remote,textBody,gmailHasAttachments});
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url),
     { path, base } = functionRoute(req.url, env("SUPABASE_URL"));
   try {
+    const image=path.match(/^\/email-events\/pixel\/([^/]+)\.gif$/);
+    if(image)return await emailTracking.pixel(req,image[1]);
     if (req.headers.get("origin") && req.headers.get("origin") !== origin)
       fail(403, "허용되지 않은 출처");
     if (req.method === "OPTIONS")
@@ -742,6 +754,11 @@ Deno.serve(async (req: Request) => {
     if(path === "/creator-discovery/tick" && req.method === "POST"){
       if(!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403,"발굴 실행기 인증 실패");
       return json(await creatorDiscovery.scheduled());
+    }
+    if(path==="/gmail/tick"&&req.method==="POST"){
+      if(!env("DISCOVERY_RUNNER_TOKEN")||req.headers.get("x-job-token")!==env("DISCOVERY_RUNNER_TOKEN"))fail(403,"회신 동기화 실행기 인증 실패");
+      const owners=await query(sb.from("sanji_connections").select("owner").eq("provider","gmail").limit(5));
+      return json({results:await Promise.all(owners.map((c:any)=>gmailSync.sync(c.owner)))});
     }
     if (path === "/jobs/run" && req.method === "POST")
       return await runJobs(req);
@@ -767,6 +784,7 @@ Deno.serve(async (req: Request) => {
         fail(413, "요청 크기 초과");
       return text ? JSON.parse(text) : {};
     };
+    if(path==="/email-tracking"||path.startsWith("/email-tracking/"))return json(await emailTracking.handle(path,req.method,u,input,url.searchParams));
     if(path === "/creator-discovery" || path.startsWith("/creator-discovery/")){
       try{return json(await creatorDiscovery.handle(path,req.method,u,input));}catch(e){fail(400,String(e.message||"크리에이터 발굴 실패"));}
     }
@@ -1062,127 +1080,12 @@ Deno.serve(async (req: Request) => {
       await putRecord(u, "thread", { ...t, target: c.id }, t.id);
       return json({ ok: true });
     }
-    if (path === "/gmail/sync" && req.method === "POST") {
-      const g = await gmailToken(u),
-        headers = { Authorization: "Bearer " + g.access_token },
-        targets = (await records(u, "candidate")).filter(
-          (c: any) => c.contact.email,
-        );
-      let imported = 0,
-        partial = targets.length > 30;
-      for (const c of targets.slice(0, 30)) {
-        const r = await remote(
-          "https://gmail.googleapis.com/gmail/v1/users/me/threads?" +
-            new URLSearchParams({
-              q: `{${mailRecipients({emails:c.recipientEmails,email:c.contact.email}).flatMap(e=>["from:"+e,"to:"+e]).join(" ")}} newer_than:90d`,
-              maxResults: "20",
-            }),
-          { headers },
-        );
-        if (r.nextPageToken) partial = true;
-        for (const entry of r.threads || []) {
-          const remoteThread = await remote(
-            "https://gmail.googleapis.com/gmail/v1/users/me/threads/" +
-              encodeURIComponent(entry.id) +
-              "?format=full",
-            { headers },
-          );
-          const messages = remoteThread.messages
-            .map((m: any) => {
-              const h = Object.fromEntries(
-                (m.payload.headers || []).map((h: any) => [
-                  h.name.toLowerCase(),
-                  h.value,
-                ]),
-              );
-              return {
-                id: m.id,
-                messageId: h["message-id"] || "",
-                references: h.references || "",
-                subject: h.subject || "",
-                from: h.from || "",
-                replyToHeader: h["reply-to"] || "",
-                replyAddress: singleMailbox(h["reply-to"] || h.from || ""),
-                out: singleMailbox(h.from || "").toLowerCase() === g.email.toLowerCase(),
-                text: textBody(m.payload) || m.snippet || "[본문 미지원]",
-                hasAttachments: gmailHasAttachments(m.payload),
-                at: new Date(Number(m.internalDate)).toISOString(),
-                automatic:
-                  (!!h["auto-submitted"] && h["auto-submitted"] !== "no") ||
-                  /auto_reply|auto-replied|bulk/i.test(h.precedence || ""),
-              };
-            })
-            .sort((a: any, b: any) => a.at.localeCompare(b.at));
-          const old = (await records(u, "thread")).find(
-              (t: any) => t.providerId === entry.id && t.channel === "email",
-            ),
-            inbound = messages.filter((m: any) => !m.out),
-            optout = inbound.some(
-              (m: any) =>
-                !m.automatic &&
-                /수신\s*거부(합니다|할게|해\s*주세요|요청합니다)|^\s*수신\s*거부[.!]?\s*$|unsubscribe\s+me|please\s+(unsubscribe|stop)|연락.{0,8}(중단해|그만해|하지\s*마)/im.test(
-                  m.text,
-                ),
-            );
-          await putRecord(
-            u,
-            "thread",
-            {
-              ...old,
-              target: c.id,
-              channel: "email",
-              providerId: entry.id,
-              subject: messages[0]?.subject || "(제목 없음)",
-              owner: old?.owner || "",
-              next: old?.next || "",
-              due: old?.due || "",
-              classification: optout
-                ? "수신 거부"
-                : old?.classification ||
-                  (inbound.length && inbound.every((m: any) => m.automatic)
-                    ? "자동 응답"
-                    : "미분류"),
-              messages,
-              synced: now(),
-            },
-            old?.id,
-          );
-          if (optout) {
-            for (const identity of identities(c))
-              await query(
-                sb.from("sanji_suppression").upsert(
-                  {
-                    owner: u,
-                    identity,
-                    reason: "수신 메일의 수신 거부 요청",
-                  },
-                  { onConflict: "owner,identity" },
-                ),
-              );
-            await putRecord(
-              u,
-              "candidate",
-              { ...(await owned(u, c.id, "candidate")), status: "수신 거부" },
-              c.id,
-            );
-          } else if (
-            inbound.length &&
-            !["거절", "수신 거부"].includes(c.status)
-          )
-            await putRecord(
-              u,
-              "candidate",
-              { ...(await owned(u, c.id, "candidate")), status: "회신" },
-              c.id,
-            );
-          imported++;
-        }
-      }
-      await audit(u, "gmail_synced", { imported });
-      return json({ imported, partial });
-    }
+    if(path==="/gmail/sync"&&req.method==="POST")return json(await gmailSync.sync(u));
+    if(path==="/gmail/sync-status"&&req.method==="GET")return json(await query(sb.from("sanji_gmail_sync").select("last_checked,cursor,result").eq("owner",u).maybeSingle())||{});
     if (path === "/drafts" && req.method === "POST") {
-      const inputData = draftSchema.parse(await input()),
+      const rawInput=await input();
+      let inputData = draftSchema.parse(rawInput);
+      const
         c = await owned(u, inputData.target, "candidate");
       if(inputData.templateId){const template=await owned(u,inputData.templateId,"template");if(template.version!==inputData.templateVersion)fail(409,"템플릿이 변경됐습니다. 발송 전 목록을 새로고침하세요.");}
       if (await isBlocked(u, c)) fail(403, "거절·수신 거부 대상");
@@ -1212,7 +1115,9 @@ Deno.serve(async (req: Request) => {
         ),
       );
       const subject = render(inputData.subject, c, deals, brandNames),
-        body = mailContent(render(inputData.body,c,deals,brandNames),inputData.signature,settings,inputData.channel==="email",inputData.marketing);
+        baseBody = mailContent(render(inputData.body,c,deals,brandNames),inputData.signature,settings,inputData.channel==="email",inputData.marketing);
+      const notice=await emailTracking.withNotice(u,{...inputData,trackingRequested:rawInput.trackingRequested},baseBody,c.kind==="크리에이터"?"creator":"brand");
+      inputData={...inputData,...notice.input};const body=notice.body;
       if (/\{\{/.test(subject + body)) fail(400, "미해결 변수가 있습니다.");
       if (
         /치료|예방|완치|항암|효능.{0,4}보장|혈당.{0,5}(낮|개선)/.test(
@@ -1262,8 +1167,10 @@ Deno.serve(async (req: Request) => {
           fail(403, "24시간 메시징 시간이 만료됐습니다.");
       } else if (inputData.channel === "instagram")
         fail(403, "신규 선제 DM은 지원하지 않습니다.");
+      const tracking=await emailTracking.preview(u,{...inputData,body},c.kind==="크리에이터"?"creator":"brand");
       const d = {
           ...inputData,
+          tracking,
           ...reply,
           subject,
           body,
@@ -1305,6 +1212,7 @@ Deno.serve(async (req: Request) => {
           email: d.email,
           emails: d.emails,
           replyRecipientNeedsReview:d.replyRecipientNeedsReview,
+          tracking,
           channel: d.channel,
           accountUsername: d.accountUsername,
           subject,
