@@ -1,3 +1,4 @@
+import {recipientDelivery} from "./recipient-delivery.ts";
 import { Buffer } from "node:buffer";
 import { mailRecipients } from "./mail-recipients.ts";
 export const trackingLimitNotice="열람 추정은 사람의 실제 열람 확인이 아닙니다. Apple Mail 사전 로딩, 이미지 프록시·보안 시스템, 이미지 차단·캐시·전달에 영향을 받습니다. 감지 없음은 미열람·수신 실패를 뜻하지 않습니다.";
@@ -74,10 +75,12 @@ export function emailTrackingService({sb,query,env,audit,baseUrl}:any){
   if(path==="/email-tracking"&&method==="GET")return {policy:await policy(owner),activationApproved:activated(),testOnly:env("EMAIL_TRACKING_TEST_ONLY")!=="false",provider:"Gmail API · 제공자 열람 웹훅 없음",campaigns:await query(sb.from("sanji_email_campaigns").select("id,name,scope,enabled,external_tracking,disclosure,basis_note,version").eq("owner",owner).order("created")),notice:trackingLimitNotice};
   const stop=path.match(/^\/email-tracking\/messages\/([0-9a-f-]{36})$/);
   if(stop&&method==="GET"){
-   const o=await query(sb.from("sanji_outbox").select("id,created").eq("id",stop[1]).eq("owner",owner).single());
+   const o=await query(sb.from("sanji_outbox").select("id,target,created,data").eq("id",stop[1]).eq("owner",owner).single());
    const report=await query(sb.rpc("sanji_email_tracking_report",{p_owner:owner,p_from:o.created,p_to:new Date(Date.parse(o.created)+1).toISOString(),p_campaign:null,p_include_automated:false,p_target:null}));
    const r=report.rows.find((r:any)=>r.id===o.id);if(!r)throw Error("메일 기록을 찾지 못했습니다.");
-   return {...r,label:trackingLabel(r),reasonLabels:(r.reasons||[]).map((code:string)=>trackingReasonLabels[code]||"근거 미확인"),notice:trackingLimitNotice};
+   const threads=await query(sb.from("sanji_records").select("data").eq("owner",owner).eq("kind","thread").eq("data->>target",o.target));
+   const delivery=recipientDelivery(mailRecipients(o.data),threads,o.created);
+   return {...r,recipientDelivery:delivery,bounce_status:delivery.some(d=>d.smtpStatus)?"주소별 반송 기록 확인 · 개별 발송 건 귀속은 추가 확인":"미확인 · 반송 없음은 전달 성공 증거 아님",label:trackingLabel(r),reasonLabels:(r.reasons||[]).map((code:string)=>trackingReasonLabels[code]||"근거 미확인"),notice:trackingLimitNotice};
   }
   if(stop&&method==="DELETE"){
    const row=await query(sb.from("sanji_outbox").select("id,data").eq("id",stop[1]).eq("owner",owner).single());

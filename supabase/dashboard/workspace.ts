@@ -91,9 +91,6 @@ function gmailSyncService({ sb: sb2, query: query2, records: records2, putRecord
   return { sync };
 }
 
-// supabase/functions/_shared/creator-discovery.ts
-import { Buffer } from "node:buffer";
-
 // supabase/functions/_shared/discovery.ts
 var marketHosts = ["coupang.com", "naver.com", "smartstore.naver.com", "gmarket.co.kr", "11st.co.kr", "auction.co.kr", "lotteon.com", "ssg.com", "tmon.co.kr", "wemakeprice.com", "danawa.com", "cafe24.com"];
 var companyIdentity = (v) => v.normalize("NFKC").toLowerCase().replace(/주식회사|\(주\)|㈜|[\s.,·()_-]/g, "");
@@ -131,7 +128,7 @@ function attribute(tag, name) {
   return match ? decodeHtml(match[1] ?? match[2] ?? match[3] ?? "") : "";
 }
 function parseOfficialPage(html, source, checked) {
-  const visible = html.replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi, " ");
+  const visible = html.replace(/<\/?(?:span|b|strong|em|i|wbr)\b[^>]*>/gi, "").replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi, " ");
   const text2 = plainHtml(visible), host = publicUrl(source).hostname.replace(/^www\./, "");
   const footerStart = visible.search(/<(?:footer\b|(?:div|section)\b[^>]*(?:id|class)\s*=\s*["'][^"']*footer)/i);
   const footerHtml = footerStart >= 0 ? visible.slice(footerStart) : "";
@@ -147,11 +144,17 @@ function parseOfficialPage(html, source, checked) {
   const blocks = visible.replace(/<\/(?:p|li|address|dd|dt|td|div)>|<br\b[^>]*>/gi, "\n").split("\n").map(plainHtml).filter(Boolean);
   const contacts = [], rejected = [];
   for (const email of emails) {
+    const escaped = email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const literal = new RegExp("(?<![a-z0-9._%+-])" + escaped + "(?![a-z0-9.-])", "i");
+    if (emails.some((other) => other.toLowerCase().startsWith(email.toLowerCase() + ".")) && !literal.test(text2)) {
+      rejected.push({ email, reason: "\uC798\uB9B0 \uC8FC\uC18C \uC811\uB450\uBD80 \xB7 \uC6D0\uBB38 \uC804\uCCB4 \uB3C4\uBA54\uC778\uACFC \uBD88\uC77C\uCE58", source });
+      continue;
+    }
     const at = text2.toLowerCase().indexOf(email.toLowerCase()), context = at < 0 ? "" : text2.slice(Math.max(0, at - 100), at + email.length + 100);
     const block = blocks.filter((v) => v.toLowerCase().includes(email.toLowerCase())).sort((a, b) => a.length - b.length)[0] || email;
     const domain = email.split("@")[1]?.toLowerCase(), ownerMatch = domain === host || host.endsWith("." + domain) || domain.endsWith("." + host);
     const unrelated = /[._-]it@/i.test(email) || /^(user|example|test|sample|noreply|no-reply|privacy|hr|recruit|recruitment|jobs|career|security|dpo|techsupport|webmaster|postmaster|hostmaster|abuse|it)@/i.test(email) || /개인정보(?:보호책임|관리|담당|\s*문의)|정보보호(?:책임|담당)|채용|인사담당/.test(block) && !/(고객센터|대표\s*(?:메일|이메일)|제휴\s*(?:문의|메일))/.test(block);
-    const platformMail = /@(coupang\.com|navercorp\.com|cafe24\.com|cafe24corp\.com|gmarket\.co\.kr|godo\.co\.kr|godomall\.com|nhn-commerce\.com|nhncommerce\.com|makeshop\.co\.kr|connectwave\.co\.kr|gabia\.com)$/i.test(email);
+    const platformMail = /@(coupang\.com|navercorp\.com|cafe24\.com|cafe24corp\.com|gmarket\.co\.kr|godo\.co\.kr|godomall\.com|nhn-commerce\.com|nhncommerce\.com|makeshop\.co\.kr|connectwave\.co\.kr|gabia\.com)$/i.test(email) && /호스팅|쇼핑몰 솔루션|통신판매중개|플랫폼 운영|전자결제|결제대행|에스크로|카페24|Cafe24|NHN커머스/i.test(block);
     if (unrelated || platformMail) {
       rejected.push({ email, reason: unrelated ? "\uC608\uC2DC\xB7\uC218\uC2E0\uBD88\uAC00\xB7\uAC1C\uC778\uC815\uBCF4\xB7\uCC44\uC6A9 \uC6A9\uB3C4" : "\uD50C\uB7AB\uD3FC \uC6B4\uC601\uC0AC \uC774\uBA54\uC77C\uC774\uBA70 \uC81C\uC548 \uB300\uC0C1 \uD68C\uC0AC\uC640 \uB2E4\uB984", source });
       continue;
@@ -178,7 +181,7 @@ function parseOfficialPage(html, source, checked) {
   const products = [];
   for (const m of visible.matchAll(/상품명\s*:\s*([\s\S]{3,300}?)(?=상품요약정보|소비자가|판매가|상품명|타임세일|$)/g)) {
     const name = plainHtml(m[1]);
-    if (name.length >= 4 && name.length <= 140) products.push({ name, quote: name });
+    if (realProductName(name) && productDetailUrl(source)) products.push({ name, quote: name, url: source, evidenceType: "product_detail_label" });
   }
   for (const m of html.matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
     try {
@@ -189,7 +192,7 @@ function parseOfficialPage(html, source, checked) {
           return;
         }
         if (typeof v !== "object") return;
-        if ([v["@type"]].flat().includes("Product") && typeof v.name === "string") products.push({ name: plainHtml(v.name), quote: plainHtml(v.name) });
+        if ([v["@type"]].flat().includes("Product") && typeof v.name === "string" && realProductName(plainHtml(v.name)) && (v.offers || productDetailUrl(source))) products.push({ name: plainHtml(v.name), quote: plainHtml(v.name), url: typeof v.url === "string" ? new URL(v.url, source).href : source, evidenceType: "structured_product", hasOffers: !!v.offers });
         if (v["@graph"]) visit(v["@graph"], depth + 1);
         if (v.itemListElement) visit(v.itemListElement, depth + 1);
         if (v.item) visit(v.item, depth + 1);
@@ -227,6 +230,130 @@ function publicHtmlRedirect(html, source) {
     return "";
   }
 }
+
+// supabase/functions/_shared/mail-integrity.ts
+var discoveryOnlyHosts = ["blog.naver.com", "post.naver.com", "tistory.com", "medium.com", "brunch.co.kr"];
+var publisherDomains = ["pharmnews.com", "inthenews.co.kr", "foodbank.co.kr", "mkhealth.co.kr", "4th.kr"];
+function permanentFailureEmails(threads = [], suppression = []) {
+  return [...new Set([...suppression.filter((s) => /영구.{0,4}반송|permanent/i.test(s.reason || "")).map((s) => String(s.identity || "").replace(/^email:/, "").toLowerCase()), ...threads.flatMap((t) => (t.data || t).messages || []).flatMap((m) => m.bounceFailures || []).filter((f) => f.kind === "permanent" && f.source === "delivery_status" && /^5\./.test(f.status || "")).map((f) => String(f.email || "").toLowerCase())].filter((e) => e.includes("@")))];
+}
+function exactEmailIn(text2, email) {
+  const escaped = email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp("(?<![a-z0-9._%+-])" + escaped + "(?![a-z0-9.-])", "i").test(text2);
+}
+function editorialSource(url2, pages = []) {
+  try {
+    const u = new URL(url2);
+    if ([...publisherDomains, ...discoveryOnlyHosts].some((h) => u.hostname === h || u.hostname.endsWith("." + h))) return true;
+    const p = pages.find((p2) => {
+      try {
+        return new URL(p2.url).hostname === u.hostname;
+      } catch {
+        return false;
+      }
+    }), text2 = [p?.title, p?.description, p?.excerpt].join(" ");
+    const editorialMarkers = text2.match(/발행인|편집인|인터넷신문|언론사고충처리/g) || [];
+    return editorialMarkers.length >= 2 || /NewsArticle|NewsMediaOrganization/.test(p?.sourceType || "") || /\/news\/article|\/articleView|\/news\/view/i.test(u.pathname) && /기자|발행인|편집인|인터넷신문|고충처리/.test(text2);
+  } catch {
+    return true;
+  }
+}
+function validBrandName(value) {
+  const s = String(value || "").trim();
+  return s.length >= 2 && s.length <= 60 && !/[\n]|…|리뉴얼 출시|라인업 공개|운영 종료|신제품.{0,30}출시|^상품 |최신 뉴스|\d+주 전/.test(s) && !/(?:신문|저널|경제|뉴스|팜뉴스|매경헬스)[\s.]*$/.test(s);
+}
+function realProductName(value) {
+  const s = String(value || "").trim();
+  return s.length >= 3 && s.length <= 100 && !/^(?:상품\s*사용후기|상품\s*후기|제품\s*구매|제품구매|전체\s*상품|모든\s*상품|상품\s*목록|상품\s*리스트|제품\s*소개|제품\s*목록|상품\s*문의|상품\s*상세|고객센터|구매\s*후기|사용\s*후기|공지사항|자유게시판|게시판|회원가입|장바구니|로그인|브랜드|쇼핑|Shop|FAQ|Q&A)(?:\s*\(?\d+\)?)?$/i.test(s) && !/(?:공식몰|쇼핑몰|헬스케어몰|제품군|협의 가능한|리뉴얼 출시|라인업 공개|운영 종료|신제품.{0,30}출시)/.test(s);
+}
+function productDetailUrl(url2) {
+  try {
+    const u = new URL(url2);
+    if (/\/board\/|\/news\/|\/magazine\/|\/category\/|\/(?:product|goods)\/(?:list|index|review)/i.test(u.pathname) || u.searchParams.has("board_no")) return false;
+    return /^\/product\/(?:detail[^/]*|[^/]+\/\d+(?:\/|$))/i.test(u.pathname) && (/product_no=\d+/.test(u.search) || /\/\d+(?:\/|$)/.test(u.pathname)) || /\/(?:vp\/products|products)\/\d+/.test(u.pathname) || /(?:goodsNo|goodsno|goods_no|goodsCd|goodsNo)=\w+/.test(u.search) && /goods|product/.test(u.pathname);
+  } catch {
+    return false;
+  }
+}
+function duplicateParagraphs(text2) {
+  const seen = /* @__PURE__ */ new Set(), duplicates = [];
+  for (const p of String(text2 || "").split(/\n\s*\n/)) {
+    const key2 = p.replace(/\s+/g, "").replace(/[.!！。]/g, "");
+    if (key2.length < 30) continue;
+    if (seen.has(key2)) duplicates.push(p);
+    seen.add(key2);
+  }
+  const requests = String(text2 || "").match(/저희가 적합한 크리에이터 후보와 채널 자료,?\s*구체적인 진행안을 정리해 제안드리겠습니다[.!]?/g) || [];
+  if (requests.length > 1) duplicates.push("\uD06C\uB9AC\uC5D0\uC774\uD130 \uD6C4\uBCF4\xB7\uCC44\uB110 \uC790\uB8CC\xB7\uC9C4\uD589\uC548 \uC81C\uACF5 \uBB38\uB2E8 \uBC18\uBCF5");
+  return duplicates;
+}
+function dedupeProposal(text2) {
+  let seen = /* @__PURE__ */ new Set();
+  let out = String(text2 || "").split(/\n\s*\n/).filter((p) => {
+    const key2 = p.replace(/\s+/g, "").replace(/[.!！。]/g, "");
+    if (key2.length < 30) return true;
+    if (seen.has(key2)) return false;
+    seen.add(key2);
+    return true;
+  }).join("\n\n");
+  for (const pattern of [/저희가 적합한 크리에이터 후보와 채널 자료,?\s*구체적인 진행안을 정리해 제안드리겠습니다[.!]?/g, /공동구매 담당자분을 편하게 연결해주시면 감사하겠습니다[.!]?/g]) {
+    let found = false;
+    out = out.replace(pattern, (s) => {
+      if (found) return "";
+      found = true;
+      return s;
+    });
+  }
+  return out.replace(/\n{3,}/g, "\n\n").trim();
+}
+function assessMailLead(lead, permanentFailures = []) {
+  const d = lead?.data || lead || {}, o = d.outreach || {}, pages = d.publicEvidence || [], brand = o.brandName || d.name || d.company || "", reasons = [], contacts = [], excluded2 = [];
+  if (!validBrandName(brand)) reasons.push("\uAC80\uC99D\uB41C \uBE0C\uB79C\uB4DC\xB7\uD68C\uC0AC\uBA85 \uB300\uC2E0 \uAE30\uC0AC \uC81C\uBAA9\xB7\uB9E4\uCCB4\uBA85\xB7\uBA54\uB274\uAC00 \uC800\uC7A5\uB428");
+  if (editorialSource(d.website, pages)) reasons.push("\uAE30\uC0AC\xB7\uC5B8\uB860\uC0AC\xB7\uC911\uAC04 \uC0AC\uC774\uD2B8\uB294 \uBC1C\uACAC \uCD9C\uCC98\uC774\uBA70 \uBE0C\uB79C\uB4DC \uC5F0\uB77D\uCC98 \uCD9C\uCC98\uAC00 \uC544\uB2D8");
+  let home;
+  try {
+    home = pages.find((p) => new URL(p.url).hostname.replace(/^www\./, "") === new URL(d.website).hostname.replace(/^www\./, "") && !/\/board\/|\/news\//.test(new URL(p.url).pathname));
+  } catch {
+  }
+  const identity = companyIdentity(brand), homeMatches = !!home && [home.title, home.description].some((v) => companyIdentity(String(v || "")).includes(identity));
+  for (const c of d.contacts || []) {
+    const email = String(c.email || "").toLowerCase(), why = [];
+    let sameHost = false;
+    try {
+      const source = new URL(c.source), site = new URL(d.website), sh = source.hostname.replace(/^www\./, ""), h = site.hostname.replace(/^www\./, "");
+      sameHost = source.protocol === "https:" && (sh === h || sh.endsWith("." + h) && c.linkedFrom && new URL(c.linkedFrom).hostname.replace(/^www\./, "") === h);
+    } catch {
+    }
+    if (c.excluded || c.excludeFromOutreach) why.push("\uC774\uBBF8 \uC81C\uC678\uB41C \uC8FC\uC18C");
+    if (permanentFailures.includes(email)) why.push("\uC0AC\uC6A9\uC790 \uD655\uC778 \uC601\uAD6C \uBC18\uC1A1 \uC8FC\uC18C \xB7 \uC8FC\uC18C \uB2E8\uC704 \uC81C\uC678");
+    if (editorialSource(c.source, pages)) why.push("\uC5B8\uB860\uC0AC\xB7\uAE30\uC790\xB7\uC911\uAC04 \uC0AC\uC774\uD2B8 \uC5F0\uB77D\uCC98");
+    if (/^(?:privacy|recruit|career|jobs|dpo|postmaster|noreply)(?:[._-]|$)/i.test(email.split("@")[0]) || /개인정보.{0,10}(?:담당|책임|관리)|고충처리|기자\s*(?:메일|이메일)|취재\s*문의|보도자료\s*(?:문의|접수)/.test(c.context || "") && !/고객센터|대표\s*(?:메일|이메일)|제휴\s*(?:메일|문의)/.test(c.context || "")) why.push("\uAC1C\uC778\uC815\uBCF4\xB7\uC5B8\uB860 \uC804\uC6A9 \uB4F1 \uC601\uC5C5\uACFC \uBB34\uAD00\uD55C \uC6A9\uB3C4");
+    const page = pages.find((p) => p.url === c.source), posted = exactEmailIn([c.context, page?.excerpt, home?.excerpt].filter(Boolean).join(" "), email);
+    if (!Number.isFinite(Date.parse(c.checked || "")) || Date.parse(c.checked) < Date.now() - 30 * 864e5) why.push("\uC5F0\uB77D\uCC98 \uC6D0\uBB38 \uD655\uC778\uC77C \uBBF8\uAE30\uB85D\xB730\uC77C \uACBD\uACFC \xB7 \uCE90\uC2DC \uC7AC\uD655\uC778 \uD544\uC694");
+    if (!sameHost || !homeMatches || !posted) why.push("\uACF5\uC2DD \uBE0C\uB79C\uB4DC \uC0AC\uC774\uD2B8\uC758 \uD68C\uC0AC\u2013\uC774\uBA54\uC77C \uAC8C\uC2DC \uAD00\uACC4 \uD655\uC778 \uD544\uC694");
+    if (why.length) excluded2.push({ ...c, email, reasons: why });
+    else contacts.push({ ...c, email, verification: { brand, officialSite: d.website, source: c.source, checked: c.checked, method: "official_cached_publication", domainOnly: false } });
+  }
+  if (!contacts.length) reasons.push("\uACF5\uC2DD \uCD9C\uCC98\uB85C \uAD00\uACC4\uAC00 \uD655\uC778\uB41C \uC218\uC2E0 \uC774\uBA54\uC77C \uC5C6\uC74C");
+  const productName = o.productName || d.product || "", productEvidence = (o.evidence || []).find((p) => p.url && productDetailUrl(p.url));
+  const productValid = o.productSourceType !== "marketplace_search_index" && realProductName(productName) && !!productEvidence;
+  return { brand, allowed: reasons.length === 0, reasons, contacts, excluded: excluded2, product: { name: productValid ? productName : "", source: productValid ? productEvidence.url : "", valid: productValid, reason: productValid ? "\uC2E4\uC81C \uC0C1\uD488\uBA85\xB7\uD310\uB9E4 \uC0C1\uC138 \uCD9C\uCC98" : "\uBA54\uB274\xB7\uAC8C\uC2DC\uD310\xB7\uAE30\uC0AC \uC81C\uBAA9 \uB610\uB294 \uC2E4\uC81C \uC0C1\uD488 \uD310\uB9E4 \uCD9C\uCC98 \uBBF8\uD655\uC778" }, draftMode: productValid ? "product" : "brand_first" };
+}
+function assessDispatch(d, c, lead, failures = [], replyAddresses = []) {
+  const check = assessMailLead(lead || { ...c, website: c.website, contacts: [{ ...c.contact, email: c.contact?.email, context: c.contact?.context || "" }], publicEvidence: c.officialEvidence || [] }, failures), reasons = [...check.reasons];
+  const recipients = (d.emails?.length ? d.emails : [d.email]).map((e) => String(e).toLowerCase()), allowed = /* @__PURE__ */ new Set([...check.contacts.map((c2) => c2.email), ...check.allowed ? replyAddresses : []]);
+  if (recipients.some((e) => !allowed.has(e))) reasons.push("\uC2B9\uC778 \uCD08\uC548 \uC218\uC2E0\uC790\uC5D0 \uD68C\uC0AC \uAD00\uACC4 \uBBF8\uAC80\uC99D\xB7\uBC18\uC1A1\xB7\uC81C\uC678 \uC8FC\uC18C \uD3EC\uD568");
+  if (!validBrandName(d.targetName || c.name)) reasons.push("\uC778\uC0AC\uB9D0 \uB300\uC0C1 \uBE0C\uB79C\uB4DC\xB7\uD68C\uC0AC\uBA85 \uBBF8\uAC80\uC99D");
+  if (duplicateParagraphs(d.body).length) reasons.push("\uBCF8\uBB38 \uBB38\uB2E8\xB7\uD06C\uB9AC\uC5D0\uC774\uD130 \uC790\uB8CC \uC81C\uACF5 \uC548\uB0B4 \uC911\uBCF5");
+  const productNames = [...String(d.body || "").matchAll(/[‘']([^’'\n]+)[’']\s*제품/g)].map((m) => m[1]);
+  if (productNames.some((p) => !realProductName(p) || !check.product.valid || companyIdentity(p) !== companyIdentity(check.product.name))) reasons.push("\uBCF8\uBB38\uC5D0 \uBA54\uB274\xB7\uAC8C\uC2DC\uD310\uBA85\uC774 \uC0C1\uD488\uBA85\uC73C\uB85C \uD3EC\uD568\uB428");
+  const greeting = /^안녕하세요[,!]?\s*(.+?)\s*담당자님[.!]?/m.exec(String(d.body || ""));
+  if (greeting && companyIdentity(greeting[1]) !== companyIdentity(check.brand)) reasons.push("\uC778\uC0AC\uB9D0 \uC774\uB984\uACFC \uAC80\uC99D\uB41C \uBE0C\uB79C\uB4DC\xB7\uD68C\uC0AC\uBA85 \uBD88\uC77C\uCE58");
+  return { ...check, allowed: reasons.length === 0, reasons };
+}
+
+// supabase/functions/_shared/creator-discovery.ts
+import { Buffer } from "node:buffer";
 
 // supabase/functions/_shared/discovery-search.ts
 var excluded = /(^|\.)(google\.[a-z.]+|naver\.com|navercorp\.com|bing\.com|duckduckgo\.com|youtube\.com|instagram\.com|facebook\.com|coupang\.com|daum\.net|tistory\.com|wikipedia\.org|wikidata\.org|microsoft\.com)$/i;
@@ -431,6 +558,15 @@ async function drainApprovedJobs(processOne, maxJobs = 10, budgetMs = 45e3) {
   return { processed: results.length, results };
 }
 
+// supabase/functions/_shared/recipient-delivery.ts
+function recipientDelivery(recipients, threads, created) {
+  return recipients.map((email) => {
+    const events = threads.flatMap((t) => (t.data || t).messages || []).filter((m) => !m.out && Date.parse(m.at) >= Date.parse(created)).flatMap((m) => (m.bounceFailures || []).filter((f) => f.email?.toLowerCase() === email.toLowerCase() && f.kind === "permanent" && f.source === "delivery_status").map((f) => ({ ...f, providerMessageId: m.id, at: m.at })));
+    const latest = events.sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
+    return { email, status: latest ? "\uD574\uB2F9 \uC8FC\uC18C \uC601\uAD6C \uBC18\uC1A1 \uAE30\uB85D" : "\uC804\uB2EC \uC5EC\uBD80 \uBBF8\uD655\uC778", ...latest ? { smtpStatus: latest.status, source: latest.source, providerMessageId: latest.providerMessageId, at: latest.at } : {}, exactMessageAttribution: false, notice: "\uC8FC\uC18C\uBCC4 \uAE30\uB85D\uC774\uBA70 \uAC19\uC740 \uC8FC\uC18C\uC758 \uC5EC\uB7EC \uBC1C\uC1A1 \uC911 \uC5B4\uB290 \uAC74\uC778\uC9C0 \uC9C1\uC811 \uADC0\uC18D\uC740 \uBCC4\uB3C4 \uD655\uC778. \uBC18\uC1A1 \uC5C6\uC74C\uC740 \uC804\uB2EC \uC131\uACF5\uC758 \uC99D\uAC70\uAC00 \uC544\uB2D9\uB2C8\uB2E4." };
+  });
+}
+
 // supabase/functions/_shared/email-tracking.ts
 import { Buffer as Buffer2 } from "node:buffer";
 
@@ -529,11 +665,13 @@ function emailTrackingService({ sb: sb2, query: query2, env: env2, audit: audit2
     if (path === "/email-tracking" && method === "GET") return { policy: await policy(owner), activationApproved: activated(), testOnly: env2("EMAIL_TRACKING_TEST_ONLY") !== "false", provider: "Gmail API \xB7 \uC81C\uACF5\uC790 \uC5F4\uB78C \uC6F9\uD6C5 \uC5C6\uC74C", campaigns: await query2(sb2.from("sanji_email_campaigns").select("id,name,scope,enabled,external_tracking,disclosure,basis_note,version").eq("owner", owner).order("created")), notice: trackingLimitNotice };
     const stop = path.match(/^\/email-tracking\/messages\/([0-9a-f-]{36})$/);
     if (stop && method === "GET") {
-      const o = await query2(sb2.from("sanji_outbox").select("id,created").eq("id", stop[1]).eq("owner", owner).single());
+      const o = await query2(sb2.from("sanji_outbox").select("id,target,created,data").eq("id", stop[1]).eq("owner", owner).single());
       const report = await query2(sb2.rpc("sanji_email_tracking_report", { p_owner: owner, p_from: o.created, p_to: new Date(Date.parse(o.created) + 1).toISOString(), p_campaign: null, p_include_automated: false, p_target: null }));
       const r = report.rows.find((r2) => r2.id === o.id);
       if (!r) throw Error("\uBA54\uC77C \uAE30\uB85D\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
-      return { ...r, label: trackingLabel(r), reasonLabels: (r.reasons || []).map((code) => trackingReasonLabels[code] || "\uADFC\uAC70 \uBBF8\uD655\uC778"), notice: trackingLimitNotice };
+      const threads = await query2(sb2.from("sanji_records").select("data").eq("owner", owner).eq("kind", "thread").eq("data->>target", o.target));
+      const delivery = recipientDelivery(mailRecipients(o.data), threads, o.created);
+      return { ...r, recipientDelivery: delivery, bounce_status: delivery.some((d) => d.smtpStatus) ? "\uC8FC\uC18C\uBCC4 \uBC18\uC1A1 \uAE30\uB85D \uD655\uC778 \xB7 \uAC1C\uBCC4 \uBC1C\uC1A1 \uAC74 \uADC0\uC18D\uC740 \uCD94\uAC00 \uD655\uC778" : "\uBBF8\uD655\uC778 \xB7 \uBC18\uC1A1 \uC5C6\uC74C\uC740 \uC804\uB2EC \uC131\uACF5 \uC99D\uAC70 \uC544\uB2D8", label: trackingLabel(r), reasonLabels: (r.reasons || []).map((code) => trackingReasonLabels[code] || "\uADFC\uAC70 \uBBF8\uD655\uC778"), notice: trackingLimitNotice };
     }
     if (stop && method === "DELETE") {
       const row = await query2(sb2.from("sanji_outbox").select("id,data").eq("id", stop[1]).eq("owner", owner).single());
@@ -793,11 +931,11 @@ function renderLeadText(text2, brand, product, intro = "") {
 function leadOutreach(template2, lead, time = (/* @__PURE__ */ new Date()).toISOString()) {
   const old = lead.outreach || {}, brand = old.brandName || lead.name || lead.company || "\uC5C5\uCCB4", product = old.productName || lead.product || "\uACF5\uB3D9\uAD6C\uB9E4 \uD611\uC758 \uAC00\uB2A5\uD55C \uC0C1\uD488", intro = template2.data.copyFlow === "product_interest_v1" && old.proposalType !== "manufacturer_supply" ? productInterestIntro(product, old.intro || "") : old.intro || "";
   const readyIntro = intro || "\uADC0\uC0AC\uC758 \uBE0C\uB79C\uB4DC\uC640 \uD06C\uB9AC\uC5D0\uC774\uD130 \uACF5\uB3D9\uAD6C\uB9E4 \uD611\uC5C5\uC744 \uC9C4\uD589\uD574\uBCF4\uACE0 \uC2F6\uC2B5\uB2C8\uB2E4. \uACF5\uB3D9\uAD6C\uB9E4 \uB2F4\uB2F9\uC790\uBD84\uC744 \uD3B8\uD558\uAC8C \uC5F0\uACB0\uD574\uC8FC\uC2DC\uBA74 \uAC10\uC0AC\uD558\uACA0\uC2B5\uB2C8\uB2E4. \uC800\uD76C\uAC00 \uC801\uD569\uD55C \uD06C\uB9AC\uC5D0\uC774\uD130 \uD6C4\uBCF4\uC640 \uCC44\uB110 \uC790\uB8CC, \uAD6C\uCCB4\uC801\uC778 \uC9C4\uD589\uC548\uC744 \uC815\uB9AC\uD574 \uC81C\uC548\uB4DC\uB9AC\uACA0\uC2B5\uB2C8\uB2E4.";
-  return { ...old, brandName: brand, companyName: brand, productName: product, intro: readyIntro, draftMode: intro ? old.draftMode || "product" : "brand_first", subject: renderLeadText(template2.data.subject, brand, product), body: renderLeadText(template2.data.body, brand, product, readyIntro), signature: renderLeadText(template2.data.signature, brand, product), templateId: template2.id, templateVersion: template2.version, templateUpdated: template2.updated, approved: false, needsPersonalization: false, updated: time };
+  return { ...old, brandName: brand, companyName: brand, productName: product, intro: readyIntro, draftMode: intro ? old.draftMode || "product" : "brand_first", subject: renderLeadText(template2.data.subject, brand, product), body: dedupeProposal(renderLeadText(template2.data.body, brand, product, readyIntro)), signature: renderLeadText(template2.data.signature, brand, product), templateId: template2.id, templateVersion: template2.version, templateUpdated: template2.updated, approved: false, needsPersonalization: false, updated: time };
 }
 function productInterestIntro(product, intro) {
   const name = String(product || "").replace(/\s*\((?:단품|단일상품)\)\s*/g, "").trim();
-  if (!name || name === "\uACF5\uB3D9\uAD6C\uB9E4 \uD611\uC758 \uAC00\uB2A5\uD55C \uC0C1\uD488") return "";
+  if (!realProductName(name) || name === "\uACF5\uB3D9\uAD6C\uB9E4 \uD611\uC758 \uAC00\uB2A5\uD55C \uC0C1\uD488") return "";
   if (String(intro).startsWith("\uADC0\uC0AC\uC758 \u2018")) return intro;
   const lines = String(intro || "").split(/\n+/).map((s) => s.trim()).filter(Boolean);
   const idea = lines.filter((s) => !/^공식(?:몰| 제품| 홈페이지| 사이트)/.test(s)).join(" ").replace(/푸드·라이프스타일/g, "\uB77C\uC774\uD504\uC2A4\uD0C0\uC77C").replace(/공동구매를 제안드리고 싶습니다\./g, "\uACF5\uB3D9\uAD6C\uB9E4\uB97C \uC9C4\uD589\uD574\uBCF4\uACE0 \uC2F6\uC2B5\uB2C8\uB2E4.");
@@ -807,7 +945,7 @@ function productInterestIntro(product, intro) {
 // supabase/functions/_shared/brand-research.ts
 var concreteProductName = (s) => {
   const t = String(s || "").trim();
-  return t.length >= 3 && !/제품군|완제품|협의 가능한|제안 가능|공식몰|쇼핑몰|헬스케어몰|라이프 솔루션|^SHOP$|^공식몰 특가$|가을맞이|Big 세일|브랜드 페스타|최근.*상품|진심을 담은 커피/i.test(t);
+  return realProductName(t) && !/제품군|완제품|협의 가능한|제안 가능|공식몰|쇼핑몰|헬스케어몰|라이프 솔루션|^SHOP$|^공식몰 특가$|가을맞이|Big 세일|브랜드 페스타|최근.*상품|진심을 담은 커피/i.test(t);
 };
 var nonFoodProduct = (s) => /마스크|세럼|토너|샴푸|딥 마스크|선크림|바디로션|나이트크림|에센셜 오일|클로라겐 선/.test(String(s || ""));
 var unsafe = /치료|예방|항암|완치|혈당|혈압|면역력|체지방|다이어트|키성장|키 성장|통증|개선|효능|효과|질병|성기능|발기/;
@@ -826,11 +964,11 @@ function researchBrand(lead, template2, checked = (/* @__PURE__ */ new Date()).t
   const device = /저주파|의료기기|안마기|마사지기|전기자극/.test(pageText) && !/건강기능식품|유산균|비타민|견과/.test(pageText);
   const candidates = [];
   for (const p of pages) {
-    for (const product2 of p.products || []) candidates.push({ name: clean(product2.name), quote: product2.quote || product2.name, url: p.url });
+    for (const product2 of p.products || []) candidates.push({ name: clean(product2.name), quote: product2.quote || product2.name, url: product2.url || p.url, evidenceType: product2.evidenceType });
     for (const m of String(p.excerpt || "").matchAll(/상품명\s*:\s*(.{3,140}?)(?=상품요약정보|소비자가|판매가|상품명|타임세일|$)/g)) candidates.push({ name: clean(m[1]), quote: m[0], url: p.url });
-    if (/\/product\/(?:detail|[^/]+)|[?&](?:product_no|goodsNo)=/i.test(p.url)) candidates.push({ name: clean(String(p.title || "").split(/\s+-\s+/)[0]), quote: p.title, url: p.url });
+    if (productDetailUrl(p.url)) candidates.push({ name: clean(String(p.title || "").split(/\s+-\s+/)[0]), quote: p.title, url: p.url });
   }
-  let product = candidates.find((p) => concreteProductName(p.name) && p.name.length <= 95 && !unsafe.test(p.name) && !/(로그인|쿠폰|배송비|판매가|공식몰|쇼핑몰|헬스케어몰)/.test(p.name));
+  let product = candidates.find((p) => concreteProductName(p.name) && productDetailUrl(p.url) && p.name.length <= 95 && !unsafe.test(p.name) && !/(로그인|쿠폰|배송비|판매가|공식몰|쇼핑몰|헬스케어몰)/.test(p.name));
   if (!product) {
     for (const p of pages) {
       const text2 = [p.title, p.description, p.excerpt].join(" ");
@@ -842,7 +980,7 @@ function researchBrand(lead, template2, checked = (/* @__PURE__ */ new Date()).t
     }
   }
   if (!product || !concreteProductName(product.name)) {
-    const external = (lead.marketProductEvidence || []).find((p) => p.url && p.checked && concreteProductName(p.name) && !nonFoodProduct(p.name) && !unsafe.test(p.name));
+    const external = (lead.marketProductEvidence || []).find((p) => p.sourceType === "marketplace_product_page" && p.url && p.checked && productDetailUrl(p.url) && concreteProductName(p.name) && !nonFoodProduct(p.name) && !unsafe.test(p.name));
     if (external) product = { ...external, external: true };
   }
   const oldName = String(lead.name || "");
@@ -866,7 +1004,7 @@ function researchBrand(lead, template2, checked = (/* @__PURE__ */ new Date()).t
   });
   const ownershipSupported = contactEvidence.length > 0 && contactEvidence.every((c) => c.supported);
   const research = { checked, method: "official_page_evidence", ownership: ownershipSupported ? "source_supported" : "research_pending", contactEvidence, product: product?.name || "", productSource: product?.url || "", reason: device ? "\uD655\uC778\uB41C \uC0AC\uC774\uD2B8\uB294 \uC2DD\uD488\uC774 \uC544\uB2CC \uAE30\uAE30 \uC5C5\uCCB4\uC785\uB2C8\uB2E4. \uB3D9\uBA85 \uC2DD\uD488 \uBE0C\uB79C\uB4DC\uB97C \uC790\uB3D9 \uC7AC\uAC80\uC0C9\uD569\uB2C8\uB2E4." : !food2 ? "\uACF5\uC2DD \uD398\uC774\uC9C0\uC5D0\uC11C \uC2DD\uD488 \uC0C1\uD488 \uADFC\uAC70\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4." : !product ? "\uACF5\uC2DD \uD398\uC774\uC9C0\uC5D0\uC11C \uD2B9\uC815 \uC0C1\uD488\uBA85\uC744 \uCD94\uAC00 \uD655\uC778 \uC911\uC785\uB2C8\uB2E4." : !ownershipSupported ? "\uC81C\uC548 \uBE0C\uB79C\uB4DC\uC640 \uC774\uBA54\uC77C\uC774 \uAC8C\uC2DC\uB41C \uD68C\uC0AC\uC758 \uC5F0\uACB0 \uADFC\uAC70\uB97C \uCD94\uAC00 \uC870\uC0AC \uC911\uC785\uB2C8\uB2E4." : "\uACF5\uC2DD \uD398\uC774\uC9C0\uC758 \uBE0C\uB79C\uB4DC\xB7\uC0C1\uD488\xB7\uC774\uBA54\uC77C \uAC8C\uC2DC \uCD9C\uCC98 \uB300\uC870 \uC644\uB8CC" };
-  if (old.draftMode !== "brand_first" && old.intro && !old.needsPersonalization && !old.sendBlockedReason && (!old.productName || concreteProductName(old.productName)) && !nonFoodProduct(old.productName)) {
+  if (old.productSourceType !== "marketplace_search_index" && (!old.productName || realProductName(old.productName)) && old.draftMode !== "brand_first" && old.intro && !old.needsPersonalization && !old.sendBlockedReason && (!old.productName || concreteProductName(old.productName)) && !nonFoodProduct(old.productName)) {
     const kept = { ...old };
     if (old.personalizationRevision === 3 && old.brandName && old.brandName !== brand) {
       for (const k of ["subject", "body", "signature"]) if (typeof kept[k] === "string") kept[k] = kept[k].split(old.brandName).join(brand);
@@ -888,6 +1026,7 @@ function researchBrand(lead, template2, checked = (/* @__PURE__ */ new Date()).t
   const intro = (product.external ? product.sourceType === "marketplace_search_index" ? "\uACF5\uAC1C \uD310\uB9E4 \uD398\uC774\uC9C0 \uAC80\uC0C9 \uACB0\uACFC\uC5D0 \u2018" + product.name + "\u2019\uC774 \uAC8C\uC2DC\uB418\uC5B4 \uC788\uC5B4 \uACF5\uB3D9\uAD6C\uB9E4 \uD611\uC5C5\uC744 \uAC80\uD1A0\uD558\uACE0 \uC2F6\uC2B5\uB2C8\uB2E4." : "\uACF5\uAC1C \uD310\uB9E4 \uD398\uC774\uC9C0\uC5D0\uC11C \u2018" + product.name + "\u2019 \uC0C1\uD488\uBA85\uC744 \uD655\uC778\uD588\uC2B5\uB2C8\uB2E4." : "\uACF5\uC2DD\uBAB0\uC5D0\uC11C \u2018" + product.name + "\u2019" + (product.name.endsWith("\uC81C\uD488\uAD70") ? "\uC744 \uD655\uC778\uD588\uC2B5\uB2C8\uB2E4." : "\uC758 \uC0C1\uD488 \uAD6C\uC131\uC744 \uD655\uC778\uD588\uC2B5\uB2C8\uB2E4.")) + "\n" + idea;
   const updated = { ...lead, name: brand, outreach: { ...old, brandName: brand, companyName: brand, productName: product.name, intro, evidence: [{ url: product.url, description: product.external ? "\uC678\uBD80 \uD310\uB9E4\uCC98 \uC0C1\uD488\uBA85 \xB7 " + product.uncertainty : "\uACF5\uC2DD \uC0C1\uD488\uBA85\xB7\uAD6C\uC131", quote: product.quote, checked }], draftMode: "product", productSourceType: product.external ? product.sourceType : "official", uncertainty: product.external ? product.uncertainty : old.uncertainty || "", personalizationRevision: 3, personalizationUpdated: checked, personalizationMethod: "\uACF5\uAC1C \uADFC\uAC70 \uAE30\uBC18 \uC790\uB3D9 \uC791\uC131", needsPersonalization: false, researchStatus: ownershipSupported ? "completed" : "pending", researchReason: research.reason } };
   const outreach = template2 ? leadOutreach(template2, updated, checked) : updated.outreach;
+  outreach.body = dedupeProposal(outreach.body);
   return { research, outreach };
 }
 
@@ -1214,15 +1353,34 @@ function discoveryService(deps) {
           if (!data.website) throw Error("\uD648\uD398\uC774\uC9C0 \uD6C4\uBCF4 \uC8FC\uC18C\uAC00 \uC5C6\uC5B4 \uC218\uC9D1\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
           data.crawlStarted = (/* @__PURE__ */ new Date()).toISOString();
           await query2(sb2.from("sanji_discovery_leads").update({ data, updated: data.crawlStarted }).eq("owner", u).eq("id", lead.id));
+          if (editorialSource(data.website, data.publicEvidence || []) || !validBrandName(data.name)) {
+            const discoverySource = data.searchResultUrl || data.website, claim = String(data.name || "").split(/[,，]/)[0].trim();
+            data.discoverySource = discoverySource;
+            data.brandClaim = claim;
+            data.contacts = [];
+            if (!validBrandName(claim)) throw Error("\uAE30\uC0AC\xB7\uC911\uAC04 \uC0AC\uC774\uD2B8\uB294 \uD6C4\uBCF4 \uBC1C\uACAC \uC804\uC6A9 \xB7 \uACF5\uC2DD \uBE0C\uB79C\uB4DC\xB7\uC0AC\uC774\uD2B8 \uD655\uC778 \uD544\uC694");
+            const queryText = claim + " \uACF5\uC2DD \uD648\uD398\uC774\uC9C0", search = searchUrl("Naver", queryText), r = await publicFetch(search, 2e6);
+            const options = searchResults(r.text, search, queryText).filter((p) => !editorialSource(p.website) && companyIdentity(p.name).includes(companyIdentity(claim)));
+            if (!options.length) throw Error("\uAE30\uC0AC\uC5D0\uC11C \uBC1C\uACAC\uD55C \uBE0C\uB79C\uB4DC\uC758 \uACF5\uC2DD \uC0AC\uC774\uD2B8\uB97C \uD655\uC778\uD558\uC9C0 \uBABB\uD568 \xB7 \uAE30\uC0AC \uC774\uBA54\uC77C\uC740 \uC800\uC7A5\xB7\uBC1C\uC1A1\uD558\uC9C0 \uC54A\uC74C");
+            data.website = options[0].website;
+            data.name = claim;
+            data.officialLookup = { source: search, checked: (/* @__PURE__ */ new Date()).toISOString() };
+          }
           const priorContacts = data.contacts || [];
           const crawled = await crawl(data.website);
           Object.assign(data, crawled);
           data.contacts = Array.from(new Map([...priorContacts, ...crawled.contacts].map((c) => [c.email.toLowerCase(), c])).values());
           if (crawled.error) error = crawled.error;
+          const sourceThreads = await query2(sb2.from("sanji_records").select("data").eq("owner", u).eq("kind", "thread"));
+          const contactReview = assessMailLead(data, permanentFailureEmails(sourceThreads, await query2(sb2.from("sanji_suppression").select("identity,reason").eq("owner", u)))), invalid = new Map(contactReview.excluded.map((c) => [c.email, c.reasons]));
+          data.integrityReview = { allowed: contactReview.allowed, reasons: contactReview.reasons, checked: (/* @__PURE__ */ new Date()).toISOString() };
+          data.contacts = data.contacts.map((c) => invalid.has(c.email.toLowerCase()) ? { ...c, excluded: true, excludeFromOutreach: true, exclusionReason: invalid.get(c.email.toLowerCase()) } : c);
+          if (!contactReview.allowed) data.outreach = { ...data.outreach, sendBlockedReason: "\uAC80\uD1A0 \uB300\uAE30: " + contactReview.reasons.join(" / ") };
+          else if (data.outreach?.sendBlockedReason?.startsWith("\uAC80\uD1A0 \uB300\uAE30:")) data.outreach = { ...data.outreach, sendBlockedReason: "" };
           const previous = await query2(sb2.from("sanji_discovery_leads").select("id,data").eq("owner", u));
           const known = new Set(previous.filter((r) => r.id !== lead.id).flatMap((r) => (r.data.contacts || []).map((c) => c.email.toLowerCase())));
           duplicate = !priorContacts.length && data.contacts.some((c) => known.has(c.email.toLowerCase()));
-          emails = duplicate ? 0 : data.contacts.filter((c) => !known.has(c.email.toLowerCase()) && !priorContacts.some((p) => p.email.toLowerCase() === c.email.toLowerCase())).length;
+          emails = duplicate ? 0 : data.contacts.filter((c) => !c.excluded && !c.excludeFromOutreach && !known.has(c.email.toLowerCase()) && !priorContacts.some((p) => p.email.toLowerCase() === c.email.toLowerCase())).length;
           companies = !duplicate && !priorContacts.length && emails > 0 ? 1 : 0;
           if (duplicate) {
             data.duplicateNote = "\uAE30\uC874 \uC5C5\uCCB4\uC640 \uC774\uBA54\uC77C \uC911\uBCF5 \xB7 \uBCC4\uB3C4 \uC2E0\uADDC \uC81C\uC548 \uCC28\uB2E8";
@@ -1379,7 +1537,14 @@ function discoveryService(deps) {
       const labels = { paused: "\uC790\uB3D9 \uC218\uC9D1 \uAEBC\uC9D0", target_reached: "\uC624\uB298 \uC2E0\uADDC \uC5C5\uCCB4 \uBAA9\uD45C \uB3C4\uB2EC", daily_limit: "\uC624\uB298 \uC2E4\uD589 \uD55C\uB3C4 \uB3C4\uB2EC", sources_exhausted: settings.enabled ? "\uD6C4\uBCF4 \uB300\uAE30\uC5F4 \uC18C\uC9C4 \xB7 \uAC80\uC0C9 \uBCF4\uCDA9 \uB300\uAE30" : "\uB300\uAE30\uC5F4 \uC18C\uC9C4 \xB7 \uC2E0\uADDC \uC18C\uC2A4 \uBCF4\uAC15 \uD544\uC694", running: "\uD648\uD398\uC774\uC9C0 \uACF5\uAC1C \uC774\uBA54\uC77C \uD655\uC778 \uC911", queued: "\uD648\uD398\uC774\uC9C0 \uD6C4\uBCF4 \uC21C\uCC28 \uC218\uC9D1 \uB300\uAE30 \xB7 5\uBD84 \uAC04\uACA9" };
       const activity = leads.filter((l) => l.status !== "new").sort((a, b2) => Date.parse(b2.updated) - Date.parse(a.updated)).slice(0, 12).map((l) => ({ id: l.id, name: l.data.name, checked: l.data.checked || l.updated, emailCount: l.data.contacts?.length || 0, pages: l.data.pages || 0, error: l.data.error || "" }));
       const notification = await query2(sb2.from("sanji_discovery_notifications").select("day,status,created,updated,error").eq("owner", u).eq("day", day()).maybeSingle());
-      return { settings, notification: notification || null, leads, usage: today, history, health: discoveryHealth(settings, today, leads), configured: false, engine: { status, label: labels[status], pending: pending.length, current: active ? pending[0]?.data.name || "" : "", heartbeat: settings.updated, lastCompleted: activity[0]?.checked || null, mode: "public_sources_and_homepages", refreshAt: "00:00", timezone: "Asia/Seoul", sourceState: settings.source_state || {}, searchState: settings.search_state || {}, nextRun: settings.enabled && pending.length && (today.companies || 0) < settings.target && today.calls < 240 ? new Date(Math.ceil((Date.now() + 1e3) / 3e5) * 3e5).toISOString() : null }, activity, scope: "\uD55C\uAD6D\uC2DC\uAC04 \uC624\uB298 \xB7 \uC774\uBA54\uC77C \uD655\uBCF4 \uC2E0\uADDC \uC5C5\uCCB4 / \uC774\uBA54\uC77C \uC8FC\uC18C \uC218 \uBCC4\uB3C4 \xB7 \uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804", llmCalls: 0 };
+      const integrityThreads = await query2(sb2.from("sanji_records").select("data").eq("owner", u).eq("kind", "thread")), failed = permanentFailureEmails(integrityThreads, await query2(sb2.from("sanji_suppression").select("identity,reason").eq("owner", u)));
+      const reviewed = leads.map((l) => {
+        const check = assessMailLead(l, failed), o = l.data.outreach || {}, dispatch = o.body ? assessDispatch({ targetName: check.brand, emails: check.contacts.map((c) => c.email), body: o.body }, { name: check.brand }, l, failed) : check;
+        const exclusions = new Map(check.excluded.map((c) => [c.email, c.reasons]));
+        return { ...l, mailReview: dispatch, data: { ...l.data, contacts: (l.data.contacts || []).map((c) => exclusions.has(c.email.toLowerCase()) ? { ...c, excluded: true, excludeFromOutreach: true, exclusionReason: exclusions.get(c.email.toLowerCase()) } : c), outreach: { ...o, ...!dispatch.allowed ? { sendBlockedReason: "\uAC80\uD1A0 \uB300\uAE30: " + dispatch.reasons.join(" / ") } : {} } } };
+      });
+      const integritySummary = { checked: reviewed.length, passed: reviewed.filter((l) => l.mailReview.allowed).length, review: reviewed.filter((l) => !l.mailReview.allowed).length };
+      return { settings, notification: notification || null, leads: reviewed, integritySummary, usage: today, history, health: discoveryHealth(settings, today, reviewed), configured: false, engine: { status, label: labels[status], pending: pending.length, current: active ? pending[0]?.data.name || "" : "", heartbeat: settings.updated, lastCompleted: activity[0]?.checked || null, mode: "public_sources_and_homepages", refreshAt: "00:00", timezone: "Asia/Seoul", sourceState: settings.source_state || {}, searchState: settings.search_state || {}, nextRun: settings.enabled && pending.length && (today.companies || 0) < settings.target && today.calls < 240 ? new Date(Math.ceil((Date.now() + 1e3) / 3e5) * 3e5).toISOString() : null }, activity, scope: "\uD55C\uAD6D\uC2DC\uAC04 \uC624\uB298 \xB7 \uC774\uBA54\uC77C \uD655\uBCF4 \uC2E0\uADDC \uC5C5\uCCB4 / \uC774\uBA54\uC77C \uC8FC\uC18C \uC218 \uBCC4\uB3C4 \xB7 \uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804", llmCalls: 0 };
     }
     const b = await input();
     if (path === "/discovery/refresh" && method === "POST") return await refreshSources(u) || { status: "already_checked", message: "\uC624\uB298 \uC678\uBD80 \uBAA9\uB85D\uC744 \uD655\uC778\uD588\uC2B5\uB2C8\uB2E4. \uB9E4\uC77C \uD55C\uAD6D\uC2DC\uAC04 00:00\uC5D0 \uC0C8 \uD6C4\uBCF4\uB97C \uD655\uC778\uD569\uB2C8\uB2E4." };
@@ -1426,15 +1591,19 @@ function discoveryService(deps) {
     if ((path === "/discovery/import" || path === "/discovery/prepare-contact") && method === "POST") {
       const lead = await query2(sb2.from("sanji_discovery_leads").select("*").eq("owner", u).eq("id", b.id).single());
       if (lead.data.outreach?.sendBlockedReason) throw Error(lead.data.outreach.sendBlockedReason);
+      const failureThreads = await query2(sb2.from("sanji_records").select("data").eq("owner", u).eq("kind", "thread"));
+      const integrity = assessMailLead(lead, permanentFailureEmails(failureThreads, await query2(sb2.from("sanji_suppression").select("identity,reason").eq("owner", u))));
+      if (!integrity.allowed) throw Error("\uAC80\uD1A0 \uB300\uAE30: " + integrity.reasons.join(" / "));
       if (b.expectedCopy) {
         const o = lead.data.outreach || {}, v = b.expectedCopy;
         if (v.subject !== o.subject || v.body !== o.body || v.signature !== o.signature || v.templateVersion && v.templateVersion !== o.templateVersion) throw Error("\uCD08\uC548\uC774 \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4. \uBAA9\uB85D\uC744 \uC0C8\uB85C\uACE0\uCE68\uD558\uACE0 \uB0B4\uC6A9\uC744 \uD655\uC778\uD55C \uB4A4 \uBCF4\uB0B4\uC138\uC694.");
       }
       if (lead.status === "blocked") throw Error("\uC911\uBCF5\xB7\uCC28\uB2E8\uB41C \uC5C5\uCCB4\uC785\uB2C8\uB2E4. \uAE30\uC874 \uC5F0\uB77D \uC774\uB825\uC744 \uD655\uC778\uD558\uC138\uC694.");
-      const eligible = (lead.data.contacts || []).filter((c2) => !c2.excluded && !c2.excludeFromOutreach);
-      const selected = eligible.find((c2) => c2.email === b.email) || eligible[0];
+      const eligible = integrity.contacts;
+      if (b.email && !eligible.some((c2) => c2.email.toLowerCase() === String(b.email).toLowerCase())) throw Error("\uC120\uD0DD\uD55C \uC8FC\uC18C\uB294 \uAC80\uC99D \uBBF8\uD1B5\uACFC\xB7\uBC18\uC1A1\xB7\uC81C\uC678 \uB300\uC0C1\uC785\uB2C8\uB2E4. \uB2E4\uB978 \uC8FC\uC18C\uB85C \uC790\uB3D9 \uB300\uCCB4\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+      const selected = eligible.find((c2) => c2.email.toLowerCase() === String(b.email || "").toLowerCase()) || eligible[0];
       const company = String(lead.data.outreach?.brandName || lead.data.name || lead.data.company || b.company || "").trim().slice(0, 200);
-      const emails = mailRecipients({ emails: (lead.data.contacts || []).filter((e) => !e.excluded && !e.excludeFromOutreach).map((e) => e.email) });
+      const emails = mailRecipients({ emails: eligible.map((e) => e.email) });
       if (selected) {
         const source = String(b.source || selected.source || "").trim();
         if (source) selected.source = publicUrl(source).toString();
@@ -1443,7 +1612,7 @@ function discoveryService(deps) {
       if (!b.approved || !selected || !company) throw Error("\uD68C\uC0AC\xB7\uC774\uBA54\uC77C \uC18C\uC720 \uAD00\uACC4\xB7\uC0AC\uC5C5\uC6A9 \uC6A9\uB3C4\uB97C \uD655\uC778\uD558\uACE0 \uC2B9\uC778\uD558\uC138\uC694.");
       const key2 = companyIdentity(lead.data.company || company), existing = await query2(sb2.from("sanji_records").select("id,data,version").eq("owner", u).eq("kind", "candidate"));
       const previous = existing.find((r) => r.id === lead.data.candidateId || (r.data.companyKey || companyIdentity(r.data.legalCompanyName || r.data.company || "")) === key2 || emails.includes(r.data.contact?.email?.toLowerCase()));
-      const c = { name: company, company, legalCompanyName: lead.data.company || "", recipientEmails: emails, companyKey: key2, kind: "\uBE0C\uB79C\uB4DC", product: String(lead.data.product || "").slice(0, 200), category: "\uBBF8\uD655\uC778", classification: "\uAC1C\uBCC4 \uC81C\uD488\uC758 \uBC95\uC801 \uBD84\uB958 \uD655\uC778 \uD544\uC694", authority: "\uBE0C\uB79C\uB4DC\xB7\uBC95\uC778 \uC18C\uC720 \uAD00\uACC4 \uD655\uC778, \uD574\uB2F9 \uC81C\uD488 \uD310\uB9E4\xB7\uC720\uD1B5 \uAD8C\uD55C\uC740 \uBCC4\uB3C4 \uD655\uC778 \uD544\uC694", website: lead.data.website, channels: lead.data.channel || "", contact: { email: selected.email, owner: company, source: selected.source, checked: selected.checked.slice(0, 10), purpose: selected.purpose === "\uC0AC\uC5C5 \uC81C\uD734" ? "\uC0AC\uC5C5 \uC81C\uD734" : "\uBE44\uC988\uB2C8\uC2A4", verified: true }, handle: "", profile: "", agency: "", topics: [], followers: null, metricsSource: "", metricsChecked: "", evidence: [{ url: selected.source, checked: selected.checked.slice(0, 10), description: selected.context }], reason: "\uACF5\uC2DD \uC0AC\uC774\uD2B8\uC758 \uACF5\uAC1C \uD68C\uC0AC \uC774\uBA54\uC77C\uC744 \uC9C1\uC811 \uAC80\uD1A0\xB7\uC2B9\uC778\uD568. \uC81C\uD488\xB7\uC870\uAC74\uC740 \uBBF8\uD655\uC778.", status: "\uBBF8\uC811\uCD09", note: "\uC774\uBA54\uC77C \uC6A9\uB3C4: " + selected.purpose + " / \uBC1C\uAD74 \uCD9C\uCC98: " + lead.data.source, next: "\uC0C1\uD488\xB7\uBC95\uC801 \uBD84\uB958\uC640 \uC81C\uC548 \uADFC\uAC70 \uD655\uC778", due: "", owner: "" };
+      const c = { name: company, company, legalCompanyName: lead.data.company || "", recipientEmails: emails, companyKey: key2, kind: "\uBE0C\uB79C\uB4DC", product: String(lead.data.product || "").slice(0, 200), category: "\uBBF8\uD655\uC778", classification: "\uAC1C\uBCC4 \uC81C\uD488\uC758 \uBC95\uC801 \uBD84\uB958 \uD655\uC778 \uD544\uC694", authority: "\uBE0C\uB79C\uB4DC\xB7\uBC95\uC778 \uC18C\uC720 \uAD00\uACC4 \uD655\uC778, \uD574\uB2F9 \uC81C\uD488 \uD310\uB9E4\xB7\uC720\uD1B5 \uAD8C\uD55C\uC740 \uBCC4\uB3C4 \uD655\uC778 \uD544\uC694", website: lead.data.website, channels: lead.data.channel || "", contact: { email: selected.email, owner: company, source: selected.source, checked: selected.checked.slice(0, 10), purpose: selected.purpose === "\uC0AC\uC5C5 \uC81C\uD734" ? "\uC0AC\uC5C5 \uC81C\uD734" : "\uBE44\uC988\uB2C8\uC2A4", verified: true, verification: selected.verification }, handle: "", profile: "", agency: "", topics: [], followers: null, metricsSource: "", metricsChecked: "", evidence: [{ url: selected.source, checked: selected.checked.slice(0, 10), description: selected.context }], reason: "\uACF5\uC2DD \uC0AC\uC774\uD2B8\uC758 \uD68C\uC0AC\u2013\uC774\uBA54\uC77C \uAC8C\uC2DC \uADFC\uAC70\uB97C \uADDC\uCE59\uC73C\uB85C \uB300\uC870\uD558\uACE0 \uC0AC\uC6A9\uC790\uAC00 \uC218\uC2E0\uC790\xB7\uCE74\uD53C\uB97C \uC2B9\uC778\uD568. \uACF5\uAE09 \uC870\uAC74\uC740 \uBBF8\uD655\uC778.", status: "\uBBF8\uC811\uCD09", note: "\uC774\uBA54\uC77C \uC6A9\uB3C4: " + selected.purpose + " / \uBC1C\uAD74 \uCD9C\uCC98: " + lead.data.source, next: "\uC0C1\uD488\xB7\uBC95\uC801 \uBD84\uB958\uC640 \uC81C\uC548 \uADFC\uAC70 \uD655\uC778", due: "", owner: "" };
       c.product = String(lead.data.outreach?.productName || c.product || "").slice(0, 200);
       const saved = await putRecord2(u, "candidate", previous ? { ...previous.data, ...c, status: previous.data.status, version: previous.version } : c, previous?.id);
       await query2(sb2.from("sanji_discovery_leads").update({ status: "imported", data: { ...lead.data, candidateId: saved.id }, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", u).eq("id", lead.id));
@@ -2145,6 +2314,24 @@ async function callback(req, url2, provider, base) {
   await audit(row.owner, "oauth_connected", { provider });
   return Response.redirect(frontend + "#settings", 302);
 }
+async function assertBrandMail(owner, d) {
+  if (d.channel !== "email") return;
+  const c = await owned(owner, d.target, "candidate");
+  if (c.kind === "\uD06C\uB9AC\uC5D0\uC774\uD130") return;
+  const leads = await query(sb.from("sanji_discovery_leads").select("data").eq("owner", owner).eq("data->>candidateId", c.id).limit(1));
+  const threads = await query(sb.from("sanji_records").select("data").eq("owner", owner).eq("kind", "thread"));
+  const exclusions = await query(sb.from("sanji_suppression").select("identity,reason").eq("owner", owner));
+  const failed = permanentFailureEmails(threads, exclusions), replyAddresses = [];
+  if (d.replyTo) {
+    const t = await owned(owner, d.replyTo, "thread"), last = t.messages.filter((m) => !m.out).at(-1);
+    if (t.target === c.id && t.channel === "email" && t.providerId === d.providerThread && t.synced && last && !last.automatic) {
+      const recipient = replyRecipient(last, c.contact?.email);
+      if (!failed.includes(recipient.email.toLowerCase())) replyAddresses.push(recipient.email.toLowerCase());
+    }
+  }
+  const review = assessDispatch(d, c, leads[0], failed, replyAddresses);
+  if (!review.allowed) fail(409, "\uAC80\uD1A0 \uB300\uAE30: " + review.reasons.join(" / "));
+}
 async function sendDraft(u, draftId, b, jobId) {
   if (!b.approved || typeof b.hash !== "string") fail(400, "\uCD5C\uC885 \uC2B9\uC778 \uD544\uC694");
   const row = await query(
@@ -2178,6 +2365,7 @@ async function sendDraft(u, draftId, b, jobId) {
     fail(403, "\uAD00\uB9AC\uC790\uAC00 \uC2E4\uC81C \uBC1C\uC1A1\uC744 \uC544\uC9C1 \uD5C8\uC6A9\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
   if (d.channel === "manual_dm" && !b.manuallySent)
     fail(400, "\uC9C1\uC811 \uBC1C\uC1A1 \uC644\uB8CC \uACB0\uACFC\uB9CC \uAE30\uB85D\uD558\uC138\uC694.");
+  await assertBrandMail(u, d);
   let gmail, ig;
   if (d.channel === "email") {
     if ((await query(sb.from("sanji_suppression").select("identity").eq("owner", u).in("identity", mailRecipients(d).flatMap((e) => [e, "email:" + e])).limit(1))).length) fail(403, "\uD68C\uC2E0 \uC8FC\uC18C\uAC00 \uC218\uC2E0 \uAC70\uBD80 \uBAA9\uB85D\uC5D0 \uC788\uC2B5\uB2C8\uB2E4.");
@@ -2351,7 +2539,7 @@ async function runScheduledJob() {
     const uncertain = !(e instanceof HttpError) || e.status >= 500;
     await query(
       sb.from("sanji_jobs").update({
-        status: uncertain ? "outcome_unknown" : "failed",
+        status: e instanceof HttpError && e.message.startsWith("\uAC80\uD1A0 \uB300\uAE30:") ? "review_pending" : uncertain ? "outcome_unknown" : "failed",
         result: {
           error: e instanceof HttpError ? e.message : "\uACB0\uACFC \uD655\uC778 \uD544\uC694. \uC790\uB3D9 \uC7AC\uC2DC\uB3C4 \uC5C6\uC74C"
         }
@@ -2360,7 +2548,7 @@ async function runScheduledJob() {
     return json({
       processed: 1,
       job: job.id,
-      status: uncertain ? "outcome_unknown" : "failed"
+      status: e instanceof HttpError && e.message.startsWith("\uAC80\uD1A0 \uB300\uAE30:") ? "review_pending" : uncertain ? "outcome_unknown" : "failed"
     });
   }
 }
@@ -2513,6 +2701,9 @@ Deno.serve(async (req) => {
           403,
           "\uC2E4\uC81C \uC774\uBA54\uC77C \uBC1C\uC1A1\uC774 \uBE44\uD65C\uC131\uC785\uB2C8\uB2E4. \uACC4\uC815 \uC5F0\uACB0\uACFC \uBC1C\uC1A1 \uD65C\uC131\uD654 \uD6C4 \uC608\uC57D\uD558\uC138\uC694."
         );
+      const scheduledPreview = await query(sb.from("sanji_drafts").select("data").eq("owner", u).eq("id", b.draftId).maybeSingle());
+      if (!scheduledPreview) fail(409, "\uC608\uC57D\uD560 \uCD08\uC548\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+      await assertBrandMail(u, scheduledPreview.data);
       await gmailToken(u);
       const time = new Date(b.runAt);
       if (!Number.isFinite(time.getTime()))
@@ -2695,7 +2886,7 @@ Deno.serve(async (req) => {
         const template2 = await owned(u, inputData.templateId, "template");
         if (template2.version !== inputData.templateVersion) fail(409, "\uD15C\uD50C\uB9BF\uC774 \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4. \uBC1C\uC1A1 \uC804 \uBAA9\uB85D\uC744 \uC0C8\uB85C\uACE0\uCE68\uD558\uC138\uC694.");
       }
-      if (await isBlocked(u, c)) fail(403, "\uAC70\uC808\xB7\uC218\uC2E0 \uAC70\uBD80 \uB300\uC0C1");
+      if (await isBlocked(u, inputData.channel === "email" ? { ...c, recipientEmails: [], contact: { ...c.contact, email: "" } } : c)) fail(403, "\uAC70\uC808\xB7\uC218\uC2E0 \uAC70\uBD80 \uB300\uC0C1");
       if (inputData.channel === "email" && (!c.contact.verified || !c.contact.email))
         fail(400, "\uACF5\uC2DD \uC5F0\uB77D\uCC98 \uD655\uC778\uC774 \uD544\uC694\uD569\uB2C8\uB2E4.");
       const deals = await Promise.all(
@@ -2781,6 +2972,7 @@ Deno.serve(async (req) => {
         }))
       }, hash2 = await digest(JSON.stringify(d));
       if (inputData.channel === "email" && (await query(sb.from("sanji_suppression").select("identity").eq("owner", u).in("identity", mailRecipients(d).flatMap((e) => [e, "email:" + e])).limit(1))).length) fail(403, "\uD68C\uC2E0 \uC8FC\uC18C\uAC00 \uC218\uC2E0 \uAC70\uBD80 \uBAA9\uB85D\uC5D0 \uC788\uC2B5\uB2C8\uB2E4.");
+      await assertBrandMail(u, d);
       const stored = await query(
         sb.from("sanji_drafts").insert({
           owner: u,

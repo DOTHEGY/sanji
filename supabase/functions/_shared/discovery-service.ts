@@ -1,3 +1,4 @@
+import {assessMailLead,assessDispatch,editorialSource,validBrandName,permanentFailureEmails} from "./mail-integrity.ts";
 import {searchProduct} from "./product-search.ts";
 import { researchBrand } from "./brand-research.ts";
 import { discoveryHealth } from "./discovery-health.ts";
@@ -151,16 +152,32 @@ export function discoveryService(deps:any){
      if(!data.website)throw Error("홈페이지 후보 주소가 없어 수집하지 못했습니다.");
      data.crawlStarted=new Date().toISOString();
      await query(sb.from("sanji_discovery_leads").update({data,updated:data.crawlStarted}).eq("owner",u).eq("id",lead.id));
+     if(editorialSource(data.website,data.publicEvidence||[])||!validBrandName(data.name)){
+      const discoverySource=data.searchResultUrl||data.website,claim=String(data.name||"").split(/[,，]/)[0].trim();
+      data.discoverySource=discoverySource;data.brandClaim=claim;data.contacts=[];
+      if(!validBrandName(claim))throw Error("기사·중간 사이트는 후보 발견 전용 · 공식 브랜드·사이트 확인 필요");
+      const queryText=claim+" 공식 홈페이지",search=searchUrl("Naver",queryText),r=await publicFetch(search,2000000);
+      const options=searchResults(r.text,search,queryText).filter((p:any)=>!editorialSource(p.website)&&companyIdentity(p.name).includes(companyIdentity(claim)));
+      if(!options.length)throw Error("기사에서 발견한 브랜드의 공식 사이트를 확인하지 못함 · 기사 이메일은 저장·발송하지 않음");
+      data.website=options[0].website;data.name=claim;data.officialLookup={source:search,checked:new Date().toISOString()};
+     }
      const priorContacts=data.contacts||[];
      const crawled=await crawl(data.website);
      Object.assign(data,crawled);
      data.contacts=Array.from(new Map([...priorContacts,...crawled.contacts].map((c:any)=>[c.email.toLowerCase(),c])).values());
      if(crawled.error)error=crawled.error;
+     const sourceThreads=await query(sb.from("sanji_records").select("data").eq("owner",u).eq("kind","thread"));
+     const contactReview=assessMailLead(data,permanentFailureEmails(sourceThreads,await query(sb.from("sanji_suppression").select("identity,reason").eq("owner",u)))),invalid=new Map(contactReview.excluded.map((c:any)=>[c.email,c.reasons]));
+     data.integrityReview={allowed:contactReview.allowed,reasons:contactReview.reasons,checked:new Date().toISOString()};
+     data.contacts=data.contacts.map((c:any)=>invalid.has(c.email.toLowerCase())?{...c,excluded:true,excludeFromOutreach:true,exclusionReason:invalid.get(c.email.toLowerCase())}:c);
+     if(!contactReview.allowed)data.outreach={...data.outreach,sendBlockedReason:"검토 대기: "+contactReview.reasons.join(" / ")};
+     else if(data.outreach?.sendBlockedReason?.startsWith("검토 대기:"))data.outreach={...data.outreach,sendBlockedReason:""};
+
      // Count each public business email once across the entire workspace.
      const previous=await query(sb.from("sanji_discovery_leads").select("id,data").eq("owner",u));
      const known=new Set(previous.filter((r:any)=>r.id!==lead.id).flatMap((r:any)=>(r.data.contacts||[]).map((c:any)=>c.email.toLowerCase())));
      duplicate=!priorContacts.length&&data.contacts.some((c:any)=>known.has(c.email.toLowerCase()));
-     emails=duplicate?0:data.contacts.filter((c:any)=>!known.has(c.email.toLowerCase())&&!priorContacts.some((p:any)=>p.email.toLowerCase()===c.email.toLowerCase())).length;
+     emails=duplicate?0:data.contacts.filter((c:any)=>!c.excluded&&!c.excludeFromOutreach&&!known.has(c.email.toLowerCase())&&!priorContacts.some((p:any)=>p.email.toLowerCase()===c.email.toLowerCase())).length;
      companies=!duplicate&&!priorContacts.length&&emails>0?1:0;
      if(duplicate){data.duplicateNote="기존 업체와 이메일 중복 · 별도 신규 제안 차단";}
      if(companies){data.firstEmailAt=data.firstEmailAt||new Date().toISOString();data.discoveredDay=day();const ts=await query(sb.from("sanji_records").select("id,data,version,updated").eq("owner",u).eq("kind","template").order("updated",{ascending:true}).limit(20));const t=ts.find((t:any)=>t.data.channel==="이메일");if(t){const researched=researchBrand(data,t);data.outreach=researched.outreach;data.research=researched.research;}}
@@ -265,7 +282,11 @@ export function discoveryService(deps:any){
    const labels:any={paused:"자동 수집 꺼짐",target_reached:"오늘 신규 업체 목표 도달",daily_limit:"오늘 실행 한도 도달",sources_exhausted:settings.enabled?"후보 대기열 소진 · 검색 보충 대기":"대기열 소진 · 신규 소스 보강 필요",running:"홈페이지 공개 이메일 확인 중",queued:"홈페이지 후보 순차 수집 대기 · 5분 간격"};
    const activity=leads.filter((l:any)=>l.status!=="new").sort((a:any,b:any)=>Date.parse(b.updated)-Date.parse(a.updated)).slice(0,12).map((l:any)=>({id:l.id,name:l.data.name,checked:l.data.checked||l.updated,emailCount:l.data.contacts?.length||0,pages:l.data.pages||0,error:l.data.error||""}));
    const notification=await query(sb.from("sanji_discovery_notifications").select("day,status,created,updated,error").eq("owner",u).eq("day",day()).maybeSingle());
-   return {settings,notification:notification||null,leads,usage:today,history,health:discoveryHealth(settings,today,leads),configured:false,engine:{status,label:labels[status],pending:pending.length,current:active?pending[0]?.data.name||"":"",heartbeat:settings.updated,lastCompleted:activity[0]?.checked||null,mode:"public_sources_and_homepages",refreshAt:"00:00",timezone:"Asia/Seoul",sourceState:settings.source_state||{},searchState:settings.search_state||{},nextRun:settings.enabled&&pending.length&&(today.companies||0)<settings.target&&today.calls<240?new Date(Math.ceil((Date.now()+1000)/300000)*300000).toISOString():null},activity,scope:"한국시간 오늘 · 이메일 확보 신규 업체 / 이메일 주소 수 별도 · 소유 관계 검토 전",llmCalls:0};
+   const integrityThreads=await query(sb.from("sanji_records").select("data").eq("owner",u).eq("kind","thread")),failed=permanentFailureEmails(integrityThreads,await query(sb.from("sanji_suppression").select("identity,reason").eq("owner",u)));
+   const reviewed=leads.map((l:any)=>{const check=assessMailLead(l,failed),o=l.data.outreach||{},dispatch=o.body?assessDispatch({targetName:check.brand,emails:check.contacts.map((c:any)=>c.email),body:o.body},{name:check.brand},l,failed):check;
+    const exclusions=new Map(check.excluded.map((c:any)=>[c.email,c.reasons]));return {...l,mailReview:dispatch,data:{...l.data,contacts:(l.data.contacts||[]).map((c:any)=>exclusions.has(c.email.toLowerCase())?{...c,excluded:true,excludeFromOutreach:true,exclusionReason:exclusions.get(c.email.toLowerCase())}:c),outreach:{...o,...(!dispatch.allowed?{sendBlockedReason:"검토 대기: "+dispatch.reasons.join(" / ")}: {})}}};});
+   const integritySummary={checked:reviewed.length,passed:reviewed.filter((l:any)=>l.mailReview.allowed).length,review:reviewed.filter((l:any)=>!l.mailReview.allowed).length};
+   return {settings,notification:notification||null,leads:reviewed,integritySummary,usage:today,history,health:discoveryHealth(settings,today,reviewed),configured:false,engine:{status,label:labels[status],pending:pending.length,current:active?pending[0]?.data.name||"":"",heartbeat:settings.updated,lastCompleted:activity[0]?.checked||null,mode:"public_sources_and_homepages",refreshAt:"00:00",timezone:"Asia/Seoul",sourceState:settings.source_state||{},searchState:settings.search_state||{},nextRun:settings.enabled&&pending.length&&(today.companies||0)<settings.target&&today.calls<240?new Date(Math.ceil((Date.now()+1000)/300000)*300000).toISOString():null},activity,scope:"한국시간 오늘 · 이메일 확보 신규 업체 / 이메일 주소 수 별도 · 소유 관계 검토 전",llmCalls:0};
   }
   const b=await input();
   if(path==="/discovery/refresh"&&method==="POST")return await refreshSources(u)||{status:"already_checked",message:"오늘 외부 목록을 확인했습니다. 매일 한국시간 00:00에 새 후보를 확인합니다."};
@@ -298,17 +319,20 @@ export function discoveryService(deps:any){
   if((path==="/discovery/import"||path==="/discovery/prepare-contact")&&method==="POST"){
    const lead=await query(sb.from("sanji_discovery_leads").select("*").eq("owner",u).eq("id",b.id).single());
    if(lead.data.outreach?.sendBlockedReason)throw Error(lead.data.outreach.sendBlockedReason);
+   const failureThreads=await query(sb.from("sanji_records").select("data").eq("owner",u).eq("kind","thread"));
+   const integrity=assessMailLead(lead,permanentFailureEmails(failureThreads,await query(sb.from("sanji_suppression").select("identity,reason").eq("owner",u))));if(!integrity.allowed)throw Error("검토 대기: "+integrity.reasons.join(" / "));
    if(b.expectedCopy){const o=lead.data.outreach||{},v=b.expectedCopy;if(v.subject!==o.subject||v.body!==o.body||v.signature!==o.signature||(v.templateVersion&&v.templateVersion!==o.templateVersion))throw Error("초안이 변경됐습니다. 목록을 새로고침하고 내용을 확인한 뒤 보내세요.");}
    if(lead.status==="blocked")throw Error("중복·차단된 업체입니다. 기존 연락 이력을 확인하세요.");
-   const eligible=(lead.data.contacts||[]).filter((c:any)=>!c.excluded&&!c.excludeFromOutreach);
-   const selected=eligible.find((c:any)=>c.email===b.email)||eligible[0];
+   const eligible=integrity.contacts;
+   if(b.email&&!eligible.some((c:any)=>c.email.toLowerCase()===String(b.email).toLowerCase()))throw Error("선택한 주소는 검증 미통과·반송·제외 대상입니다. 다른 주소로 자동 대체하지 않습니다.");
+   const selected=eligible.find((c:any)=>c.email.toLowerCase()===String(b.email||"").toLowerCase())||eligible[0];
    const company=String(lead.data.outreach?.brandName||lead.data.name||lead.data.company||b.company||"").trim().slice(0,200);
-   const emails=mailRecipients({emails:(lead.data.contacts||[]).filter((e:any)=>!e.excluded&&!e.excludeFromOutreach).map((e:any)=>e.email)});
+   const emails=mailRecipients({emails:eligible.map((e:any)=>e.email)});
    if(selected){const source=String(b.source||selected.source||"").trim();if(source)selected.source=publicUrl(source).toString();else if(selected.evidenceType!=="screenshot")throw Error("이메일 원문 출처를 확인하세요.");}
    if(!b.approved||!selected||!company)throw Error("회사·이메일 소유 관계·사업용 용도를 확인하고 승인하세요.");
    const key=companyIdentity(lead.data.company||company),existing=await query(sb.from("sanji_records").select("id,data,version").eq("owner",u).eq("kind","candidate"));
    const previous=existing.find((r:any)=>r.id===lead.data.candidateId||(r.data.companyKey||companyIdentity(r.data.legalCompanyName||r.data.company||""))===key||emails.includes(r.data.contact?.email?.toLowerCase()));
-   const c={name:company,company,legalCompanyName:lead.data.company||"",recipientEmails:emails,companyKey:key,kind:"브랜드",product:String(lead.data.product||"").slice(0,200),category:"미확인",classification:"개별 제품의 법적 분류 확인 필요",authority:"브랜드·법인 소유 관계 확인, 해당 제품 판매·유통 권한은 별도 확인 필요",website:lead.data.website,channels:lead.data.channel||"",contact:{email:selected.email,owner:company,source:selected.source,checked:selected.checked.slice(0,10),purpose:selected.purpose === "사업 제휴" ? "사업 제휴" : "비즈니스",verified:true},handle:"",profile:"",agency:"",topics:[],followers:null,metricsSource:"",metricsChecked:"",evidence:[{url:selected.source,checked:selected.checked.slice(0,10),description:selected.context}],reason:"공식 사이트의 공개 회사 이메일을 직접 검토·승인함. 제품·조건은 미확인.",status:"미접촉",note:"이메일 용도: "+selected.purpose+" / 발굴 출처: "+lead.data.source,next:"상품·법적 분류와 제안 근거 확인",due:"",owner:""};
+   const c={name:company,company,legalCompanyName:lead.data.company||"",recipientEmails:emails,companyKey:key,kind:"브랜드",product:String(lead.data.product||"").slice(0,200),category:"미확인",classification:"개별 제품의 법적 분류 확인 필요",authority:"브랜드·법인 소유 관계 확인, 해당 제품 판매·유통 권한은 별도 확인 필요",website:lead.data.website,channels:lead.data.channel||"",contact:{email:selected.email,owner:company,source:selected.source,checked:selected.checked.slice(0,10),purpose:selected.purpose === "사업 제휴" ? "사업 제휴" : "비즈니스",verified:true,verification:selected.verification},handle:"",profile:"",agency:"",topics:[],followers:null,metricsSource:"",metricsChecked:"",evidence:[{url:selected.source,checked:selected.checked.slice(0,10),description:selected.context}],reason:"공식 사이트의 회사–이메일 게시 근거를 규칙으로 대조하고 사용자가 수신자·카피를 승인함. 공급 조건은 미확인.",status:"미접촉",note:"이메일 용도: "+selected.purpose+" / 발굴 출처: "+lead.data.source,next:"상품·법적 분류와 제안 근거 확인",due:"",owner:""};
    c.product=String(lead.data.outreach?.productName||c.product||"").slice(0,200);
    const saved=await putRecord(u,"candidate",previous?{...previous.data,...c,status:previous.data.status,version:previous.version}:c,previous?.id);await query(sb.from("sanji_discovery_leads").update({status:"imported",data:{...lead.data,candidateId:saved.id},updated:new Date().toISOString()}).eq("owner",u).eq("id",lead.id));await audit(u,"discovery_email_approved",{lead:lead.id});return {ok:true,candidateId:saved.id,templateId:lead.data.outreach?.templateId,templateVersion:lead.data.outreach?.templateVersion};
   }

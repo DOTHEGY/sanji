@@ -10,6 +10,6 @@ test('search-index fallback remains explicitly unverified when robots prevents p
 });
 test('external product replaces a generic draft without fabricating official-source ownership',()=>{
  esbuild.buildSync({entryPoints:['supabase/functions/_shared/brand-research.ts'],bundle:true,platform:'node',format:'cjs',outfile:dir+'/brand.cjs'});const {researchBrand}=require(dir+'/brand.cjs');
- const r=researchBrand({name:'브랜드',outreach:{draftMode:'brand_first',intro:'기존 일반 소개',productName:'공동구매 협의 가능한 상품',needsPersonalization:false},marketProductEvidence:[{name:'브랜드 비타민 30정',url:'https://www.coupang.com/vp/products/123',checked:new Date().toISOString(),sourceType:'marketplace_search_index',uncertainty:'판매 페이지 원문·공급 여부 미확인'}]}, {id:'t',data:{copyFlow:'product_interest_v1',subject:'제안',body:'{{개인화}}\n내 카피',signature:'서명'}});
+ const r=researchBrand({name:'브랜드',outreach:{draftMode:'brand_first',intro:'기존 일반 소개',productName:'공동구매 협의 가능한 상품',needsPersonalization:false},marketProductEvidence:[{name:'브랜드 비타민 30정',url:'https://www.coupang.com/vp/products/123',checked:new Date().toISOString(),sourceType:'marketplace_product_page',uncertainty:'판매자 권한·공급 여부 미확인'}]}, {id:'t',data:{copyFlow:'product_interest_v1',subject:'제안',body:'{{개인화}}\n내 카피',signature:'서명'}});
  assert.equal(r.outreach.draftMode,'product');assert.match(r.outreach.body,/비타민 30정/);assert.match(r.outreach.body,/내 카피/);assert.equal(r.research.ownership,'research_pending');assert.match(r.outreach.evidence[0].description,/외부 판매처/);assert.equal(r.outreach.signature,'서명');
 });

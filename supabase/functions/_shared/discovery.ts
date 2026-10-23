@@ -1,3 +1,4 @@
+import {realProductName,productDetailUrl} from "./mail-integrity.ts";
 const marketHosts = ["coupang.com","naver.com","smartstore.naver.com","gmarket.co.kr","11st.co.kr","auction.co.kr","lotteon.com","ssg.com","tmon.co.kr","wemakeprice.com","danawa.com","cafe24.com"];
 export const companyIdentity = (v: string) => v.normalize("NFKC").toLowerCase().replace(/주식회사|\(주\)|㈜|[\s.,·()_-]/g, "");
 export function publicUrl(value: string) {
@@ -24,7 +25,7 @@ function attribute(tag:string,name:string) {
   return match?decodeHtml(match[1]??match[2]??match[3]??""):"";
 }
 export function parseOfficialPage(html: string, source: string, checked: string) {
-  const visible=html.replace(/<!--[\s\S]*?-->/g," ").replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi," ");
+  const visible=html.replace(/<\/?(?:span|b|strong|em|i|wbr)\b[^>]*>/gi,"").replace(/<!--[\s\S]*?-->/g," ").replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi," ");
   const text=plainHtml(visible),host=publicUrl(source).hostname.replace(/^www\./,"");
   const footerStart=visible.search(/<(?:footer\b|(?:div|section)\b[^>]*(?:id|class)\s*=\s*["'][^"']*footer)/i);
   const footerHtml=footerStart>=0?visible.slice(footerStart):"";
@@ -34,11 +35,15 @@ export function parseOfficialPage(html: string, source: string, checked: string)
   const blocks=visible.replace(/<\/(?:p|li|address|dd|dt|td|div)>|<br\b[^>]*>/gi,"\n").split("\n").map(plainHtml).filter(Boolean);
   const contacts:any[]=[],rejected:any[]=[];
   for(const email of emails){
+    const escaped=email.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+    const literal=new RegExp("(?<![a-z0-9._%+-])"+escaped+"(?![a-z0-9.-])","i");
+    if(emails.some(other=>other.toLowerCase().startsWith(email.toLowerCase()+"."))&&!literal.test(text)){rejected.push({email,reason:"잘린 주소 접두부 · 원문 전체 도메인과 불일치",source});continue;}
+
     const at=text.toLowerCase().indexOf(email.toLowerCase()),context=at<0?"":text.slice(Math.max(0,at-100),at+email.length+100);
     const block=blocks.filter(v=>v.toLowerCase().includes(email.toLowerCase())).sort((a,b)=>a.length-b.length)[0]||email;
     const domain=email.split("@")[1]?.toLowerCase(),ownerMatch=domain===host||host.endsWith("."+domain)||domain.endsWith("."+host);
     const unrelated=/[._-]it@/i.test(email)||/^(user|example|test|sample|noreply|no-reply|privacy|hr|recruit|recruitment|jobs|career|security|dpo|techsupport|webmaster|postmaster|hostmaster|abuse|it)@/i.test(email)||(/개인정보(?:보호책임|관리|담당|\s*문의)|정보보호(?:책임|담당)|채용|인사담당/.test(block)&&!/(고객센터|대표\s*(?:메일|이메일)|제휴\s*(?:문의|메일))/.test(block));
-    const platformMail=/@(coupang\.com|navercorp\.com|cafe24\.com|cafe24corp\.com|gmarket\.co\.kr|godo\.co\.kr|godomall\.com|nhn-commerce\.com|nhncommerce\.com|makeshop\.co\.kr|connectwave\.co\.kr|gabia\.com)$/i.test(email);
+    const platformMail=/@(coupang\.com|navercorp\.com|cafe24\.com|cafe24corp\.com|gmarket\.co\.kr|godo\.co\.kr|godomall\.com|nhn-commerce\.com|nhncommerce\.com|makeshop\.co\.kr|connectwave\.co\.kr|gabia\.com)$/i.test(email)&&/호스팅|쇼핑몰 솔루션|통신판매중개|플랫폼 운영|전자결제|결제대행|에스크로|카페24|Cafe24|NHN커머스/i.test(block);
     if(unrelated||platformMail){rejected.push({email,reason:unrelated?"예시·수신불가·개인정보·채용 용도":"플랫폼 운영사 이메일이며 제안 대상 회사와 다름",source});continue;}
     const purpose=/^(cs[0-9]*|help|support)@/i.test(email)||/고객센터|고객문의|customer|support/i.test(block)?"고객센터":/제휴|입점|도매|공동구매|영업|파트너|b2b|business|partnership/i.test(block)?"사업 제휴":"대표·일반 문의 / 세부 용도 미확인";
     contacts.push({email,source,checked,purpose,context:block.length<500?block:context,location:footerText.includes(email)?"footer":mailto.includes(email)?"mailto":"body",domainMatch:ownerMatch,ownership:ownerMatch?"도메인 일치 · 법인 확인 필요":"회사 소유 관계 확인 필요",verified:false});
@@ -56,9 +61,9 @@ export function parseOfficialPage(html: string, source: string, checked: string)
   }
   const links=Array.from(new Map(found.map(l=>[l.url,l])).values());
   const products:any[]=[];
-  for(const m of visible.matchAll(/상품명\s*:\s*([\s\S]{3,300}?)(?=상품요약정보|소비자가|판매가|상품명|타임세일|$)/g)){const name=plainHtml(m[1]);if(name.length>=4&&name.length<=140)products.push({name,quote:name});}
+  for(const m of visible.matchAll(/상품명\s*:\s*([\s\S]{3,300}?)(?=상품요약정보|소비자가|판매가|상품명|타임세일|$)/g)){const name=plainHtml(m[1]);if(realProductName(name)&&productDetailUrl(source))products.push({name,quote:name,url:source,evidenceType:"product_detail_label"});}
   for(const m of html.matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)){
-   try{const visit=(v:any,depth=0)=>{if(!v||depth>5)return;if(Array.isArray(v)){v.slice(0,30).forEach(x=>visit(x,depth+1));return;}if(typeof v!=="object")return;if([v["@type"]].flat().includes("Product")&&typeof v.name==="string")products.push({name:plainHtml(v.name),quote:plainHtml(v.name)});if(v["@graph"])visit(v["@graph"],depth+1);if(v.itemListElement)visit(v.itemListElement,depth+1);if(v.item)visit(v.item,depth+1);};visit(JSON.parse(m[1]));}catch{}
+   try{const visit=(v:any,depth=0)=>{if(!v||depth>5)return;if(Array.isArray(v)){v.slice(0,30).forEach(x=>visit(x,depth+1));return;}if(typeof v!=="object")return;if([v["@type"]].flat().includes("Product")&&typeof v.name==="string"&&realProductName(plainHtml(v.name))&&(v.offers||productDetailUrl(source)))products.push({name:plainHtml(v.name),quote:plainHtml(v.name),url:typeof v.url==="string"?new URL(v.url,source).href:source,evidenceType:"structured_product",hasOffers:!!v.offers});if(v["@graph"])visit(v["@graph"],depth+1);if(v.itemListElement)visit(v.itemListElement,depth+1);if(v.item)visit(v.item,depth+1);};visit(JSON.parse(m[1]));}catch{}
   }
   const title=plainHtml(/<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1]||"");
   const description=Array.from(html.matchAll(/<meta\b([^>]*)>/gi)).map(m=>({name:attribute(m[1],"name")||attribute(m[1],"property"),content:attribute(m[1],"content")})).find(m=>/^(description|og:description)$/i.test(m.name))?.content||"";

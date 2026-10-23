@@ -1,4 +1,5 @@
 import {gmailSyncService} from "../_shared/gmail-sync.ts";
+import {assessDispatch,permanentFailureEmails} from "../_shared/mail-integrity.ts";
 import { creatorDiscoveryService } from "../_shared/creator-discovery.ts";
 import {drainApprovedJobs} from "../_shared/job-batch.ts";
 import { emailTrackingService } from "../_shared/email-tracking.ts";
@@ -459,6 +460,17 @@ async function callback(
   return Response.redirect(frontend + "#settings", 302);
 }
 
+async function assertBrandMail(owner:string,d:any){
+ if(d.channel!=="email")return;
+ const c=await owned(owner,d.target,"candidate");if(c.kind==="크리에이터")return;
+ const leads=await query(sb.from("sanji_discovery_leads").select("data").eq("owner",owner).eq("data->>candidateId",c.id).limit(1));
+ const threads=await query(sb.from("sanji_records").select("data").eq("owner",owner).eq("kind","thread"));
+ const exclusions=await query(sb.from("sanji_suppression").select("identity,reason").eq("owner",owner));
+ const failed=permanentFailureEmails(threads,exclusions),replyAddresses:string[]=[];
+ if(d.replyTo){const t=await owned(owner,d.replyTo,"thread"),last=t.messages.filter((m:any)=>!m.out).at(-1);if(t.target===c.id&&t.channel==="email"&&t.providerId===d.providerThread&&t.synced&&last&&!last.automatic){const recipient=replyRecipient(last,c.contact?.email);if(!failed.includes(recipient.email.toLowerCase()))replyAddresses.push(recipient.email.toLowerCase());}}
+ const review=assessDispatch(d,c,leads[0],failed,replyAddresses);
+ if(!review.allowed)fail(409,"검토 대기: "+review.reasons.join(" / "));
+}
 async function sendDraft(u: string, draftId: string, b: any, jobId?: string) {
   if (!b.approved || typeof b.hash !== "string") fail(400, "최종 승인 필요");
   const row = await query(
@@ -510,6 +522,7 @@ async function sendDraft(u: string, draftId: string, b: any, jobId?: string) {
     fail(403, "관리자가 실제 발송을 아직 허용하지 않았습니다.");
   if (d.channel === "manual_dm" && !b.manuallySent)
     fail(400, "직접 발송 완료 결과만 기록하세요.");
+  await assertBrandMail(u,d);
   let gmail, ig;
   if (d.channel === "email") {
     if ((await query(sb.from("sanji_suppression").select("identity").eq("owner",u).in("identity",mailRecipients(d).flatMap(e=>[e,"email:"+e])).limit(1))).length) fail(403,"회신 주소가 수신 거부 목록에 있습니다.");
@@ -710,7 +723,7 @@ async function runScheduledJob(){
       sb
         .from("sanji_jobs")
         .update({
-          status: uncertain ? "outcome_unknown" : "failed",
+          status: e instanceof HttpError&&e.message.startsWith("검토 대기:")?"review_pending":uncertain ? "outcome_unknown" : "failed",
           result: {
             error:
               e instanceof HttpError
@@ -723,7 +736,7 @@ async function runScheduledJob(){
     return json({
       processed: 1,
       job: job.id,
-      status: uncertain ? "outcome_unknown" : "failed",
+      status: e instanceof HttpError&&e.message.startsWith("검토 대기:")?"review_pending":uncertain ? "outcome_unknown" : "failed",
     });
   }
 }
@@ -884,6 +897,9 @@ Deno.serve(async (req: Request) => {
           403,
           "실제 이메일 발송이 비활성입니다. 계정 연결과 발송 활성화 후 예약하세요.",
         );
+      const scheduledPreview=await query(sb.from("sanji_drafts").select("data").eq("owner",u).eq("id",b.draftId).maybeSingle());
+      if(!scheduledPreview)fail(409,"예약할 초안을 찾지 못했습니다.");
+      await assertBrandMail(u,scheduledPreview.data);
       await gmailToken(u);
       const time = new Date(b.runAt);
       if (!Number.isFinite(time.getTime()))
@@ -1088,7 +1104,7 @@ Deno.serve(async (req: Request) => {
       const
         c = await owned(u, inputData.target, "candidate");
       if(inputData.templateId){const template=await owned(u,inputData.templateId,"template");if(template.version!==inputData.templateVersion)fail(409,"템플릿이 변경됐습니다. 발송 전 목록을 새로고침하세요.");}
-      if (await isBlocked(u, c)) fail(403, "거절·수신 거부 대상");
+      if (await isBlocked(u, inputData.channel==="email"?{...c,recipientEmails:[],contact:{...c.contact,email:""}}:c)) fail(403, "거절·수신 거부 대상");
       if (
         inputData.channel === "email" &&
         (!c.contact.verified || !c.contact.email)
@@ -1192,6 +1208,7 @@ Deno.serve(async (req: Request) => {
         },
         hash = await digest(JSON.stringify(d));
       if (inputData.channel === "email" && (await query(sb.from("sanji_suppression").select("identity").eq("owner",u).in("identity",mailRecipients(d).flatMap(e=>[e,"email:"+e])).limit(1))).length) fail(403,"회신 주소가 수신 거부 목록에 있습니다.");
+      await assertBrandMail(u,d);
       const stored = await query(
         sb
           .from("sanji_drafts")
