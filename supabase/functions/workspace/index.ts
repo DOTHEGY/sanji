@@ -141,6 +141,7 @@ async function saveConnection(u: string, p: string, data: any) {
                 expiryKnown: data.expiryKnown !== false,
                 apiVerified: data.apiVerified === true,
                 capabilities: data.capabilities || null,
+                webhookSetupRequested:!!data.capabilities?.messagesReadable&&!data.capabilities?.webhookSubscribed,
                 profileChecked: data.profileChecked || null,
               },
       },
@@ -973,7 +974,7 @@ Deno.serve(async (req: Request) => {
     if (path === "/connections" && req.method === "GET") {
       const gmail = await connection(u, "gmail"),
         accounts = await instagramAccounts(u);
-      const ig = accounts.find((a: any) => Number(a.summary?.expires) > Date.now())?.summary;
+      const ig = accounts.find((a: any) => Number(a.summary?.expires) > Date.now()&&!a.summary?.checkpointRequired)?.summary;
       const loginPending = await query(sb.from("sanji_connections").select("provider,summary").eq("owner",u).like("provider","instagram_login:%"));
       const pendingState=await query(sb.from("sanji_connections").select("summary").eq("owner",u).eq("provider","instagram_pending").maybeSingle());
       const canRetryPending=Number(pendingState?.summary?.expires||0)>Date.now();

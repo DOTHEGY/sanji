@@ -26,6 +26,8 @@ export function officialOrigins(d:any){
 }
 export function contactResearchState(lead:any,check:any){
  const d=lead.data||lead,attempts=d.sourceAttempts||[];
+ if(d.officialRecheckRequested)return {status:"queued",label:"공식 홈페이지 재확인 예약",detail:"서버가 2분 간격으로 기존 후보를 순차 확인합니다. 새 업체 발굴 목표와 별도입니다."};
+ if(d.officialRecheck?.status==="running")return {status:"running",label:"공식 홈페이지 재확인 중",detail:"현재 푸터·고객센터·공식 문의 경로를 확인하고 있습니다."};
  if(check.allowed)return {status:"verified",label:"공식 게시 이메일 확인",detail:"공식 사이트에 게시된 이메일과 회사 관계를 확인했습니다."};
  if(!validBrandName(check.brand)||editorialSource(d.website,d.publicEvidence||[]))return {status:"discovery_only",label:"브랜드 공식 사이트 분리 필요",detail:"기사·중간 사이트의 이메일은 제안 대상에 사용하지 않습니다."};
  if((d.contacts||[]).length)return {status:"relationship_review",label:"이메일 있음 · 게시 관계 재확인",detail:check.excluded.flatMap((c:any)=>c.reasons).filter((v:any,i:number,a:any[])=>a.indexOf(v)===i).join(" / ")};

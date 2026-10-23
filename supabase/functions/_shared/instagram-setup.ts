@@ -11,7 +11,7 @@ export function instagramSetupService({sb,query,connection,saveConnection,remote
    await audit(r.owner,"instagram_webhook_setup_checked",{provider:r.provider,subscribed:session.capabilities.webhookSubscribed});
    return {status:session.capabilities.webhookSubscribed?"subscribed":"not_confirmed"};
   }catch(e){
-   await query(sb.from("sanji_connections").update({summary:{...r.summary,webhookSetupRequested:false,webhookSetupStatus:"error",webhookSetupChecked:new Date().toISOString()}}).eq("owner",r.owner).eq("provider",r.provider));
+   await query(sb.from("sanji_connections").update({summary:{...r.summary,webhookSetupRequested:false,webhookSetupStatus:"error",webhookSetupChecked:new Date().toISOString(),...(/checkpoint/i.test(String(e?.message||""))?{checkpointRequired:true,capabilities:{...r.summary.capabilities,messagesReadable:false,webhookSubscribed:false,checked:new Date().toISOString(),errors:["Instagram 본인 확인(checkpoint) 필요 · 공식 API 접근 중지"]}}:{})}}).eq("owner",r.owner).eq("provider",r.provider));
    await audit(r.owner,"instagram_webhook_setup_failed",{provider:r.provider,error:String(e?.message||"요청 실패").replace(/(?:access_token|client_secret)=[^&\s]+/g,"[redacted]").slice(0,400)});return {status:"error"};
   }
  };

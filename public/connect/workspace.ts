@@ -16,7 +16,7 @@ function instagramSetupService({ sb: sb2, query: query2, connection: connection2
       await audit2(r.owner, "instagram_webhook_setup_checked", { provider: r.provider, subscribed: session.capabilities.webhookSubscribed });
       return { status: session.capabilities.webhookSubscribed ? "subscribed" : "not_confirmed" };
     } catch (e) {
-      await query2(sb2.from("sanji_connections").update({ summary: { ...r.summary, webhookSetupRequested: false, webhookSetupStatus: "error", webhookSetupChecked: (/* @__PURE__ */ new Date()).toISOString() } }).eq("owner", r.owner).eq("provider", r.provider));
+      await query2(sb2.from("sanji_connections").update({ summary: { ...r.summary, webhookSetupRequested: false, webhookSetupStatus: "error", webhookSetupChecked: (/* @__PURE__ */ new Date()).toISOString(), .../checkpoint/i.test(String(e?.message || "")) ? { checkpointRequired: true, capabilities: { ...r.summary.capabilities, messagesReadable: false, webhookSubscribed: false, checked: (/* @__PURE__ */ new Date()).toISOString(), errors: ["Instagram \uBCF8\uC778 \uD655\uC778(checkpoint) \uD544\uC694 \xB7 \uACF5\uC2DD API \uC811\uADFC \uC911\uC9C0"] } } : {} } }).eq("owner", r.owner).eq("provider", r.provider));
       await audit2(r.owner, "instagram_webhook_setup_failed", { provider: r.provider, error: String(e?.message || "\uC694\uCCAD \uC2E4\uD328").replace(/(?:access_token|client_secret)=[^&\s]+/g, "[redacted]").slice(0, 400) });
       return { status: "error" };
     }
@@ -699,6 +699,8 @@ function officialOrigins(d) {
 }
 function contactResearchState(lead, check) {
   const d = lead.data || lead, attempts = d.sourceAttempts || [];
+  if (d.officialRecheckRequested) return { status: "queued", label: "\uACF5\uC2DD \uD648\uD398\uC774\uC9C0 \uC7AC\uD655\uC778 \uC608\uC57D", detail: "\uC11C\uBC84\uAC00 2\uBD84 \uAC04\uACA9\uC73C\uB85C \uAE30\uC874 \uD6C4\uBCF4\uB97C \uC21C\uCC28 \uD655\uC778\uD569\uB2C8\uB2E4. \uC0C8 \uC5C5\uCCB4 \uBC1C\uAD74 \uBAA9\uD45C\uC640 \uBCC4\uB3C4\uC785\uB2C8\uB2E4." };
+  if (d.officialRecheck?.status === "running") return { status: "running", label: "\uACF5\uC2DD \uD648\uD398\uC774\uC9C0 \uC7AC\uD655\uC778 \uC911", detail: "\uD604\uC7AC \uD478\uD130\xB7\uACE0\uAC1D\uC13C\uD130\xB7\uACF5\uC2DD \uBB38\uC758 \uACBD\uB85C\uB97C \uD655\uC778\uD558\uACE0 \uC788\uC2B5\uB2C8\uB2E4." };
   if (check.allowed) return { status: "verified", label: "\uACF5\uC2DD \uAC8C\uC2DC \uC774\uBA54\uC77C \uD655\uC778", detail: "\uACF5\uC2DD \uC0AC\uC774\uD2B8\uC5D0 \uAC8C\uC2DC\uB41C \uC774\uBA54\uC77C\uACFC \uD68C\uC0AC \uAD00\uACC4\uB97C \uD655\uC778\uD588\uC2B5\uB2C8\uB2E4." };
   if (!validBrandName(check.brand) || editorialSource(d.website, d.publicEvidence || [])) return { status: "discovery_only", label: "\uBE0C\uB79C\uB4DC \uACF5\uC2DD \uC0AC\uC774\uD2B8 \uBD84\uB9AC \uD544\uC694", detail: "\uAE30\uC0AC\xB7\uC911\uAC04 \uC0AC\uC774\uD2B8\uC758 \uC774\uBA54\uC77C\uC740 \uC81C\uC548 \uB300\uC0C1\uC5D0 \uC0AC\uC6A9\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4." };
   if ((d.contacts || []).length) return { status: "relationship_review", label: "\uC774\uBA54\uC77C \uC788\uC74C \xB7 \uAC8C\uC2DC \uAD00\uACC4 \uC7AC\uD655\uC778", detail: check.excluded.flatMap((c) => c.reasons).filter((v, i, a) => a.indexOf(v) === i).join(" / ") };
@@ -1911,6 +1913,13 @@ function discoveryService(deps) {
     await audit2(u, "brand_researched", { lead: lead.id, ownership: result.research.ownership, personalized: !result.outreach.needsPersonalization, repaired });
     return { status: "brand_researched", name: data.name, ownership: result.research.ownership, personalized: !result.outreach.needsPersonalization, reason: result.research.reason };
   }
+  async function recheckNext(owner) {
+    const rechecks = await query2(sb2.from("sanji_discovery_leads").select("id,data,updated").eq("owner", owner).eq("data->>officialRecheckRequested", "true").order("updated").limit(1));
+    if (!rechecks.length) return { status: "recheck_idle" };
+    const l = rechecks[0];
+    const claimed = await query2(sb2.from("sanji_discovery_leads").update({ data: { ...l.data, officialRecheckRequested: false, officialRecheck: { status: "running", checked: (/* @__PURE__ */ new Date()).toISOString(), attempts: Number(l.data.officialRecheck?.attempts || 0) + 1 } }, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("id", l.id).eq("updated", l.updated).select("id"));
+    return claimed.length ? await enrich(owner, l.id) : { status: "recheck_busy" };
+  }
   async function scheduled(input = {}) {
     await sb2.from("sanji_connections").delete().eq("provider", "instagram_pending").lt("summary->>expires", String(Date.now()));
     const rows = await query2(sb2.from("sanji_discovery_config").select("owner").eq("enabled", true).order("updated").limit(1));
@@ -1919,22 +1928,17 @@ function discoveryService(deps) {
     await query2(sb2.from("sanji_discovery_config").update({ runtime: { ...cfg.runtime, lastStarted, status: "running" }, updated: lastStarted }).eq("owner", owner));
     try {
       let result;
-      if (input.task === "product") result = await researchNext(owner, "", true) || { status: "product_research_idle" };
+      if (input.task === "official_recheck") result = await recheckNext(owner);
+      else if (input.task === "product") result = await researchNext(owner, "", true) || { status: "product_research_idle" };
       else if (input.task === "enrich" && typeof input.leadId === "string") result = await enrich(owner, input.leadId);
       else if (input.task === "research" && typeof input.leadId === "string") result = await researchNext(owner, input.leadId) || { status: "research_wait" };
       else {
-        const rechecks = await query2(sb2.from("sanji_discovery_leads").select("id,data,updated").eq("owner", owner).eq("data->>officialRecheckRequested", "true").order("updated").limit(1));
-        if (rechecks.length) {
-          const l = rechecks[0], claimed = await query2(sb2.from("sanji_discovery_leads").update({ data: { ...l.data, officialRecheckRequested: false, officialRecheck: { status: "running", checked: (/* @__PURE__ */ new Date()).toISOString() } }, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("id", l.id).eq("updated", l.updated).select("id"));
-          result = claimed.length ? await enrich(owner, l.id) : { status: "recheck_busy" };
-        } else {
-          const refreshed = await refreshSources(owner);
-          const searched = refreshed?.added ? null : await refillSearch(owner);
-          const researched = !refreshed?.added && !searched && Math.floor(Date.now() / 3e5) % 2 === 0 ? await researchNext(owner) : null;
-          result = refreshed?.added ? refreshed : searched || researched || await cycle(owner);
-        }
+        const refreshed = await refreshSources(owner);
+        const searched = refreshed?.added ? null : await refillSearch(owner);
+        const researched = !refreshed?.added && !searched && Math.floor(Date.now() / 3e5) % 2 === 0 ? await researchNext(owner) : null;
+        result = refreshed?.added ? refreshed : searched || researched || await cycle(owner);
       }
-      const completionNotification = input.task !== "product" && deps.notifyOwner ? await deps.notifyOwner(owner) : null;
+      const completionNotification = input.task !== "product" && input.task !== "official_recheck" && deps.notifyOwner ? await deps.notifyOwner(owner) : null;
       await query2(sb2.from("sanji_discovery_config").update({ runtime: { lastStarted, lastFinished: (/* @__PURE__ */ new Date()).toISOString(), status: "idle", result, completionNotification }, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner));
       return result;
     } catch (e) {
@@ -1962,7 +1966,7 @@ function discoveryService(deps) {
         return { ...l, mailReview: dispatch, contactResearch: contactResearchState(l, check), data: { ...l.data, contacts: (l.data.contacts || []).map((c) => exclusions.has(c.email.toLowerCase()) ? { ...c, excluded: true, excludeFromOutreach: true, exclusionReason: exclusions.get(c.email.toLowerCase()) } : c), outreach: { ...o, ...!dispatch.allowed ? { sendBlockedReason: contactResearchState(l, check).label + ": " + dispatch.reasons.join(" / ") } : o.sendBlockedReason?.startsWith("\uAC80\uD1A0 \uB300\uAE30:") ? { sendBlockedReason: "" } : {} } } };
       });
       const integritySummary = { checked: reviewed.length, passed: reviewed.filter((l) => l.mailReview.allowed).length, review: reviewed.filter((l) => !l.mailReview.allowed).length };
-      return { settings, notification: notification || null, leads: reviewed, integritySummary, usage: today, history, health: discoveryHealth(settings, today, reviewed), configured: false, engine: { status, label: labels[status], pending: pending.length, current: active ? pending[0]?.data.name || "" : "", heartbeat: settings.updated, lastCompleted: activity[0]?.checked || null, mode: "public_sources_and_homepages", refreshAt: "00:00", timezone: "Asia/Seoul", sourceState: settings.source_state || {}, searchState: settings.search_state || {}, nextRun: settings.enabled && pending.length && (today.companies || 0) < settings.target && today.calls < 240 ? new Date(Math.ceil((Date.now() + 1e3) / 3e5) * 3e5).toISOString() : null }, activity, scope: "\uD55C\uAD6D\uC2DC\uAC04 \uC624\uB298 \xB7 \uC774\uBA54\uC77C \uD655\uBCF4 \uC2E0\uADDC \uC5C5\uCCB4 / \uC774\uBA54\uC77C \uC8FC\uC18C \uC218 \uBCC4\uB3C4 \xB7 \uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804", llmCalls: 0 };
+      return { settings, notification: notification || null, leads: reviewed, integritySummary, usage: today, history, health: discoveryHealth(settings, today, reviewed), configured: false, engine: { status, label: labels[status], pending: pending.length, recheckPending: leads.filter((l) => l.data.officialRecheckRequested).length, current: active ? pending[0]?.data.name || "" : "", heartbeat: settings.updated, lastCompleted: activity[0]?.checked || null, mode: "public_sources_and_homepages", refreshAt: "00:00", timezone: "Asia/Seoul", sourceState: settings.source_state || {}, searchState: settings.search_state || {}, nextRun: settings.enabled && pending.length && (today.companies || 0) < settings.target && today.calls < 240 ? new Date(Math.ceil((Date.now() + 1e3) / 3e5) * 3e5).toISOString() : null }, activity, scope: "\uD55C\uAD6D\uC2DC\uAC04 \uC624\uB298 \xB7 \uC774\uBA54\uC77C \uD655\uBCF4 \uC2E0\uADDC \uC5C5\uCCB4 / \uC774\uBA54\uC77C \uC8FC\uC18C \uC218 \uBCC4\uB3C4 \xB7 \uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804", llmCalls: 0 };
     }
     const b = await input();
     if (path === "/discovery/refresh" && method === "POST") return await refreshSources(u) || { status: "already_checked", message: "\uC624\uB298 \uC678\uBD80 \uBAA9\uB85D\uC744 \uD655\uC778\uD588\uC2B5\uB2C8\uB2E4. \uB9E4\uC77C \uD55C\uAD6D\uC2DC\uAC04 00:00\uC5D0 \uC0C8 \uD6C4\uBCF4\uB97C \uD655\uC778\uD569\uB2C8\uB2E4." };
@@ -2461,6 +2465,7 @@ async function saveConnection(u, p, data) {
           expiryKnown: data.expiryKnown !== false,
           apiVerified: data.apiVerified === true,
           capabilities: data.capabilities || null,
+          webhookSetupRequested: !!data.capabilities?.messagesReadable && !data.capabilities?.webhookSubscribed,
           profileChecked: data.profileChecked || null
         }
       },
@@ -3222,7 +3227,7 @@ Deno.serve(async (req) => {
     }
     if (path === "/connections" && req.method === "GET") {
       const gmail = await connection(u, "gmail"), accounts = await instagramAccounts(u);
-      const ig = accounts.find((a) => Number(a.summary?.expires) > Date.now())?.summary;
+      const ig = accounts.find((a) => Number(a.summary?.expires) > Date.now() && !a.summary?.checkpointRequired)?.summary;
       const loginPending = await query(sb.from("sanji_connections").select("provider,summary").eq("owner", u).like("provider", "instagram_login:%"));
       const pendingState = await query(sb.from("sanji_connections").select("summary").eq("owner", u).eq("provider", "instagram_pending").maybeSingle());
       const canRetryPending = Number(pendingState?.summary?.expires || 0) > Date.now();
