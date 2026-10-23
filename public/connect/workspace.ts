@@ -111,10 +111,11 @@ function creatorLocalService({ sb: sb2, query: query2, audit: audit2, encrypt: e
     if (path === "/creator-local/email-candidate") {
       const r = await query2(sb2.from("sanji_creator_prospects").select("*").eq("owner", owner).eq("id", b.id).single()), emails = r.profile_preview?.businessEmails || [];
       const email = emails.find((e) => e.email === b.email) || emails[0];
-      if (!email) throw Error("\uACF5\uAC1C \uD504\uB85C\uD544\uC5D0\uC11C \uD655\uC778\uD55C \uC774\uBA54\uC77C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
       const existing = await query2(sb2.from("sanji_records").select("*").eq("owner", owner).eq("kind", "candidate"));
       const same = existing.find((c) => handle(c.data.handle) === r.handle);
-      if (same) return { target: same.id };
+      if (same?.data.contact?.verified && same.data.contact.email) return { target: same.id };
+      if (!email) throw Error("\uACF5\uAC1C \uD504\uB85C\uD544\uC5D0\uC11C \uD655\uC778\uD55C \uC774\uBA54\uC77C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      if (same) throw Error("\uAE30\uC874 \uD6C4\uBCF4\uC758 \uC774\uBA54\uC77C \uCD9C\uCC98\uB97C \uBA3C\uC800 \uD655\uC778\uD558\uC138\uC694.");
       if (existing.some((c) => c.data.contact?.email?.toLowerCase() === email.email)) throw Error("\uAC19\uC740 \uC774\uBA54\uC77C\uC774 \uB2E4\uB978 \uD6C4\uBCF4\uC5D0 \uB4F1\uB85D\uB3FC \uC788\uC2B5\uB2C8\uB2E4. \uC18C\uC18D\uC0AC\xB7\uC911\uBCF5 \uC5F0\uB77D \uAD00\uACC4\uB97C \uBA3C\uC800 \uD655\uC778\uD558\uC138\uC694.");
       const name = r.profile_preview.displayName || r.handle;
       const record = await putRecord2(owner, "candidate", { name, company: name, companyKey: "creator:" + r.handle, kind: "\uD06C\uB9AC\uC5D0\uC774\uD130", category: "\uBBF8\uD655\uC778", classification: "\uBBF8\uD655\uC778", authority: "\uBBF8\uD655\uC778", product: "", website: "", profile: r.profile, handle: r.handle, agency: "", channels: "Instagram", contact: { email: email.email, source: email.source, checked: email.checked, owner: name, verified: true, purpose: "\uBE44\uC988\uB2C8\uC2A4" }, topics: [], evidence: [{ url: email.source, description: email.context, checked: email.checked }], followers: null, metricsSource: "", metricsChecked: "", reaction: "\uBBF8\uD655\uC778", experience: "\uBBF8\uD655\uC778", active: "\uBBF8\uD655\uC778", schedule: "\uBBF8\uD655\uC778", reason: r.reasons.join(" / "), status: "\uBBF8\uC811\uCD09", owner: "", next: "\uC120\uD0DD\uD55C \uC0C1\uD488\uACFC \uACF5\uAC1C \uCF58\uD150\uCE20 \uADFC\uAC70\uB85C \uC774\uBA54\uC77C \uC81C\uC548 \uC900\uBE44", due: "", note: "\uACF5\uAC1C \uD504\uB85C\uD544 \uC774\uBA54\uC77C \uC6B0\uC120 \xB7 DM \uC911\uBCF5 \uC81C\uC548 \uAE08\uC9C0" });
@@ -127,6 +128,8 @@ function creatorLocalService({ sb: sb2, query: query2, audit: audit2, encrypt: e
       if (!c.sender_handle || !c.dm_copy.trim()) throw Error("\uBC1C\uC2E0 \uACC4\uC815\uACFC DM \uCE74\uD53C\uB97C \uBA3C\uC800 \uC800\uC7A5\uD558\uC138\uC694.");
       const rows = await query2(sb2.from("sanji_creator_prospects").select("*").eq("owner", owner).in("id", ids));
       if (rows.length !== ids.length) throw Error("\uBCF8\uC778 \uD6C4\uBCF4\uB9CC \uC2B9\uC778\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.");
+      const known = await query2(sb2.from("sanji_records").select("data").eq("owner", owner).eq("kind", "candidate"));
+      if (rows.some((r) => known.some((c2) => handle(c2.data?.handle) === r.handle && c2.data?.contact?.verified && c2.data?.contact?.email))) throw Error("\uAE30\uC874 \uD6C4\uBCF4\uC5D0 \uAC80\uC99D\uB41C \uC774\uBA54\uC77C\uC774 \uC788\uC2B5\uB2C8\uB2E4. \uC774\uBA54\uC77C\uB85C \uBA3C\uC800 \uC81C\uC548\uD558\uC138\uC694.");
       if (rows.some((r) => r.profile_preview?.businessEmails?.length)) throw Error("\uACF5\uAC1C \uC774\uBA54\uC77C\uC774 \uC788\uB294 \uD06C\uB9AC\uC5D0\uC774\uD130\uB294 \uC774\uBA54\uC77C \uC81C\uC548\uC744 \uBA3C\uC800 \uC900\uBE44\uD558\uC138\uC694. DM\uC744 \uC911\uBCF5 \uC2B9\uC778\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
       if (rows.some((r) => r.status !== "new" || !r.body.trim() || r.sender_handle !== c.sender_handle)) throw Error("\uC774\uBBF8 \uCC98\uB9AC \uC911\xB7\uBC1C\uC1A1\xB7\uACB0\uACFC \uBBF8\uD655\uC778\uC778 \uD6C4\uBCF4\uB294 \uC7AC\uC2B9\uC778\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. \uCD5C\uC2E0 \uCE74\uD53C\uB97C \uD655\uC778\uD558\uC138\uC694.");
       for (const r of rows) {
@@ -158,6 +161,8 @@ function creatorLocalService({ sb: sb2, query: query2, audit: audit2, encrypt: e
     const r = await query2(sb2.from("sanji_creator_prospects").select("*").eq("owner", owner).eq("id", b.id).single());
     if (path === "/creator-local/worker/check") {
       const suppression = await query2(sb2.from("sanji_suppression").select("identity").eq("owner", owner).in("identity", [r.handle, "instagram:" + r.handle]));
+      const known = await query2(sb2.from("sanji_records").select("data").eq("owner", owner).eq("kind", "candidate"));
+      if (known.some((c2) => handle(c2.data?.handle) === r.handle && c2.data?.contact?.verified && c2.data?.contact?.email)) throw Error("\uAC80\uC99D\uB41C \uC774\uBA54\uC77C\uC774 \uD655\uC778\uB428 \xB7 DM \uC804\uC1A1 \uC911\uB2E8");
       const valid = r.status === "sending" && r.sender_handle === sender && r.approved_hash === b.approvedHash && r.approved_hash === await localApprovalHash(r) && !suppression.length && !r.profile_preview?.businessEmails?.length;
       if (!valid) throw Error("\uBC1C\uC1A1 \uC2B9\uC778\uC774 \uBCC0\uACBD\uB410\uAC70\uB098 \uC218\uC2E0 \uAC70\uBD80\uB428 \xB7 \uBCF4\uB0B4\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
       return { ok: true };

@@ -24,10 +24,12 @@ export function creatorLocalService({sb,query,audit,encrypt,decrypt,putRecord}:a
   }
   if(path==="/creator-local/email-candidate"){
    const r=await query(sb.from("sanji_creator_prospects").select("*").eq("owner",owner).eq("id",b.id).single()),emails=r.profile_preview?.businessEmails||[];
-   const email=emails.find((e:any)=>e.email===b.email)||emails[0];if(!email)throw Error("공개 프로필에서 확인한 이메일이 없습니다.");
+   const email=emails.find((e:any)=>e.email===b.email)||emails[0];
    const existing=await query(sb.from("sanji_records").select("*").eq("owner",owner).eq("kind","candidate"));
    const same=existing.find((c:any)=>handle(c.data.handle)===r.handle);
-   if(same)return {target:same.id};
+   if(same?.data.contact?.verified&&same.data.contact.email)return {target:same.id};
+   if(!email)throw Error("공개 프로필에서 확인한 이메일이 없습니다.");
+   if(same)throw Error("기존 후보의 이메일 출처를 먼저 확인하세요.");
    if(existing.some((c:any)=>c.data.contact?.email?.toLowerCase()===email.email))throw Error("같은 이메일이 다른 후보에 등록돼 있습니다. 소속사·중복 연락 관계를 먼저 확인하세요.");
    const name=r.profile_preview.displayName||r.handle;
    const record=await putRecord(owner,"candidate",{name,company:name,companyKey:"creator:"+r.handle,kind:"크리에이터",category:"미확인",classification:"미확인",authority:"미확인",product:"",website:"",profile:r.profile,handle:r.handle,agency:"",channels:"Instagram",contact:{email:email.email,source:email.source,checked:email.checked,owner:name,verified:true,purpose:"비즈니스"},topics:[],evidence:[{url:email.source,description:email.context,checked:email.checked}],followers:null,metricsSource:"",metricsChecked:"",reaction:"미확인",experience:"미확인",active:"미확인",schedule:"미확인",reason:r.reasons.join(" / "),status:"미접촉",owner:"",next:"선택한 상품과 공개 콘텐츠 근거로 이메일 제안 준비",due:"",note:"공개 프로필 이메일 우선 · DM 중복 제안 금지"});return {target:record.id};
@@ -36,6 +38,8 @@ export function creatorLocalService({sb,query,audit,encrypt,decrypt,putRecord}:a
    const ids=Array.isArray(b.ids)?[...new Set(b.ids)]:[];if(!ids.length||ids.length>20)throw Error("한 번에 1~20명의 대상·최종 카피를 확인하세요.");
    const c=await config(owner);if(!c.sender_handle||!c.dm_copy.trim())throw Error("발신 계정과 DM 카피를 먼저 저장하세요.");
    const rows=await query(sb.from("sanji_creator_prospects").select("*").eq("owner",owner).in("id",ids));if(rows.length!==ids.length)throw Error("본인 후보만 승인할 수 있습니다.");
+   const known=await query(sb.from("sanji_records").select("data").eq("owner",owner).eq("kind","candidate"));
+   if(rows.some((r:any)=>known.some((c:any)=>handle(c.data?.handle)===r.handle&&c.data?.contact?.verified&&c.data?.contact?.email)))throw Error("기존 후보에 검증된 이메일이 있습니다. 이메일로 먼저 제안하세요.");
    if(rows.some((r:any)=>r.profile_preview?.businessEmails?.length))throw Error("공개 이메일이 있는 크리에이터는 이메일 제안을 먼저 준비하세요. DM을 중복 승인하지 않습니다.");
    if(rows.some((r:any)=>r.status!=="new"||!r.body.trim()||r.sender_handle!==c.sender_handle))throw Error("이미 처리 중·발송·결과 미확인인 후보는 재승인하지 않습니다. 최신 카피를 확인하세요.");
    // Bind approval to exact sender, recipient and body visible in the approval dialog.
@@ -61,6 +65,8 @@ export function creatorLocalService({sb,query,audit,encrypt,decrypt,putRecord}:a
   const r=await query(sb.from("sanji_creator_prospects").select("*").eq("owner",owner).eq("id",b.id).single());
   if(path==="/creator-local/worker/check"){
    const suppression=await query(sb.from("sanji_suppression").select("identity").eq("owner",owner).in("identity",[r.handle,"instagram:"+r.handle]));
+   const known=await query(sb.from("sanji_records").select("data").eq("owner",owner).eq("kind","candidate"));
+   if(known.some((c:any)=>handle(c.data?.handle)===r.handle&&c.data?.contact?.verified&&c.data?.contact?.email))throw Error("검증된 이메일이 확인됨 · DM 전송 중단");
    const valid=r.status==="sending"&&r.sender_handle===sender&&r.approved_hash===b.approvedHash&&r.approved_hash===await localApprovalHash(r)&&!suppression.length&&!r.profile_preview?.businessEmails?.length;
    if(!valid)throw Error("발송 승인이 변경됐거나 수신 거부됨 · 보내지 않습니다.");return {ok:true};
   }
