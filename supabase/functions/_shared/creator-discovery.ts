@@ -20,7 +20,7 @@ export function instagramSearchCandidates(html:string,source:string,keywords:str
 }
 export function renderCreatorCopy(copy:string,handle:string){return copy.replace(/\{\{(?:크리에이터명|아이디)\}\}/g,handle);}
 export function creatorDiscoveryService({sb,query,audit,env}:any){
- const get=async(owner:string)=>await query(sb.from("sanji_creator_config").select("*").eq("owner",owner).maybeSingle())||{owner,enabled:false,auto_send:false,target:500,keywords:["공동구매 레시피","공구 푸드","웰니스 크리에이터"],dm_copy:"",sender_handle:"",runtime:{},search_cursor:0};
+ const get=async(owner:string)=>await query(sb.from("sanji_creator_config").select("*").eq("owner",owner).maybeSingle())||{owner,enabled:false,auto_send:false,target:50,keywords:["공동구매 레시피","공구 푸드","웰니스 크리에이터"],dm_copy:"",sender_handle:"",runtime:{},search_cursor:0};
  const safe=(c:any)=>{const {worker_hash,worker_expires,approved_hash,...rest}=c;return {...rest,workerConnected:!!worker_hash&&Date.parse(worker_expires||"")>Date.now()};};
  async function collect(owner:string){
   const c=await get(owner);if(!c.enabled)return {status:"disabled"};
@@ -53,7 +53,7 @@ export function creatorDiscoveryService({sb,query,audit,env}:any){
    if(b.autoSend)throw Error("신규 상대 선제 DM 자동 발송은 공식 연동에서 지원하지 않습니다. 검색·카피 준비만 활성화할 수 있습니다.");
    if(/치료|예방|완치|항암|개선.{0,4}보장/.test(copy))throw Error("미확인 효능·질병 표현을 수정하세요.");
    const approved=b.autoSend?await hash(JSON.stringify({copy,keywords,sender})):"";
-   if(approved!==old.approved_hash)await query(sb.from("sanji_creator_prospects").update({status:"cancelled",result:{note:"캠페인 카피·조건·승인 변경"}}).eq("owner",owner).eq("status","queued"));
+   if(copy!==old.dm_copy||sender!==old.sender_handle||approved!==old.approved_hash)await query(sb.from("sanji_creator_prospects").update({status:"cancelled",result:{note:"캠페인 카피·조건·승인 변경"}}).eq("owner",owner).eq("status","queued"));
    await query(sb.from("sanji_creator_config").upsert({owner,enabled:b.enabled===true,auto_send:b.autoSend===true,target,keywords,dm_copy:copy,sender_handle:sender,approved_hash:approved,updated:new Date().toISOString()},{onConflict:"owner"}));
    const pending=await query(sb.from("sanji_creator_prospects").select("id,handle").eq("owner",owner).eq("status","new"));
    for(const row of pending)await query(sb.from("sanji_creator_prospects").update({body:renderCreatorCopy(copy,row.handle),sender_handle:sender}).eq("id",row.id).eq("owner",owner).eq("status","new"));return {ok:true};

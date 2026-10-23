@@ -43,3 +43,15 @@ test('real Postgres RPC accepts an official support mailbox and suppresses only 
  }finally{await db.close();}
 });
 test('a third-party blog can discover a brand but its blogger email cannot become the brand recipient',()=>{const l=official('blogger@gmail.com');l.website='https://brand-review.tistory.com/';l.publicEvidence[0].url=l.website;l.contacts[0].source=l.website;assert.equal(api.assessMailLead(l).allowed,false);});
+
+test('official redirect and linked store chains retain published customer emails, but arbitrary cached pages cannot establish ownership',()=>{
+ const l=official('help@operator.co.kr');l.website='https://old-brand.co.kr/';l.publicEvidence[0].url='https://shop-brand.co.kr/';l.contacts[0].source='https://shop-brand.co.kr/';l.sourceAttempts=[{status:'checked',requestedUrl:l.website,url:'https://shop-brand.co.kr/',redirects:[l.website]}];assert.equal(api.assessMailLead(l).allowed,true);
+ l.sourceAttempts=[];assert.equal(api.assessMailLead(l).allowed,false);
+ l.sourceAttempts=[{status:'failed',requestedUrl:l.website,url:'https://shop-brand.co.kr/'}];assert.equal(api.assessMailLead(l).allowed,false);
+ const brand=official();brand.publicEvidence[0].title='다른 브랜드 공식몰';brand.publicEvidence[0].description='다른 브랜드';brand.publicEvidence[0].excerpt='검증브랜드 상품 판매';assert.equal(api.assessMailLead(brand).allowed,false);
+});
+test('unvisited, connection failures and checked pages without email have distinct honest research states',()=>{
+ const l=official();l.contacts=[];l.publicEvidence=[];assert.equal(api.contactResearchState(l,api.assessMailLead(l)).status,'not_checked');
+ l.sourceAttempts=[{status:'failed',error:'DNS 실패'}];assert.equal(api.contactResearchState(l,api.assessMailLead(l)).status,'fetch_failed');
+ l.sourceAttempts=[{status:'checked'}];assert.equal(api.contactResearchState(l,api.assessMailLead(l)).status,'not_found_in_checked_pages');
+});

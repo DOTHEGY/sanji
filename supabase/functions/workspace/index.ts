@@ -1,3 +1,4 @@
+import {creatorLocalService} from "../_shared/creator-local.ts";
 import {gmailSyncService} from "../_shared/gmail-sync.ts";
 import {assessDispatch,permanentFailureEmails} from "../_shared/mail-integrity.ts";
 import { creatorDiscoveryService } from "../_shared/creator-discovery.ts";
@@ -147,6 +148,7 @@ async function saveConnection(u: string, p: string, data: any) {
 const emailTracking=emailTrackingService({sb,query,env,audit,baseUrl:env("SUPABASE_URL")+"/functions/v1/"+(env("WORKSPACE_FUNCTION_NAME")||"bright-function")});
 const notifyOwner = discoveryCompletionNotifier({sb,query,gmailToken,remote,audit,env});
 const creatorDiscovery = creatorDiscoveryService({sb,query,audit,env});
+const creatorLocal=creatorLocalService({sb,query,audit});
 const discovery = discoveryService({sb,query,connection,saveConnection,env,audit,putRecord,notifyOwner});
 async function remote(url: string, options: any = {}, stage = "") {
   const r = await fetch(url, {
@@ -773,6 +775,10 @@ Deno.serve(async (req: Request) => {
       const owners=await query(sb.from("sanji_connections").select("owner").eq("provider","gmail").limit(5));
       return json({results:await Promise.all(owners.map((c:any)=>gmailSync.sync(c.owner)))});
     }
+    if(path.startsWith("/creator-local/worker/")&&req.method==="POST"){
+      const raw=await req.text();if(Buffer.byteLength(raw)>600000)fail(413,"PC 요청 크기 초과");
+      try{return json(await creatorLocal.worker(path,req.headers.get("x-sanji-worker")||"",raw?JSON.parse(raw):{}));}catch(e){fail(403,String(e.message||"PC 연결 실패"));}
+    }
     if (path === "/jobs/run" && req.method === "POST")
       return await runJobs(req);
     const bearer = req.headers.get("authorization") || "";
@@ -797,6 +803,9 @@ Deno.serve(async (req: Request) => {
         fail(413, "요청 크기 초과");
       return text ? JSON.parse(text) : {};
     };
+    if(path.startsWith("/creator-local/")&&req.method==="POST"){
+      try{return json(await creatorLocal.admin(path,u,await input()));}catch(e){fail(400,String(e.message||"PC 실행기 설정 실패"));}
+    }
     if(path==="/email-tracking"||path.startsWith("/email-tracking/"))return json(await emailTracking.handle(path,req.method,u,input,url.searchParams));
     if(path === "/creator-discovery" || path.startsWith("/creator-discovery/")){
       try{return json(await creatorDiscovery.handle(path,req.method,u,input));}catch(e){fail(400,String(e.message||"크리에이터 발굴 실패"));}

@@ -49,14 +49,21 @@ let csrf = "",
 const routes = {
   dashboard: ["◫", "대시보드"],
   brands: ["▣", "브랜드 이메일"],
+  emailtracking: ["◉", "이메일 성과·추적"],
   deals: ["▤", "상품 딜"],
-  creators: ["◎", "크리에이터 발굴"],
+  creators: ["◎", "크리에이터 목록"],
   matching: ["⇄", "상품 매칭"],
-  templates: ["▧", "템플릿"],
   inbox: ["✉", "통합 대화함"],
-  emailtracking:["◉","이메일 성과·추적"],
+  templates: ["▧", "템플릿"],
   settings: ["⚙", "연동 설정"],
 };
+const navGroups = [
+  {label:"", keys:["dashboard"]},
+  {label:"브랜드 영업", keys:["brands","emailtracking","deals"]},
+  {label:"크리에이터", keys:["creators","matching"]},
+  {label:"대화", keys:["inbox"]},
+  {label:"관리", keys:["templates","settings"], bottom:true},
+];
 const statuses = [
   "미접촉",
   "검토 중",
@@ -166,12 +173,7 @@ function render() {
   if (!me) return;
   const rawKey = location.hash.slice(1) || "dashboard";
   const key = rawKey === "discovery" ? "brands" : rawKey;
-  $("#nav").innerHTML = Object.entries(routes)
-    .map(
-      ([k, v]) =>
-        `<a href="#${k}" class="${key === k ? "active" : ""}"><span>${v[0]}</span>${v[1]}</a>`,
-    )
-    .join("");
+  $("#nav").innerHTML = navGroups.map(g => `<div class="nav-group${g.bottom?" nav-management":""}"${g.label?` role="group" aria-label="${g.label}"`:""}>${g.label?`<p class="nav-group-label">${g.label}</p>`:""}${g.keys.map(k=>`<a href="#${k}" class="${key===k?"active":""}"${key===k?' aria-current="page"':""}><span aria-hidden="true">${routes[k][0]}</span>${routes[k][1]}</a>`).join("")}</div>`).join("");
   $("#breadcrumb").textContent =
     "워크스페이스 / " + (routes[key]?.[1] || "대시보드");
   (pages[key] || dashboard)();
@@ -196,11 +198,11 @@ function dashboard() {
     sentTargets.size ? Math.round((n / sentTargets.size) * 100) + "%" : "—";
   $("#app").innerHTML =
     head(
-      "브랜드 이메일 영업",
-      "가상 수치 없이, 서버에 기록된 실제 업무 현황입니다.",
-      button("＋ 브랜드 추가", "add-brand", "", true),
+      "대시보드",
+      "브랜드 영업과 크리에이터 협업의 진행 상황을 확인하세요.",
+      '<a class="text-link" href="#brands">브랜드 이메일 열기 ↗</a>',
     ) +
-    `p class="fine"><a href="#discovery">회사 이메일 발굴 →</a> · <a href="#templates">브랜드 제안 템플릿 →</a> · <a href="#inbox">답장 확인·회신 →</a></p><div class="stats"><div class="stat"><label>발굴 후보</label><strong>${data.candidates.length}</strong><small>검증된 사업용 연락처 ${data.candidates.filter((c) => c.contact.verified).length}</small></div><div class="stat"><label>이메일·API 접수</label><strong>${sent.length}</strong><small>받은편지함 도착·열람은 미확인</small></div><div class="stat"><label>사람의 회신율</label><strong>${rate(humanTargets.size)}</strong><small>회신 대상 ${humanTargets.size} / 접수 대상 ${sentTargets.size} · 자동 응답 제외</small></div><div class="stat"><label>확보한 상품 딜</label><strong>${data.deals.filter((d) => d.state === "확정").length}</strong><small>상품 조건이 확정된 카드 수</small></div></div><div class="grid"><div class="panel"><div class="panel-head"><h2>지금 해야 할 일</h2><a href="#inbox">대화함 ↗</a></div>${
+    `<div class="dashboard-shortcuts"><a href="#brands"><strong>브랜드 영업</strong><small>업체 발굴 · 제안 메일 · 발송 관리</small></a><a href="#creators"><strong>크리에이터 협업</strong><small>크리에이터 목록 · 상품 매칭</small></a><a href="#inbox"><strong>회신 확인</strong><small>통합 대화함 · 답장 작성</small></a></div><div class="stats"><div class="stat"><label>발굴 후보</label><strong>${data.candidates.length}</strong><small>검증된 사업용 연락처 ${data.candidates.filter((c) => c.contact.verified).length}</small></div><div class="stat"><label>이메일·API 접수</label><strong>${sent.length}</strong><small>받은편지함 도착·열람은 미확인</small></div><div class="stat"><label>사람의 회신율</label><strong>${rate(humanTargets.size)}</strong><small>회신 대상 ${humanTargets.size} / 접수 대상 ${sentTargets.size} · 자동 응답 제외</small></div><div class="stat"><label>확보한 상품 딜</label><strong>${data.deals.filter((d) => d.state === "확정").length}</strong><small>상품 조건이 확정된 카드 수</small></div></div><div class="grid"><div class="panel"><div class="panel-head"><h2>지금 해야 할 일</h2><a href="#inbox">대화함 ↗</a></div>${
       data.candidates
         .filter((c) => c.next)
         .map(
@@ -217,13 +219,16 @@ function outboxTable() {
 async function creatorDiscoveryPage(){
   $('#app').innerHTML=head('크리에이터 자동 발굴','공개 검색 결과에서 새 계정을 찾고, 중복을 제외해 저장합니다.');
   try{
-    const r=await api('/creator-discovery'),c=r.config,rows=r.prospects;
+    const r=await api('/creator-discovery'),c=r.config,rows=r.prospects;window.creatorDiscoveryView=r;
     const labels={found:'신규 후보 발견',no_new_results:'검색 완료 · 신규 없음',search_failed:'검색 실패 · 제공자 상태 확인',searching:'검색 요청 진행 중 · 1분 이상 지속 시 오류 여부 확인',disabled:'중단',target_reached:'오늘 목표 도달',cooldown:'다음 검색 대기'};
     const runtime=c.runtime||{},today=new Date(Date.now()+9*3600000).toISOString().slice(0,10),yesterday=new Date(Date.now()+9*3600000-86400000).toISOString().slice(0,10),day=x=>new Date(Date.parse(x.checked)+9*3600000).toISOString().slice(0,10);
-    $('#app').innerHTML=head('크리에이터 자동 발굴','공개 검색 → 중복 제거 → 근거 저장 → 내 카피 준비. 검색 목표는 실제 발견 수를 보장하지 않습니다.')+
+    $('#app').innerHTML=head('크리에이터 목록','공개 검색 후보와 확인된 프로필을 구분하고, 승인한 DM만 내 PC에서 처리합니다.')+
     `<div class="grid"><div class="panel"><h2>${c.enabled?'자동 검색 켜짐':'자동 검색 꺼짐'}</h2><p>오늘 ${r.counts.today}명 · 어제 ${r.counts.yesterday}명 · 목록 최근 ${rows.length}명</p><p>${esc(labels[runtime.status]||'검색 이력 없음')} ${runtime.checked?esc(new Date(runtime.checked).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))+' KST':''}</p><p class="fine">5분 간격 · 일일 목표 ${esc(c.target)}명 · 유료 검색 API 호출 0회. 서버 사용량은 Supabase 요금제에 따릅니다.</p><details><summary>검색 진행·오류 상세</summary><p>${esc(runtime.query||'')}</p>${(runtime.sources||[]).map(x=>`<p>${esc(x.engine)}: ${esc(x.error||x.status||('후보 '+x.candidates+'명'))}</p>`).join('')}</details>${button('지금 검색','creator-auto-search')}${button('자동 검색 중지','creator-auto-stop')}</div>
     <form id="creator-auto-settings" class="panel"><h2>검색 조건·DM 카피</h2>${field('enabled','주기적 자동 검색',c.enabled,'checkbox')}${field('target','하루 발굴 목표 · 최대 500명',c.target,'number')}${field('keywords','검색 주제 · 한 줄에 하나',c.keywords.join('\n'),'textarea')}${field('senderHandle','제안할 Instagram 계정',c.sender_handle)}${field('dmCopy','내 DM 카피 · {{아이디}} 변수 사용 가능',c.dm_copy,'textarea')}<button type="submit" class="primary">저장</button><p class="fine">신규 상대 선제 DM 자동 발송은 공식 API에서 지원하지 않습니다. 이 설정은 검색·문구 준비만 수행하며 DM을 보내지 않습니다. 수신 대화 회신은 기존 공식 연동을 사용합니다.</p></form></div>
-    <div class="panel"><h2>자동으로 찾은 계정 ${rows.length}명</h2>${rows.map(x=>`<details><summary>@${esc(x.handle)} · ${esc(x.status==='new'?'발굴 후보':x.status)}</summary><p>${esc(x.excerpt)}</p><p>${esc(x.reasons.join(' / '))}</p><p class="fine">${esc(x.uncertainties.join(' / '))}</p><a target="_blank" rel="noopener" href="${esc(x.profile)}">계정 ↗</a> · <a target="_blank" rel="noopener" href="${esc(x.source_url)}">검색 출처 ↗</a><small> 확인 ${esc(new Date(x.checked).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))} KST</small><h3>내 카피 미리보기</h3><pre style="white-space:pre-wrap">${esc(x.body||'위에서 DM 카피를 입력해 주세요.')}</pre></details>`).join('')||'<p class="empty">아직 발견된 계정이 없습니다. 자동 검색을 켜고 조건을 저장하세요.</p>'}</div><details class="panel"><summary>기존 저장 후보</summary><div id="creator-existing"></div></details>`;
+    <section class="panel"><div class="section-title"><div><h2>내 PC Instagram 실행기</h2><p>연결 ${esc(c.worker_state||'not_connected')} · 마지막 응답 ${c.worker_seen?esc(new Date(c.worker_seen).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))+' KST':'없음'}</p></div><a href="../downloads/sanji-local-worker.zip" download>PC 실행기 다운로드 ↓</a></div><p>처음에는 프로필 미리보기만 수집합니다. 세션은 PC에만 보관하며, DM 전송은 대상·최종 카피 승인과 PC의 수신자 재확인이 모두 필요합니다. 발송 모드는 1건 처리 후 종료합니다.</p><div class="actions">${button('PC 연결 키 발급','creator-local-pair')}${button('PC 연결 해제','creator-local-revoke')}</div><details><summary>설치·실행 방법</summary><p>Node.js 22 이상 설치 → ZIP 압축 해제 → 폴더에서 터미널 열기</p><pre>npm install
+npx playwright install chromium
+npm start</pre><p>발신 아이디·카피를 위에서 저장하고 PC 연결 키를 발급해 실행기에 입력하세요. Instagram 창에서 직접 로그인합니다. 실제 발송은 웹에서 승인한 다음 PC에서 <code>npm run send</code>로 실행합니다. 이 모드에서는 승인 대상에게 실제 DM이 나갈 수 있습니다. 종료는 Ctrl+C입니다.</p><p class="fine">공식 API DM 연동과 별도인 내부용 브라우저 실행기입니다. 수신자 확인 불가·제한·인증 오류에서는 중단합니다. 검색된 수는 원문 검증·발송 가능 인원을 뜻하지 않습니다.</p></details></section>
+    <section class="panel"><div class="section-title"><h2>검색으로 찾은 후보 ${rows.length}명</h2>${button('선택한 DM 승인·PC 대기열에 넣기','creator-dm-review')}</div><p class="fine">팔로워·팔로잉·게시물 수는 PC에서 확인한 화면 표기입니다. 미확인 값은 추정하지 않습니다. 프로필 미리보기는 PC 실행 중 순서대로 채워집니다.</p><div class="creator-profile-grid">${rows.map(x=>{const p=x.profile_preview||{},state={new:'발굴 후보',queued:'승인됨 · PC 대기',sending:'처리 중 · 재발송 금지',sent:'전송 화면 확인 · 전달 미확인',unknown:'전송 결과 미확인',failed:'전송 전 중단',blocked:'제외',cancelled:'승인 취소'}[x.status]||x.status;return `<article class="creator-profile-card"><div class="creator-profile-top"><div class="creator-avatar" aria-hidden="true">${esc(x.handle.slice(0,1).toUpperCase())}</div><div><a href="https://www.instagram.com/${encodeURIComponent(x.handle)}/" target="_blank" rel="noopener"><strong>@${esc(x.handle)}</strong></a><p>${esc(p.displayName||'표시 이름 미확인')}</p></div>${x.status==='new'?`<input type="checkbox" data-creator-select="${esc(x.id)}" aria-label="@${esc(x.handle)} DM 대상 선택">`:''}</div><p class="fine">${esc(state)}</p><div class="creator-profile-stats"><div><small>게시물</small><strong>${esc(p.postsText||'미확인')}</strong></div><div><small>팔로워</small><strong>${esc(p.followersText||'미확인')}</strong></div><div><small>팔로잉</small><strong>${esc(p.followingText||'미확인')}</strong></div></div>${p.bio?`<p class="creator-bio">${esc(p.bio)}</p>`:''}<div id="creator-preview-${esc(x.id)}">${p.imagePath?button('프로필 상단 미리보기','creator-profile-preview',x.id):`<p class="fine">${esc(p.reason||'PC 실행 후 프로필 미리보기를 확인할 수 있습니다.')}</p>`}</div>${p.checked?`<p class="fine">프로필 확인 ${esc(new Date(p.checked).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))} KST</p>`:''}<details><summary>소개·선정 이유·DM 카피 펼치기</summary><p>${esc(x.excerpt)}</p><p>${esc(x.reasons.join(' / '))}</p><p class="fine">${esc(x.uncertainties.join(' / '))}</p><a target="_blank" rel="noopener" href="${esc(x.source_url)}">검색 출처 ↗</a><small> 검색 확인 ${esc(new Date(x.checked).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))} KST</small><h3>내 카피 미리보기</h3><pre style="white-space:pre-wrap">${esc(x.body||'위에서 DM 카피를 입력해 주세요.')}</pre></details>${x.result?.note?`<p class="fine">${esc(x.result.note)}</p>`:''}</article>`;}).join('')||'<p class="empty">아직 발견된 계정이 없습니다. 자동 검색을 켜고 조건을 저장하세요.</p>'}</div></section><details class="panel"><summary>기존 저장 후보</summary><div id="creator-existing"></div></details>`;
     const host=$('#creator-existing');host.innerHTML=data.candidates.filter(x=>x.type==='creator').map(x=>`<p>${esc(x.name)} ${esc(x.handle||'')}${button('상세','candidate',x.id)}</p>`).join('')||'기존 후보 없음';
   }catch(e){$('#app').innerHTML+=`<div class="notice">${esc(e.message)}</div>`;}
 }
@@ -497,7 +502,7 @@ async function settingsPage() {
  '<section class="panel settings-section"><div class="section-title"><div><h2>매일 새 업체 찾기</h2><p>한국시간 자정에 외부 목록을 갱신하고, 중복을 제외해 순차 확인합니다.</p></div>'+tag("00:00 KST")+'</div><div id="discovery-settings-panel" class="fine">발굴 설정 확인 중…</div></section>'+
  '<section class="panel settings-section"><div class="section-title"><div><h2>발신자 정보</h2><p>메일 하단에 표시되는 사업자 정보입니다.</p></div></div><form id="settings-form" class="form-grid">'+field("senderName","사업자·발신자명",data.settings.senderName)+field("senderAddress","사업장 주소",data.settings.senderAddress)+field("senderPhone","발신자 연락처",data.settings.senderPhone)+'<div class="full"><p class="fine">일반 협업 제안에는 수신 거부 문구를 자동 추가하지 않습니다. 광고성 메일에는 발신자 정보·수신 거부 안내를 적용합니다.</p><button type="submit" class="primary">발신 정보 저장</button></div></form></section>'+
  '<details class="panel settings-section"><summary>예약·발송 기록·차단 목록</summary><h3>승인한 발송 예약</h3>'+jobTable()+'<h3>발송 기록</h3>'+outboxTable()+'<h3>차단 목록</h3>'+(data.suppression.map(s=>'<div class="task">'+esc(s.identity)+tag(s.reason,"orange")+'</div>').join("")||'<p class="fine">차단 기록 없음</p>')+button("감사 기록 조회","audit")+'</details>';
- try {const r=await api("/discovery");if(!$("#discovery-settings-panel"))return;$("#discovery-settings-panel").innerHTML='<form id="discovery-settings" class="discovery-preferences">'+field("target","하루 신규 업체 목표",r.settings.target,"number")+field("enabled","매일 자정(00:00 KST) 자동 발굴",r.settings.enabled,"checkbox")+field("notifyCompletion","목표 달성 시 관리자 로그인 이메일로 완료 알림",r.settings.notify_completion,"checkbox")+'<input name="keywords" type="hidden" value="'+esc(r.settings.keywords.join("\n"))+'"><button type="submit">발굴 설정 저장</button></form><p class="fine">이메일을 확보한 새로운 업체를 기준으로 집계합니다. 40곳은 일일 목표이며 실제 확보 수와 실패 원인을 표시합니다. 자동 발굴은 메일 발송 승인을 대신하지 않습니다.</p><div class="discovery-source-summary">'+sourceSummary(r)+'</div>';}catch(e){if($("#discovery-settings-panel"))$("#discovery-settings-panel").textContent=e.message;}
+ try {const r=await api("/discovery");if(!$("#discovery-settings-panel"))return;$("#discovery-settings-panel").innerHTML='<form id="discovery-settings" class="discovery-preferences">'+field("target","하루 신규 업체 목표",r.settings.target,"number")+field("enabled","매일 자정(00:00 KST) 자동 발굴",r.settings.enabled,"checkbox")+field("notifyCompletion","목표 달성 시 관리자 로그인 이메일로 완료 알림",r.settings.notify_completion,"checkbox")+'<input name="keywords" type="hidden" value="'+esc(r.settings.keywords.join("\n"))+'"><button type="submit">발굴 설정 저장</button></form><p class="fine">이메일을 확보한 새로운 업체를 기준으로 집계합니다. 설정한 일일 목표와 실제 확보 수, 실패 원인을 표시합니다. 자동 발굴은 메일 발송 승인을 대신하지 않습니다.</p><div class="discovery-source-summary">'+sourceSummary(r)+'</div>';}catch(e){if($("#discovery-settings-panel"))$("#discovery-settings-panel").textContent=e.message;}
 }
 function connectionStep(label,done){return '<span class="connection-step '+(done?"done":"")+'">'+(done?"✓":"○")+' '+esc(label)+'</span>';}
 function sourceSummary(r){const s=r.engine?.sourceState||r.settings.source_state||{};return '<span>최근 목록 갱신 '+esc(localTime(s.checked))+'</span><span>신규 후보 '+Number(s.added||0)+'곳</span>'+(s.error?'<details><summary>수집 제한·오류</summary><p>'+esc(s.error)+'</p></details>':"");}
@@ -535,7 +540,7 @@ function discoveryCards(r) {
   return '<div class="mail-list">'+rows.map(l=>{
     const c=mailCopy(l),contact=(l.data.contacts||[])[0];
     return '<article class="mail-card"><label class="mail-select"><input type="checkbox" data-mail-select="'+l.id+'" '+(selectedMailLeads.has(l.id)?"checked":"")+' aria-label="'+esc(l.data.name)+' 선택"></label><div class="mail-card-main"><div class="mail-card-top"><h3>'+esc(c.companyName)+'</h3>'+tag(c.sendBlockedReason?"발송 보류 · 사유 보기":c.prepared?"초안 저장됨":"템플릿 설정 필요",c.prepared&&!c.needsPersonalization&&!c.sendBlockedReason?"":"orange")+'</div><div class="mail-recipient"><strong>'+esc((l.data.contacts||[]).filter(e=>!e.excluded&&!e.excludeFromOutreach).map(e=>e.email).join(", ")||"수신 가능한 이메일 확인 필요")+'</strong>'+(contact?.purpose?'<span>'+esc(contact.purpose)+'</span>':'')+'</div><p class="mail-subject">'+esc(c.subject||"템플릿을 설정하세요")+'</p><p class="mail-intro">'+esc(c.intro||c.productName||"확인한 자료로 제품과 개인화를 준비합니다.")+'</p><details class="mail-inline-copy"><summary>메일 전문 펼쳐보기 · 제목·본문·서명</summary><strong>'+esc(c.subject)+'</strong><div class="mail-letter">'+esc(inlineMailBody(c))+'</div></details><div id="mail-state-'+l.id+'" role="status" aria-live="polite">'+esc(inlineMailState.get(l.id)?.text||"아직 발송하지 않았습니다.")+'</div><details class="mail-evidence"><summary>출처·검토 상태</summary><p>이메일 원문 확인과 회사 소유 관계 승인을 구분합니다. 현재 자동 조사 결과와 최종 발송 승인은 구분합니다.</p>'+(l.data.contacts||[]).map(e=>'<p><strong>'+esc(e.email)+'</strong> · '+esc(e.purpose||"용도 검토 전")+' '+(e.source?'<a href="'+esc(e.source)+'" target="_blank" rel="noopener">원문 ↗</a>':'<span>사용자 제공 자료 · 원문 URL 확인 대기</span>')+'</p>').join("")+(c.evidence||[]).map(e=>'<p><a href="'+esc(e.url)+'" target="_blank" rel="noopener">'+esc(e.description||"개인화 근거")+' ↗</a></p>').join("")+(l.data.research?.reason?'<p class="fine">자동 조사 결과: '+esc(l.data.research.reason)+'</p>':"")+(l.data.error?'<p class="fine">수집 메모: '+esc(l.data.error)+'</p>':"")+'</details></div><div class="mail-card-action">'+inlineMailButton(l.id)+button("내용 수정","mail-review",l.id)+'</div></article>';
-  }).join("")+'</div>'+(rows.length?"":'<div class="panel empty">표시할 업체가 없습니다.</div>')+(held.length?'<details class="panel"><summary>발송 보류 '+held.length+'곳 · 자료를 추가 확인해야 하는 업체</summary>'+held.map(l=>'<p><strong>'+esc(l.data.name)+'</strong> · '+esc(l.data.outreach.sendBlockedReason.replace(/^전체 초안 검수: /,""))+'</p>').join("")+'</details>':"");
+  }).join("")+'</div>'+(rows.length?"":'<div class="panel empty">표시할 업체가 없습니다.</div>')+(held.length?'<details class="panel"><summary>발송 보류 '+held.length+'곳 · 자료를 추가 확인해야 하는 업체</summary>'+held.map(l=>'<p><strong>'+esc(l.data.name)+'</strong> · '+esc(l.contactResearch?l.contactResearch.label+" · "+(l.contactResearch.detail||""):l.data.outreach.sendBlockedReason.replace(/^전체 초안 검수: /,""))+'</p>').join("")+'</details>':"");
 }
 function sentMailCards() {
   const all=sentMailRows(),opened=new Map(mailOpenReport.filter(r=>r.label==="열람 추정"&&!r.is_test&&r.first_included).map(r=>[r.id,r]));
@@ -970,6 +975,12 @@ document.addEventListener("submit", async (e) => {
   }
 });
 const actions = {
+  "creator-local-pair":async()=>{const r=await api('/creator-local/pair','POST',{});modal('<h2>PC 연결 키</h2><p>실행기 터미널에 입력하세요. 키를 다른 사람에게 보내지 마세요. 7일간 유효하며 재발급하면 이전 연결은 해제됩니다.</p><textarea readonly aria-label="PC 연결 키">'+esc(r.token)+'</textarea>');},
+  "creator-local-revoke":async()=>{await api('/creator-local/revoke','POST',{});toast('PC 연결을 해제하고 미실행 승인을 취소했습니다.');await creatorDiscoveryPage();},
+  "creator-profile-preview":async id=>{const r=await api('/creator-local/preview','POST',{id});const host=document.getElementById('creator-preview-'+id);if(!r.url){host.textContent='저장된 미리보기가 없습니다.';return;}const image=document.createElement('img');image.alt='확인 시점의 Instagram 프로필 상단';image.className='creator-profile-image';image.src=r.url;host.replaceChildren(image);},
+  "creator-dm-review":()=>{const ids=$$('[data-creator-select]:checked').map(e=>e.dataset.creatorSelect);if(!ids.length||ids.length>20){toast('1~20명의 대상을 선택해 주세요.');return;}const rows=window.creatorDiscoveryView.prospects.filter(x=>ids.includes(x.id));window.creatorDmReview=rows;modal('<h2>선택한 DM 최종 승인</h2><p>발신 @'+esc(window.creatorDiscoveryView.config.sender_handle)+' · '+rows.length+'명. PC가 발송 모드로 실행 중이면 승인 후 전송됩니다.</p>'+rows.map(x=>'<section class="panel"><h3>@'+esc(x.handle)+'</h3><pre class="mail-letter">'+esc(x.body||'카피 없음 · 먼저 저장하세요.')+'</pre></section>').join('')+button('위 수신자·내용으로 PC 발송 승인','creator-dm-confirm','',true));},
+  "creator-dm-confirm":async()=>{const rows=window.creatorDmReview||[];await api('/creator-local/approve','POST',{ids:rows.map(x=>x.id),copies:Object.fromEntries(rows.map(x=>[x.id,x.body]))});window.creatorDmReview=[];close();toast('승인했습니다. PC 실행기에서 처리 결과를 확인하세요.');await creatorDiscoveryPage();},
+
   "creator-auto-search":async()=>{const r=await api("/creator-discovery/search","POST",{});toast(r.status==="cooldown"?"최근 검색 후 5분 간격으로 진행합니다.":"검색 완료 · 신규 "+(r.added||0)+"명");await creatorDiscoveryPage();},
   "creator-auto-stop":async()=>{await api("/creator-discovery/stop","POST",{});await creatorDiscoveryPage();},
 

@@ -17,13 +17,29 @@ export function realProductName(value:any){const s=String(value||"").trim();retu
 export function productDetailUrl(url:string){try{const u=new URL(url);if(/\/board\/|\/news\/|\/magazine\/|\/category\/|\/(?:product|goods)\/(?:list|index|review)/i.test(u.pathname)||u.searchParams.has("board_no"))return false;return /^\/product\/(?:detail[^/]*|[^/]+\/\d+(?:\/|$))/i.test(u.pathname)&&(/product_no=\d+/.test(u.search)||/\/\d+(?:\/|$)/.test(u.pathname))||/\/(?:vp\/products|products)\/\d+/.test(u.pathname)||/(?:goodsNo|goodsno|goods_no|goodsCd|goodsNo)=\w+/.test(u.search)&&/goods|product/.test(u.pathname);}catch{return false;}}
 export function duplicateParagraphs(text:string){const seen=new Set(),duplicates:string[]=[];for(const p of String(text||"").split(/\n\s*\n/)){const key=p.replace(/\s+/g,"").replace(/[.!！。]/g,"");if(key.length<30)continue;if(seen.has(key))duplicates.push(p);seen.add(key);}const requests=String(text||"").match(/저희가 적합한 크리에이터 후보와 채널 자료,?\s*구체적인 진행안을 정리해 제안드리겠습니다[.!]?/g)||[];if(requests.length>1)duplicates.push("크리에이터 후보·채널 자료·진행안 제공 문단 반복");return duplicates;}
 export function dedupeProposal(text:string){let seen=new Set<string>();let out=String(text||"").split(/\n\s*\n/).filter(p=>{const key=p.replace(/\s+/g,"").replace(/[.!！。]/g,"");if(key.length<30)return true;if(seen.has(key))return false;seen.add(key);return true;}).join("\n\n");for(const pattern of [/저희가 적합한 크리에이터 후보와 채널 자료,?\s*구체적인 진행안을 정리해 제안드리겠습니다[.!]?/g,/공동구매 담당자분을 편하게 연결해주시면 감사하겠습니다[.!]?/g]){let found=false;out=out.replace(pattern,s=>{if(found)return "";found=true;return s;});}return out.replace(/\n{3,}/g,"\n\n").trim();}
+// Trust only successful crawl links/redirects rooted at the selected official site.
+export function officialOrigins(d:any){
+ const origin=(v:string)=>{try{const u=new URL(v);return u.protocol==="https:"?u.hostname.replace(/^www\./,""):"";}catch{return "";}};
+ const trusted=new Set<string>([origin(d.website)].filter(Boolean));
+ for(let pass=0;pass<8;pass++){let changed=false;for(const a of d.sourceAttempts||[]){if(a.status!=="checked")continue;const from=[a.requestedUrl,a.linkedFrom,...(a.redirects||[])].map(origin).filter(Boolean);if(!from.some(h=>trusted.has(h)))continue;const dest=origin(a.url);if(dest&&!trusted.has(dest)&&!editorialSource(a.url,d.publicEvidence||[])){trusted.add(dest);changed=true;}}if(!changed)break;}
+ return trusted;
+}
+export function contactResearchState(lead:any,check:any){
+ const d=lead.data||lead,attempts=d.sourceAttempts||[];
+ if(check.allowed)return {status:"verified",label:"공식 게시 이메일 확인",detail:"공식 사이트에 게시된 이메일과 회사 관계를 확인했습니다."};
+ if(!validBrandName(check.brand)||editorialSource(d.website,d.publicEvidence||[]))return {status:"discovery_only",label:"브랜드 공식 사이트 분리 필요",detail:"기사·중간 사이트의 이메일은 제안 대상에 사용하지 않습니다."};
+ if((d.contacts||[]).length)return {status:"relationship_review",label:"이메일 있음 · 게시 관계 재확인",detail:check.excluded.flatMap((c:any)=>c.reasons).filter((v:any,i:number,a:any[])=>a.indexOf(v)===i).join(" / ")};
+ if(!attempts.length&&!d.publicEvidence?.length)return {status:"not_checked",label:"공식몰 확인 대기",detail:"아직 홈페이지 확인 결과가 없습니다. 이메일이 없다는 의미가 아닙니다."};
+ if(!attempts.some((a:any)=>a.status==="checked")&&!d.publicEvidence?.length)return {status:"fetch_failed",label:"홈페이지 접속 실패 · 재확인 필요",detail:attempts.find((a:any)=>a.error)?.error||d.error||"페이지를 확인하지 못했습니다."};
+ return {status:"not_found_in_checked_pages",label:"확인한 페이지에서 이메일 미발견",detail:"확인 범위: "+(d.publicEvidence?.length||0)+"페이지. 다른 공식 문의·판매처까지 확인이 필요합니다."};
+}
 export function assessMailLead(lead:any,permanentFailures:string[]=[]){
  const d=lead?.data||lead||{},o=d.outreach||{},pages=d.publicEvidence||[],brand=o.brandName||d.name||d.company||"",reasons:string[]=[],contacts:any[]=[],excluded:any[]=[];
  if(!validBrandName(brand))reasons.push("검증된 브랜드·회사명 대신 기사 제목·매체명·메뉴가 저장됨");
  if(editorialSource(d.website,pages))reasons.push("기사·언론사·중간 사이트는 발견 출처이며 브랜드 연락처 출처가 아님");
- let home:any;try{home=pages.find((p:any)=>new URL(p.url).hostname.replace(/^www\./,"")===new URL(d.website).hostname.replace(/^www\./,"")&&(!/\/board\/|\/news\//.test(new URL(p.url).pathname)));}catch{}
- const identity=companyIdentity(brand),homeMatches=!!home&&[home.title,home.description].some(v=>companyIdentity(String(v||"")).includes(identity));
- for(const c of d.contacts||[]){const email=String(c.email||"").toLowerCase(),why:string[]=[];let sameHost=false;try{const source=new URL(c.source),site=new URL(d.website),sh=source.hostname.replace(/^www\./,""),h=site.hostname.replace(/^www\./,"");sameHost=source.protocol==="https:"&&(sh===h||(sh.endsWith("."+h)&&c.linkedFrom&&new URL(c.linkedFrom).hostname.replace(/^www\./,"")===h));}catch{}
+ const trusted=officialOrigins(d),trustedPages=pages.filter((p:any)=>{try{return trusted.has(new URL(p.url).hostname.replace(/^www\./,""))&&!editorialSource(p.url,pages);}catch{return false;}});
+ const identity=companyIdentity(brand),home=trustedPages[0],homeMatches=!!identity&&trustedPages.some((p:any)=>[p.title,p.description].some(v=>companyIdentity(String(v||"")).includes(identity)));
+ for(const c of d.contacts||[]){const email=String(c.email||"").toLowerCase(),why:string[]=[];let sameHost=false;try{const source=new URL(c.source),site=new URL(d.website),sh=source.hostname.replace(/^www\./,""),h=site.hostname.replace(/^www\./,"");sameHost=source.protocol==="https:"&&(trusted.has(sh)||sh===h||(sh.endsWith("."+h)&&c.linkedFrom&&new URL(c.linkedFrom).hostname.replace(/^www\./,"")===h));}catch{}
  if(c.excluded||c.excludeFromOutreach)why.push("이미 제외된 주소");
  if(permanentFailures.includes(email))why.push("사용자 확인 영구 반송 주소 · 주소 단위 제외");
  if(editorialSource(c.source,pages))why.push("언론사·기자·중간 사이트 연락처");
