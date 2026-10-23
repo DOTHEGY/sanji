@@ -38,7 +38,10 @@ export function researchBrand(lead:any,template:any,checked=new Date().toISOStri
  return {research,outreach:kept};
  }
  if(product&&(!concreteProductName(product.name)||nonFoodProduct(product.name)))product=undefined;
- if(!product||!food||device)return {research,outreach:{...(template?leadOutreach(template,lead,checked):old),needsPersonalization:true,researchStatus:"pending",researchReason:research.reason}};
+ if(!product||!food||device){
+  const draft=template?leadOutreach(template,{...lead,outreach:{...old,productName:"",intro:""},product:""},checked):old;
+  return {research,outreach:{...draft,needsPersonalization:!draft.body||device,researchStatus:"pending",researchReason:research.reason,draftMode:"brand_first"}};
+ }
  let idea="상품 구성과 사용 방법을 직접 보여주는 푸드·라이프스타일 콘텐츠로 공동구매를 제안드리고 싶습니다.";
  if(/견과|넛츠|넛트/.test(product.name))idea="베이킹 크리에이터가 실제 레시피에서 견과를 활용하고, 구성별 차이를 보여주는 콘텐츠로 공동구매를 제안드리고 싶습니다.";
  else if(/단백질|쉐이크|프로틴/.test(product.name))idea="운동·웰니스 크리에이터가 실제 조리·섭취 준비 과정과 제품별 구성을 보여주는 콘텐츠로 공동구매를 제안드리고 싶습니다.";

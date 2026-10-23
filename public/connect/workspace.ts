@@ -491,7 +491,8 @@ function renderLeadText(text2, brand, product, intro = "") {
 }
 function leadOutreach(template2, lead, time = (/* @__PURE__ */ new Date()).toISOString()) {
   const old = lead.outreach || {}, brand = old.brandName || lead.name || lead.company || "\uC5C5\uCCB4", product = old.productName || lead.product || "\uACF5\uB3D9\uAD6C\uB9E4 \uD611\uC758 \uAC00\uB2A5\uD55C \uC0C1\uD488", intro = template2.data.copyFlow === "product_interest_v1" && old.proposalType !== "manufacturer_supply" ? productInterestIntro(product, old.intro || "") : old.intro || "";
-  return { ...old, brandName: brand, companyName: brand, productName: product, intro, subject: renderLeadText(template2.data.subject, brand, product), body: renderLeadText(template2.data.body, brand, product, intro), signature: renderLeadText(template2.data.signature, brand, product), templateId: template2.id, templateVersion: template2.version, templateUpdated: template2.updated, approved: false, needsPersonalization: !intro, updated: time };
+  const readyIntro = intro || "\uADC0\uC0AC\uC758 \uBE0C\uB79C\uB4DC\uC640 \uD06C\uB9AC\uC5D0\uC774\uD130 \uACF5\uB3D9\uAD6C\uB9E4 \uD611\uC5C5\uC744 \uC9C4\uD589\uD574\uBCF4\uACE0 \uC2F6\uC2B5\uB2C8\uB2E4. \uACF5\uB3D9\uAD6C\uB9E4 \uB2F4\uB2F9\uC790\uBD84\uC744 \uD3B8\uD558\uAC8C \uC5F0\uACB0\uD574\uC8FC\uC2DC\uBA74 \uAC10\uC0AC\uD558\uACA0\uC2B5\uB2C8\uB2E4. \uC800\uD76C\uAC00 \uC801\uD569\uD55C \uD06C\uB9AC\uC5D0\uC774\uD130 \uD6C4\uBCF4\uC640 \uCC44\uB110 \uC790\uB8CC, \uAD6C\uCCB4\uC801\uC778 \uC9C4\uD589\uC548\uC744 \uC815\uB9AC\uD574 \uC81C\uC548\uB4DC\uB9AC\uACA0\uC2B5\uB2C8\uB2E4.";
+  return { ...old, brandName: brand, companyName: brand, productName: product, intro: readyIntro, draftMode: intro ? old.draftMode || "product" : "brand_first", subject: renderLeadText(template2.data.subject, brand, product), body: renderLeadText(template2.data.body, brand, product, readyIntro), signature: renderLeadText(template2.data.signature, brand, product), templateId: template2.id, templateVersion: template2.version, templateUpdated: template2.updated, approved: false, needsPersonalization: false, updated: time };
 }
 function productInterestIntro(product, intro) {
   const name = String(product || "").replace(/\s*\((?:단품|단일상품)\)\s*/g, "").trim();
@@ -570,7 +571,10 @@ function researchBrand(lead, template2, checked = (/* @__PURE__ */ new Date()).t
     return { research, outreach: kept };
   }
   if (product && (!concreteProductName(product.name) || nonFoodProduct(product.name))) product = void 0;
-  if (!product || !food || device) return { research, outreach: { ...template2 ? leadOutreach(template2, lead, checked) : old, needsPersonalization: true, researchStatus: "pending", researchReason: research.reason } };
+  if (!product || !food || device) {
+    const draft2 = template2 ? leadOutreach(template2, { ...lead, outreach: { ...old, productName: "", intro: "" }, product: "" }, checked) : old;
+    return { research, outreach: { ...draft2, needsPersonalization: !draft2.body || device, researchStatus: "pending", researchReason: research.reason, draftMode: "brand_first" } };
+  }
   let idea = "\uC0C1\uD488 \uAD6C\uC131\uACFC \uC0AC\uC6A9 \uBC29\uBC95\uC744 \uC9C1\uC811 \uBCF4\uC5EC\uC8FC\uB294 \uD478\uB4DC\xB7\uB77C\uC774\uD504\uC2A4\uD0C0\uC77C \uCF58\uD150\uCE20\uB85C \uACF5\uB3D9\uAD6C\uB9E4\uB97C \uC81C\uC548\uB4DC\uB9AC\uACE0 \uC2F6\uC2B5\uB2C8\uB2E4.";
   if (/견과|넛츠|넛트/.test(product.name)) idea = "\uBCA0\uC774\uD0B9 \uD06C\uB9AC\uC5D0\uC774\uD130\uAC00 \uC2E4\uC81C \uB808\uC2DC\uD53C\uC5D0\uC11C \uACAC\uACFC\uB97C \uD65C\uC6A9\uD558\uACE0, \uAD6C\uC131\uBCC4 \uCC28\uC774\uB97C \uBCF4\uC5EC\uC8FC\uB294 \uCF58\uD150\uCE20\uB85C \uACF5\uB3D9\uAD6C\uB9E4\uB97C \uC81C\uC548\uB4DC\uB9AC\uACE0 \uC2F6\uC2B5\uB2C8\uB2E4.";
   else if (/단백질|쉐이크|프로틴/.test(product.name)) idea = "\uC6B4\uB3D9\xB7\uC6F0\uB2C8\uC2A4 \uD06C\uB9AC\uC5D0\uC774\uD130\uAC00 \uC2E4\uC81C \uC870\uB9AC\xB7\uC12D\uCDE8 \uC900\uBE44 \uACFC\uC815\uACFC \uC81C\uD488\uBCC4 \uAD6C\uC131\uC744 \uBCF4\uC5EC\uC8FC\uB294 \uCF58\uD150\uCE20\uB85C \uACF5\uB3D9\uAD6C\uB9E4\uB97C \uC81C\uC548\uB4DC\uB9AC\uACE0 \uC2F6\uC2B5\uB2C8\uB2E4.";
