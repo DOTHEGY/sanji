@@ -1,0 +1,8 @@
+**
+!local-worker/
+!local-worker/package.json
+!local-worker/package-lock.json
+!local-worker/worker.cjs
+!server-worker/
+!server-worker/runner.cjs
+!server-worker/Dockerfile

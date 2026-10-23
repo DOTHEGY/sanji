@@ -1,0 +1,14 @@
+services:
+  - type: worker
+    name: sanji-instagram-worker
+    runtime: docker
+    branch: main
+    dockerfilePath: ./server-worker/Dockerfile
+    dockerContext: .
+    numInstances: 1
+    autoDeployTrigger: off
+    envVars:
+      - key: SANJI_SERVER_KEY
+        sync: false
+      - key: SANJI_SENDER_HANDLE
+        sync: false

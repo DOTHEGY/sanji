@@ -40,6 +40,19 @@ async function profile(page,job){
  return {status:'checked',displayName,bio,followersText:await stat('followers'),followingText:await stat('following'),postsText:posts,image};
  }catch(e){return {status:'unavailable',reason:e.message.slice(0,200),halt:true};}
 }
+async function conversationRecipient(editor,expected,inDirect){
+ return await editor.evaluate((el,{expected,inDirect})=>{
+  const dialog=el.closest('[role="dialog"]');
+  const scope=dialog||(inDirect?el.closest('main,[role="main"]'):null);if(!scope)return false;
+  const box=scope.getBoundingClientRect(),input=el.getBoundingClientRect(),handles=new Set();
+  for(const a of scope.querySelectorAll('a[href]')){
+   const rect=a.getBoundingClientRect();if(!rect.width||!rect.height||rect.top<box.top||rect.top>box.top+160)continue;
+   if(!dialog&&rect.right<input.left-50)continue;
+   try{const u=new URL(a.getAttribute('href'),location.href);if(!['www.instagram.com','instagram.com'].includes(u.hostname))continue;const match=/^\/([a-z0-9._]+)\/?$/i.exec(u.pathname);if(match&&!['accounts','direct','explore','reels'].includes(match[1]))handles.add(match[1].toLowerCase());}catch{}
+  }
+  return handles.size===1&&handles.has(expected);
+ },{expected,inDirect});
+}
 async function sendApproved(page,job,check,beforeClick){
  if(!job.body?.trim()||!validHandle(job.handle))return {status:'failed',note:'대상·카피 미확인 · 전송 안 함'};
  let clicked=false;
@@ -50,19 +63,18 @@ async function sendApproved(page,job,check,beforeClick){
   if(!await message.isVisible().catch(()=>false))return {status:'failed',note:'메시지 버튼 없음 · 팔로우하지 않고 중단'};
   await message.click();
   const editor=page.locator('div[role="textbox"][contenteditable="true"],textarea[placeholder="Message..."],textarea[placeholder="메시지 입력..."]').last();await editor.waitFor({timeout:12000});
-  // Verify the conversation's recipient link after entering Direct, before touching Send.
-  const targetLink=page.locator('main a[href="/'+job.handle+'/"],[role="dialog"] a[href="/'+job.handle+'/"]').first();
-  if(!/\/direct\//.test(new URL(page.url()).pathname)||!await targetLink.isVisible().catch(()=>false))return {status:'failed',note:'대화 수신자 확인 불가 · 전송 안 함'};
-  const beforeCount=await page.locator('main').getByText(job.body,{exact:true}).count();
+  // Instagram may open a chat dialog without changing the profile URL.
+  if(!await conversationRecipient(editor,job.handle,/\/direct\//.test(new URL(page.url()).pathname)))return {status:'failed',note:'대화 수신자 확인 불가 · 전송 안 함'};
+  const beforeCount=await page.locator('body').getByText(job.body,{exact:true}).count();
   await editor.fill(job.body);
   if((await editor.innerText().catch(()=>''))!==job.body) return {status:'failed',note:'입력된 카피 불일치 · 전송 안 함'};
   const send=page.getByRole('button',{name:/^(보내기|Send)$/i}).last();await send.waitFor({timeout:5000});
   await check();await beforeClick();clicked=true;await send.click();
   await page.waitForTimeout(1500);
-  const text=await page.locator('main').innerText();
+  const text=await page.locator('body').innerText();
   if(/Action Blocked|일시적으로 차단|나중에 다시 시도|Try Again Later|too many/i.test(text))return {status:'unknown',note:'전송 클릭 후 제한 화면 · 결과 미확인, 재시도 안 함',halt:true};
-  const bubble=page.locator('main').getByText(job.body,{exact:true}).first();
-  if((await editor.innerText().catch(()=>job.body)).trim()===''&&await page.locator('main').getByText(job.body,{exact:true}).count()>beforeCount&&await bubble.isVisible().catch(()=>false))return {status:'sent',note:'대화 화면에 발신 문구 표시 확인 · 전달·열람 미확인'};
+  const bubble=page.locator('body').getByText(job.body,{exact:true}).first();
+  if((await editor.innerText().catch(()=>job.body)).trim()===''&&await page.locator('body').getByText(job.body,{exact:true}).count()>beforeCount&&await bubble.isVisible().catch(()=>false))return {status:'sent',note:'대화 화면에 발신 문구 표시 확인 · 전달·열람 미확인'};
   return {status:'unknown',note:'전송 버튼 클릭 후 발신 표시 미확인 · 재시도 안 함',halt:true};
  }catch(e){return {status:clicked?'unknown':'failed',note:(clicked?'클릭 후 결과 미확인: ':'전송 전 중단: ')+e.message.slice(0,180),halt:true};}
 }
@@ -106,5 +118,5 @@ async function run(){
   }
  }finally{io.close();await context?.close();}
 }
-module.exports={instagramOnlyState,validHandle,identity,openProfile,profile,sendApproved,stateDirectory};
+module.exports={conversationRecipient,instagramOnlyState,validHandle,identity,openProfile,profile,sendApproved,stateDirectory};
 if(require.main===module)run().catch(e=>{console.error(e.message);process.exitCode=1;});

@@ -1,3 +1,4 @@
+import {creatorServerService} from "../_shared/creator-server.ts";
 import {manualReplyService} from "../_shared/manual-reply.ts";
 import {creatorLocalService} from "../_shared/creator-local.ts";
 import {gmailSyncService} from "../_shared/gmail-sync.ts";
@@ -151,6 +152,7 @@ const notifyOwner = discoveryCompletionNotifier({sb,query,gmailToken,remote,audi
 const creatorDiscovery = creatorDiscoveryService({sb,query,audit,env});
 const saveManualReply=manualReplyService({sb,query,putRecord,audit});
 const creatorLocal=creatorLocalService({sb,query,audit,encrypt,decrypt,putRecord});
+const creatorServer=creatorServerService({sb,query,encrypt,decrypt,audit,creatorLocal});
 const discovery = discoveryService({sb,query,connection,saveConnection,env,audit,putRecord,notifyOwner});
 async function remote(url: string, options: any = {}, stage = "") {
   const r = await fetch(url, {
@@ -780,6 +782,10 @@ Deno.serve(async (req: Request) => {
       const owners=await query(sb.from("sanji_connections").select("owner").eq("provider","gmail").limit(5));
       return json({results:await Promise.all(owners.map((c:any)=>gmailSync.sync(c.owner)))});
     }
+    if(path.startsWith("/creator-server/worker/")&&req.method==="POST"){
+      const raw=await req.text();if(Buffer.byteLength(raw)>600000)fail(413,"서버 요청 크기 초과");
+      try{return json(await creatorServer.worker(path,req.headers.get("x-sanji-server")||"",raw?JSON.parse(raw):{}));}catch(e){fail(403,String(e.message||"서버 연결 실패"));}
+    }
     if(path.startsWith("/creator-local/worker/")&&req.method==="POST"){
       const raw=await req.text();if(Buffer.byteLength(raw)>600000)fail(413,"PC 요청 크기 초과");
       try{return json(await creatorLocal.worker(path,req.headers.get("x-sanji-worker")||"",raw?JSON.parse(raw):{}));}catch(e){fail(403,String(e.message||"PC 연결 실패"));}
@@ -810,6 +816,9 @@ Deno.serve(async (req: Request) => {
     };
     if(path==="/manual-reply"&&req.method==="POST"){
       try{return json(await saveManualReply(u,await input()));}catch(e){fail(400,String(e.message||"수동 회신 저장 실패"));}
+    }
+    if(path.startsWith("/creator-server/")&&req.method==="POST"){
+      try{return json(await creatorServer.admin(path,u,await input()));}catch(e){fail(400,String(e.message||"서버 설정 실패"));}
     }
     if(path.startsWith("/creator-local/")&&req.method==="POST"){
       try{return json(await creatorLocal.admin(path,u,await input()));}catch(e){fail(400,String(e.message||"PC 실행기 설정 실패"));}

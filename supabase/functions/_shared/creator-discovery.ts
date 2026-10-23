@@ -21,7 +21,7 @@ export function instagramSearchCandidates(html:string,source:string,keywords:str
 export function renderCreatorCopy(copy:string,handle:string){return copy.replace(/\{\{(?:크리에이터명|아이디)\}\}/g,handle);}
 export function creatorDiscoveryService({sb,query,audit,env}:any){
  const get=async(owner:string)=>await query(sb.from("sanji_creator_config").select("*").eq("owner",owner).maybeSingle())||{owner,enabled:false,auto_send:false,target:50,keywords:["공동구매 레시피","공구 푸드","웰니스 크리에이터"],dm_copy:"",sender_handle:"",runtime:{},search_cursor:0};
- const safe=(c:any)=>{const {worker_hash,worker_expires,approved_hash,...rest}=c;return {...rest,workerConnected:!!worker_hash&&Date.parse(worker_expires||"")>Date.now()};};
+ const safe=(c:any)=>{const {worker_hash,worker_expires,approved_hash,server_worker_hash,server_lease_owner,...rest}=c;return {...rest,workerConnected:!!worker_hash&&Date.parse(worker_expires||"")>Date.now()};};
  async function collect(owner:string){
   const c=await get(owner);if(!c.enabled)return {status:"disabled"};
   if(c.last_search&&Date.parse(c.last_search)>Date.now()-5*60000)return {status:"cooldown"};

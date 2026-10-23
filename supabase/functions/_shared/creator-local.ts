@@ -59,6 +59,9 @@ export function creatorLocalService({sb,query,audit,encrypt,decrypt,putRecord}:a
   if(!c||Date.parse(c.worker_expires)<Date.now())throw Error("PC 연결이 만료·해제됐습니다. 새 연결 키를 발급하세요.");
   const owner=c.owner,sender=handle(b.sender);if(sender!==c.sender_handle)throw Error("로그인한 Instagram 계정이 승인된 발신 계정과 다릅니다.");
   await query(sb.from("sanji_creator_config").update({worker_seen:new Date().toISOString(),worker_state:b.live===true?"pc_ready_approved_only":"pc_profile_only"}).eq("owner",owner));
+  return await execute(owner,c,sender,path,b);
+ }
+ async function execute(owner:string,c:any,sender:string,path:string,b:any,executionOrigin="pc"){
   if(path==="/creator-local/worker/session/save"||path==="/creator-local/worker/session/load")return await sessions.handle(owner,sender,c.session_backup_enabled===true,path.endsWith("/save")?"save":"load",b);
   if(path==="/creator-local/worker/next")return {job:await query(sb.rpc("sanji_claim_local_creator",{p_owner:owner,p_sender:sender,p_send:b.live===true}))};
   if(path==="/creator-local/worker/heartbeat")return {ok:true};
@@ -77,7 +80,7 @@ export function creatorLocalService({sb,query,audit,encrypt,decrypt,putRecord}:a
    await query(sb.from("sanji_creator_prospects").update({status,finished:new Date().toISOString(),result:{note:String(b.note||"").slice(0,350),method:"local_browser",deliveryConfirmed:false,readConfirmed:false}}).eq("owner",owner).eq("id",r.id).eq("status","sending"));return {ok:true};
   }
   if(path==="/creator-local/worker/profile"){
-   const p=b.profile||{},preview:any={attempted:r.profile_preview?.attempted||new Date().toISOString(),checked:new Date().toISOString(),source:"https://www.instagram.com/"+r.handle+"/",status:p.status==="checked"?"checked":"unavailable",method:"local_visible_profile"};
+   const p=b.profile||{},preview:any={attempted:r.profile_preview?.attempted||new Date().toISOString(),checked:new Date().toISOString(),source:"https://www.instagram.com/"+r.handle+"/",status:p.status==="checked"?"checked":"unavailable",method:executionOrigin==="server"?"server_visible_profile":"local_visible_profile"};
    for(const k of ["displayName","bio","followersText","followingText","postsText","reason"])preview[k]=String(p[k]||"").slice(0,k==="bio"?1000:250);
    preview.businessEmails=profileBusinessEmails(preview.bio,preview.source,preview.checked);
    if(p.image){const bytes=Buffer.from(String(p.image),"base64");if(bytes.length>400000||bytes.subarray(0,8).toString("hex")!=="89504e470d0a1a0a")throw Error("프로필 이미지 형식·크기 오류");
@@ -87,7 +90,7 @@ export function creatorLocalService({sb,query,audit,encrypt,decrypt,putRecord}:a
   }
   throw Error("지원하지 않는 PC 실행기 요청");
  }
- return {admin,worker};
+ return {admin,worker,execute};
 }
 
 export function profileBusinessEmails(bio:string,source:string,checked:string){
