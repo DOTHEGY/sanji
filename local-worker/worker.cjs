@@ -5,17 +5,30 @@ const validHandle=s=>/^[a-z0-9._]{2,30}$/.test(s)&&!['accounts','direct','explor
 const stateDirectory=()=>path.join(os.homedir(),'.sanji-instagram');
 async function api(token,route,body){const r=await fetch(BASE+'/creator-local/worker/'+route,{method:'POST',headers:{'Content-Type':'application/json','x-sanji-worker':token},body:JSON.stringify(body),signal:AbortSignal.timeout(20000)});const data=await r.json();if(!r.ok)throw Error(data.error||'PC 연결 요청 실패');return data;}
 async function identity(page,expected,navigate=true){
+ if(!validHandle(expected))throw Error('발신 아이디 형식 오류');
  if(navigate)await page.goto('https://www.instagram.com/',{waitUntil:'domcontentloaded'});
- // Read only the navigation's own Profile link, never an arbitrary feed avatar.
- for(let i=0;i<10;i++){
-  const links=page.getByRole('link',{name:/^(프로필|Profile)$/i});
-  for(let n=0;n<await links.count();n++){const href=await links.nth(n).getAttribute('href');try{const u=new URL(href,'https://www.instagram.com');if(u.pathname.toLowerCase()==='/'+expected+'/')return expected;}catch{}}
+ // Profile navigation labels vary between Instagram layouts and languages.
+ for(let i=0;i<12;i++){
+  const links=page.getByRole('link',{name:/^(프로필|Profile)(?:\s|$)/i});
+  for(let n=0;n<await links.count();n++){const link=links.nth(n),href=await link.getAttribute('href');try{const u=new URL(href,'https://www.instagram.com');if(u.hostname==='www.instagram.com'&&u.pathname.toLowerCase()==='/'+expected+'/'&&await link.isVisible())return expected;}catch{}}
   const tagged=page.locator('a').filter({has:page.locator('svg[aria-label="프로필"],svg[aria-label="Profile"]')});
-  for(let n=0;n<await tagged.count();n++){const href=await tagged.nth(n).getAttribute('href');if(href?.toLowerCase()==='/'+expected+'/')return expected;}
+  for(let n=0;n<await tagged.count();n++){const link=tagged.nth(n),href=await link.getAttribute('href');if(href?.toLowerCase()==='/'+expected+'/'&&await link.isVisible())return expected;}
   await page.waitForTimeout(500);
  }
- throw Error('내 프로필 링크에서 @'+expected+' 로그인을 확인하지 못했습니다. 브라우저 로그인 계정을 확인하세요.');
+ if(navigate){
+  // Viewing a profile is insufficient. Only its logged-in owner sees Edit profile.
+  await page.goto('https://www.instagram.com/'+expected+'/',{waitUntil:'domcontentloaded'});
+  const edit=page.getByRole('link',{name:/^(프로필 편집|프로필 수정|Edit profile)$/i}).or(page.getByRole('button',{name:/^(프로필 편집|프로필 수정|Edit profile)$/i}));
+  for(let i=0;i<20;i++){
+   const u=new URL(page.url());
+   if(u.hostname==='www.instagram.com'&&u.pathname.replace(/\/$/,'').toLowerCase()==='/'+expected&&await edit.first().isVisible().catch(()=>false))return expected;
+   if(/\/accounts\/login|\/challenge|\/checkpoint/.test(u.pathname))break;
+   await page.waitForTimeout(500);
+  }
+ }
+ throw Error('로그인 계정을 확인하지 못했습니다. @'+expected+' 프로필에서 「프로필 편집」이 보이는지 확인하세요. 다른 계정·확인 불가 상태에서는 진행하지 않습니다.');
 }
+
 async function openProfile(page,handle){if(!validHandle(handle))throw Error('올바르지 않은 수신자');await page.goto('https://www.instagram.com/'+handle+'/',{waitUntil:'domcontentloaded'});await page.locator('main').waitFor({timeout:12000});const u=new URL(page.url());if(u.hostname!=='www.instagram.com'||u.pathname.replace(/\/$/,'').toLowerCase()!=='/'+handle)throw Error('대상 프로필 대신 로그인·다른 페이지로 이동됨');const text=await page.locator('main').innerText();if(/확인해 주세요|계정이 제한|Try Again Later|Action Blocked|일시적으로 차단|Suspicious|challenge|잠시 후 다시/i.test(text))throw Error('제한 또는 인증 확인 화면 · 실행 중지');return text;}
 async function profile(page,job){
  try{const text=await openProfile(page,job.handle);if(/비공개 계정|This account is private|페이지를 사용할 수 없|Sorry, this page/i.test(text))return {status:'unavailable',reason:'비공개·접근 제한 계정 · 공개 정보 미수집'};
@@ -77,7 +90,7 @@ async function run(){
     if(!live)throw Error('미리보기 모드에서 전송 작업이 반환됨 · 중단');
     console.log('수신자 @'+job.handle+'\n발신자 @'+sender+'\n최종 본문:\n'+job.body);
     if((await io.question('이 1건을 실제 전송하려면 수신자 아이디 '+job.handle+' 입력 (그 외 입력은 취소): ')).trim()!==job.handle){await request('result',{id:job.id,approvedHash:job.approvedHash,status:'failed',note:'PC 최종 확인에서 취소 · 전송 안 함'});break;}
-    const result=await sendApproved(page,job,async()=>{await identity(page,sender,false);await request('check',{id:job.id,approvedHash:job.approvedHash});},async()=>fs.writeFileSync(journalFile,JSON.stringify({id:job.id,approvedHash:job.approvedHash}),{mode:0o600}));
+    const result=await sendApproved(page,job,async()=>{const accountPage=await context.newPage();try{await identity(accountPage,sender);}finally{await accountPage.close();}await request('check',{id:job.id,approvedHash:job.approvedHash});},async()=>fs.writeFileSync(journalFile,JSON.stringify({id:job.id,approvedHash:job.approvedHash}),{mode:0o600}));
     await request('result',{id:job.id,approvedHash:job.approvedHash,...result});if(fs.existsSync(journalFile))fs.unlinkSync(journalFile);console.log(result.note);break;
    }
    await new Promise(r=>setTimeout(r,30000));
