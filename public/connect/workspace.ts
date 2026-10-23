@@ -212,7 +212,7 @@ function creatorServerService({ sb: sb2, query: query2, encrypt: encrypt2, decry
       const rows = await query2(sb2.from("sanji_creator_prospects").select("profile_preview").eq("owner", owner));
       const snapshots = rows.map((r2) => r2.profile_preview || {}), checked = snapshots.filter((p) => p.status === "checked").length, captures = snapshots.filter((p) => p.imagePath).length, followers = snapshots.filter((p) => p.followersText).length, unavailable = snapshots.filter((p) => p.status === "unavailable").length;
       const r = c.server_runtime || {}, responding = !!c.server_enabled && Date.parse(c.server_lease_until) > Date.now();
-      return { sender: c.sender_handle, total: rows.length, checked, captures, followers, unavailable, pending: rows.length - checked - unavailable, lastProfileChecked: snapshots.map((p) => p.checked).filter(Boolean).sort().at(-1) || null, state: !c.server_enabled ? r.requiresNewSession ? "auth_required" : r.status === "error" ? "error" : "paused" : !responding ? "no_heartbeat" : r.status === "recovering" ? "recovering" : r.status === "daily_limit" ? "daily_limit" : "running", reason: r.reason || "", lastWorkerChecked: r.checked || null, workerVersion: r.workerVersion || "\uBBF8\uD655\uC778", discoveryEnabled: !!c.enabled, dailyDiscoveryTarget: c.target || 50 };
+      return { sender: c.sender_handle, total: rows.length, checked, captures, followers, unavailable, pending: rows.length - checked - unavailable, lastAttempt: snapshots.map((p) => p.checked).filter(Boolean).sort().at(-1) || null, lastProfileChecked: snapshots.filter((p) => p.status === "checked").map((p) => p.checked).filter(Boolean).sort().at(-1) || null, state: !c.server_enabled ? r.requiresNewSession ? "auth_required" : r.status === "error" ? "error" : "paused" : !responding ? "no_heartbeat" : r.status === "recovering" ? "recovering" : r.status === "daily_limit" ? "daily_limit" : "running", reason: r.reason || "", lastWorkerChecked: r.checked || null, workerVersion: r.workerVersion || "\uBBF8\uD655\uC778", discoveryEnabled: !!c.enabled, dailyDiscoveryTarget: c.target || 50 };
     }
     if (path === "/creator-server/login-status") {
       const s = c.sender_handle ? await query2(sb2.from("sanji_instagram_pc_sessions").select("handle,checked,expires").eq("owner", owner).eq("handle", c.sender_handle).maybeSingle()) : null;
@@ -568,7 +568,7 @@ function parseOfficialPage(html, source, checked) {
   }
   const title = plainHtml(/<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] || "");
   const description = Array.from(html.matchAll(/<meta\b([^>]*)>/gi)).map((m) => ({ name: attribute(m[1], "name") || attribute(m[1], "property"), content: attribute(m[1], "content") })).find((m) => /^(description|og:description)$/i.test(m.name))?.content || "";
-  return { contacts, rejected, links, text: text2.slice(-8e3), publicEvidence: { url: source, title, products: products.slice(0, 12), description: plainHtml(description), excerpt: text2.slice(0, 5e3), checked } };
+  return { contacts, rejected, links, text: text2.slice(-8e3), publicEvidence: { url: source, title, sourceType: /NewsMediaOrganization/.test(html) || (footerText || text2.slice(-8e3)).match(/발행인|편집인|인터넷신문|언론사고충처리/g)?.length >= 2 ? "NewsMediaOrganization" : "", products: products.slice(0, 12), description: plainHtml(description), excerpt: text2.slice(0, 5e3), checked } };
 }
 function robotsAllowed(robots, path) {
   let active = false;
@@ -598,7 +598,7 @@ function publicHtmlRedirect(html, source) {
 
 // supabase/functions/_shared/mail-integrity.ts
 var discoveryOnlyHosts = ["blog.naver.com", "post.naver.com", "tistory.com", "medium.com", "brunch.co.kr"];
-var publisherDomains = ["pharmnews.com", "inthenews.co.kr", "foodbank.co.kr", "mkhealth.co.kr", "4th.kr", "medical-tribune.co.kr"];
+var publisherDomains = ["pharmnews.com", "inthenews.co.kr", "foodbank.co.kr", "mkhealth.co.kr", "4th.kr", "medical-tribune.co.kr", "k-health.com"];
 function permanentFailureEmails(threads = [], suppression = []) {
   return [...new Set([...suppression.filter((s) => /영구.{0,4}반송|permanent/i.test(s.reason || "")).map((s) => String(s.identity || "").replace(/^email:/, "").toLowerCase()), ...threads.flatMap((t) => (t.data || t).messages || []).flatMap((m) => m.bounceFailures || []).filter((f) => f.kind === "permanent" && f.source === "delivery_status" && /^5\./.test(f.status || "")).map((f) => String(f.email || "").toLowerCase())].filter((e) => e.includes("@")))];
 }
@@ -625,7 +625,7 @@ function editorialSource(url2, pages = []) {
 }
 function validBrandName(value) {
   const s = String(value || "").trim();
-  return s.length >= 2 && s.length <= 60 && !/[\n]|…|리뉴얼 출시|라인업 공개|운영 종료|신제품.{0,30}출시|^상품 |최신 뉴스|\d+주 전/.test(s) && !/(?:신문|저널|경제|뉴스|팜뉴스|매경헬스|메디칼트리뷴)[\s.]*$/.test(s);
+  return s.length >= 2 && s.length <= 60 && !/[\n]|…|리뉴얼 출시|라인업 공개|운영 종료|신제품.{0,30}출시|^상품 |최신 뉴스|\d+주 전/.test(s) && !/(?:신문|저널|경제|뉴스|팜뉴스|매경헬스|메디칼트리뷴|헬스경향)[\s.]*$/.test(s);
 }
 function realProductName(value) {
   const s = String(value || "").trim();

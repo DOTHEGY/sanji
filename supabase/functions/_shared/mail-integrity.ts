@@ -1,7 +1,7 @@
 import {companyIdentity} from "./discovery.ts";
 
 const discoveryOnlyHosts=["blog.naver.com","post.naver.com","tistory.com","medium.com","brunch.co.kr"];
-const publisherDomains=["pharmnews.com","inthenews.co.kr","foodbank.co.kr","mkhealth.co.kr","4th.kr","medical-tribune.co.kr"];
+const publisherDomains=["pharmnews.com","inthenews.co.kr","foodbank.co.kr","mkhealth.co.kr","4th.kr","medical-tribune.co.kr","k-health.com"];
 export function permanentFailureEmails(threads:any[]=[],suppression:any[]=[]){return [...new Set([...suppression.filter(s=>/영구.{0,4}반송|permanent/i.test(s.reason||"")).map(s=>String(s.identity||"").replace(/^email:/,"").toLowerCase()),...threads.flatMap(t=>(t.data||t).messages||[]).flatMap(m=>m.bounceFailures||[]).filter(f=>f.kind==="permanent"&&f.source==="delivery_status"&&/^5\./.test(f.status||"")).map(f=>String(f.email||"").toLowerCase())].filter(e=>e.includes("@")))];}
 
 export function exactEmailIn(text:string,email:string){const escaped=email.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");return new RegExp("(?<![a-z0-9._%+-])"+escaped+"(?![a-z0-9.-])","i").test(text);}
@@ -12,7 +12,7 @@ export function editorialSource(url:string,pages:any[]=[]){
  return editorialMarkers.length>=2||/NewsArticle|NewsMediaOrganization/.test(p?.sourceType||"")||(/\/news\/article|\/articleView|\/news\/view/i.test(u.pathname)&&/기자|발행인|편집인|인터넷신문|고충처리/.test(text));
  }catch{return true;}
 }
-export function validBrandName(value:any){const s=String(value||"").trim();return s.length>=2&&s.length<=60&&!/[\n]|…|리뉴얼 출시|라인업 공개|운영 종료|신제품.{0,30}출시|^상품 |최신 뉴스|\d+주 전/.test(s)&&!/(?:신문|저널|경제|뉴스|팜뉴스|매경헬스|메디칼트리뷴)[\s.]*$/.test(s);}
+export function validBrandName(value:any){const s=String(value||"").trim();return s.length>=2&&s.length<=60&&!/[\n]|…|리뉴얼 출시|라인업 공개|운영 종료|신제품.{0,30}출시|^상품 |최신 뉴스|\d+주 전/.test(s)&&!/(?:신문|저널|경제|뉴스|팜뉴스|매경헬스|메디칼트리뷴|헬스경향)[\s.]*$/.test(s);}
 export function realProductName(value:any){const s=String(value||"").trim();return s.length>=3&&s.length<=100&&!/^(?:상품\s*사용후기|상품\s*후기|제품\s*구매|제품구매|전체\s*상품|모든\s*상품|상품\s*목록|상품\s*리스트|제품\s*소개|제품\s*목록|상품\s*문의|상품\s*상세|고객센터|구매\s*후기|사용\s*후기|공지사항|자유게시판|게시판|회원가입|장바구니|로그인|브랜드|쇼핑|Shop|FAQ|Q&A)(?:\s*\(?\d+\)?)?$/i.test(s)&&!/(?:공식몰|쇼핑몰|헬스케어몰|제품군|협의 가능한|리뉴얼 출시|라인업 공개|운영 종료|신제품.{0,30}출시)/.test(s);}
 export function productDetailUrl(url:string){try{const u=new URL(url);if(/\/board\/|\/news\/|\/magazine\/|\/category\/|\/(?:product|goods)\/(?:list|index|review)/i.test(u.pathname)||u.searchParams.has("board_no"))return false;return /^\/product\/(?:detail[^/]*|[^/]+\/\d+(?:\/|$))/i.test(u.pathname)&&(/product_no=\d+/.test(u.search)||/\/\d+(?:\/|$)/.test(u.pathname))||/\/(?:vp\/products|products)\/\d+/.test(u.pathname)||/(?:goodsNo|goodsno|goods_no|goodsCd|goodsNo)=\w+/.test(u.search)&&/goods|product/.test(u.pathname);}catch{return false;}}
 export function duplicateParagraphs(text:string){const seen=new Set(),duplicates:string[]=[];for(const p of String(text||"").split(/\n\s*\n/)){const key=p.replace(/\s+/g,"").replace(/[.!！。]/g,"");if(key.length<30)continue;if(seen.has(key))duplicates.push(p);seen.add(key);}const requests=String(text||"").match(/저희가 적합한 크리에이터 후보와 채널 자료,?\s*구체적인 진행안을 정리해 제안드리겠습니다[.!]?/g)||[];if(requests.length>1)duplicates.push("크리에이터 후보·채널 자료·진행안 제공 문단 반복");return duplicates;}

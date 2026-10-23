@@ -55,3 +55,4 @@ test('unvisited, connection failures and checked pages without email have distin
  l.sourceAttempts=[{status:'failed',error:'DNS 실패'}];assert.equal(api.contactResearchState(l,api.assessMailLead(l)).status,'fetch_failed');
  l.sourceAttempts=[{status:'checked'}];assert.equal(api.contactResearchState(l,api.assessMailLead(l)).status,'not_found_in_checked_pages');
 });
+test('publisher homepages remain discovery-only even when the title looks like a health company',()=>{assert.equal(api.validBrandName('메디칼트리뷴 .'),false);assert.equal(api.validBrandName('헬스경향 .'),false);assert.equal(api.editorialSource('https://www.k-health.com/'),true);assert.equal(api.editorialSource('https://publication.example.kr/',[{url:'https://publication.example.kr/',sourceType:'NewsMediaOrganization'}]),true);});

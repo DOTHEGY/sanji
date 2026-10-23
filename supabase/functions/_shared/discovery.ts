@@ -67,7 +67,7 @@ export function parseOfficialPage(html: string, source: string, checked: string)
   }
   const title=plainHtml(/<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1]||"");
   const description=Array.from(html.matchAll(/<meta\b([^>]*)>/gi)).map(m=>({name:attribute(m[1],"name")||attribute(m[1],"property"),content:attribute(m[1],"content")})).find(m=>/^(description|og:description)$/i.test(m.name))?.content||"";
-  return {contacts,rejected,links,text:text.slice(-8000),publicEvidence:{url:source,title,products:products.slice(0,12),description:plainHtml(description),excerpt:text.slice(0,5000),checked}};
+  return {contacts,rejected,links,text:text.slice(-8000),publicEvidence:{url:source,title,sourceType:(/NewsMediaOrganization/.test(html)||(footerText||text.slice(-8000)).match(/발행인|편집인|인터넷신문|언론사고충처리/g)?.length>=2)?"NewsMediaOrganization":"",products:products.slice(0,12),description:plainHtml(description),excerpt:text.slice(0,5000),checked}};
 }
 export function shoppingProspects(items: any[], keyword: string, checked: string) {
   const found=new Map();
