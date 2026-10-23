@@ -44,7 +44,7 @@ function gmailSyncService({ sb: sb2, query: query2, records: records2, putRecord
         try {
           const rt = await remote2("https://gmail.googleapis.com/gmail/v1/users/me/threads/" + encodeURIComponent(t.providerId) + "?format=full", { headers: { Authorization: "Bearer " + g.access_token } }), messages = gmailMessages(rt, g.email, t.messages || [], textBody2, gmailHasAttachments2), inbound = messages.filter((m) => !m.out && !m.automatic);
           const opted = inbound.some((m) => /수신\s*거부(합니다|할게|해\s*주세요|요청합니다)|^\s*수신\s*거부[.!]?\s*$|unsubscribe\s+me|please\s+(unsubscribe|stop)|연락.{0,8}(중단해|그만해|하지\s*마)/im.test(m.text));
-          await putRecord2(owner, "thread", { ...t, messages, classification: opted ? "\uC218\uC2E0 \uAC70\uBD80" : t.classification, synced: now2 }, t.id);
+          if (JSON.stringify(t.messages || []) !== JSON.stringify(messages) || opted && t.classification !== "\uC218\uC2E0 \uAC70\uBD80") await putRecord2(owner, "thread", { ...t, messages, classification: opted ? "\uC218\uC2E0 \uAC70\uBD80" : t.classification, synced: now2 }, t.id);
           if (opted) {
             const c = candidates.find((c2) => c2.id === t.target);
             if (c) {
@@ -55,7 +55,7 @@ function gmailSyncService({ sb: sb2, query: query2, records: records2, putRecord
           if (inbound.length) {
             humanReplies++;
             const c = candidates.find((c2) => c2.id === t.target);
-            if (c && !opted && !["\uAC70\uC808", "\uC218\uC2E0 \uAC70\uBD80"].includes(c.status)) await putRecord2(owner, "candidate", { ...c, status: "\uD68C\uC2E0" }, c.id);
+            if (c && !opted && !["\uD68C\uC2E0", "\uAC70\uC808", "\uC218\uC2E0 \uAC70\uBD80"].includes(c.status)) await putRecord2(owner, "candidate", { ...c, status: "\uD68C\uC2E0" }, c.id);
           }
           imported++;
         } catch (e) {
@@ -72,7 +72,8 @@ function gmailSyncService({ sb: sb2, query: query2, records: records2, putRecord
             const c = candidates.find((c2) => failures.some((f) => (c2.recipientEmails || [c2.contact?.email]).some((e) => String(e).toLowerCase() === f.email)));
             if (!c) continue;
             const old = (await records2(owner, "thread")).find((t) => t.channel === "email" && t.providerId === rm.threadId), messages = gmailMessages({ messages: [rm] }, g.email, old?.messages || [], textBody2, gmailHasAttachments2);
-            await putRecord2(owner, "thread", { ...old, target: c.id, channel: "email", providerId: rm.threadId, subject: messages[0]?.subject || "\uBC30\uB2EC \uC2E4\uD328 \uC54C\uB9BC", classification: "\uC790\uB3D9 \uC751\uB2F5", messages: [...(old?.messages || []).filter((m) => m.id !== rm.id), ...messages], synced: now2 }, old?.id);
+            const merged = [...(old?.messages || []).filter((m) => m.id !== rm.id), ...messages].sort((a, b) => a.at.localeCompare(b.at));
+            if (!old || JSON.stringify(old.messages || []) !== JSON.stringify(merged)) await putRecord2(owner, "thread", { ...old, target: c.id, channel: "email", providerId: rm.threadId, subject: messages[0]?.subject || "\uBC30\uB2EC \uC2E4\uD328 \uC54C\uB9BC", classification: old?.classification || "\uC790\uB3D9 \uC751\uB2F5", messages: merged, synced: now2 }, old?.id);
             bounceMessages++;
           }
         } catch (e) {
