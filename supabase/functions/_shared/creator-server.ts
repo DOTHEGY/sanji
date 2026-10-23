@@ -8,13 +8,13 @@ export function creatorServerService({sb,query,encrypt,decrypt,audit,creatorLoca
  async function admin(path:string,owner:string,b:any){
   const c=await get(owner);
   if(path==="/creator-server/approve-test"){
-   if(c.sender_handle!=="valu_est"||!c.server_enabled||c.server_runtime?.requiresNewSession||c.server_runtime?.workerVersion!=="server-test-v2"||!["ready","idle","daily_limit"].includes(c.server_runtime?.status))throw Error("서버 업데이트와 새 세션 계정 확인을 먼저 마치세요.");
+   if(!/^[a-z0-9._]{2,30}$/.test(c.sender_handle||"")||!c.server_enabled||c.server_runtime?.requiresNewSession||c.server_runtime?.workerVersion!=="server-test-v2"||!["ready","idle","daily_limit"].includes(c.server_runtime?.status))throw Error("서버 업데이트와 새 세션 계정 확인을 먼저 마치세요.");
    const r=await query(sb.from("sanji_creator_prospects").select("*").eq("owner",owner).eq("id","a6cedd56-dbab-43b0-a2a5-1f3f893e1606").single());
    const body="산지 Instagram DM 발송 기능 확인용 테스트 메시지입니다. 확인되시면 답장 부탁드립니다!";
-   if(r.handle!=="taemin_dtg"||r.sender_handle!=="valu_est"||r.body!==body||r.status!=="failed"||r.result?.clickStarted)throw Error("발송 전 중단된 내부 테스트 1건만 허용합니다. 발송·처리 중·결과 미확인 건은 재시도하지 않습니다.");
-   const changed=await query(sb.from("sanji_creator_prospects").update({status:"queued",approved_hash:await localApprovalHash(r),profile_preview:{...r.profile_preview,internalTest:true},result:{note:"운영자 승인 · 서버 테스트 1건 대기",previousAttempt:r.result}}).eq("owner",owner).eq("id",r.id).eq("status","failed").select("id"));if(changed.length!==1)throw Error("상태 변경 · 테스트 승인 취소");
-   await query(sb.from("sanji_creator_config").update({server_test_id:r.id,server_test_deadline:new Date(Date.now()+2*3600000).toISOString()}).eq("owner",owner));
-   await audit(owner,"creator_server_internal_test_approved",{id:r.id,sender:"valu_est",recipient:"taemin_dtg",scope:"one-shot exact copy"});return {ok:true,id:r.id};
+   if(r.handle!=="taemin_dtg"||r.body!==body||r.status!=="failed"||r.result?.clickStarted)throw Error("발송 전 중단된 내부 테스트 1건만 허용합니다. 발송·처리 중·결과 미확인 건은 재시도하지 않습니다.");
+   const changed=await query(sb.from("sanji_creator_prospects").update({status:"queued",sender_handle:c.sender_handle,approved_hash:await localApprovalHash({...r,sender_handle:c.sender_handle}),profile_preview:{...r.profile_preview,internalTest:true},result:{note:"운영자 승인 · 서버 테스트 1건 대기",previousAttempt:r.result}}).eq("owner",owner).eq("id",r.id).eq("status","failed").select("id"));if(changed.length!==1)throw Error("상태 변경 · 테스트 승인 취소");
+   await query(sb.from("sanji_creator_config").update({server_test_id:r.id,server_test_sender:c.sender_handle,server_test_deadline:new Date(Date.now()+2*3600000).toISOString()}).eq("owner",owner));
+   await audit(owner,"creator_server_internal_test_approved",{id:r.id,sender:c.sender_handle,recipient:"taemin_dtg",scope:"one-shot exact copy"});return {ok:true,id:r.id};
   }
   if(path==="/creator-server/key"){
    if(!c.session_backup_enabled||!c.sender_handle)throw Error("PC에서 발신 계정을 저장하고 DB 세션 백업을 켜세요.");
@@ -52,7 +52,7 @@ export function creatorServerService({sb,query,encrypt,decrypt,audit,creatorLoca
    await query(sb.from("sanji_creator_config").update({server_runtime:runtime,...(["error","reauth_required"].includes(b.status)?{server_enabled:false,server_lease_until:null}:{} )}).eq("owner",owner));return {ok:true};
   }
   if(["/creator-server/worker/test-check","/creator-server/worker/test-before-click","/creator-server/worker/test-result"].includes(path)){
-   if(b.id!==c.server_test_id||Date.parse(c.server_test_deadline)<=Date.now()||b.sender!=="valu_est")throw Error("승인된 내부 테스트 1건만 허용합니다.");
+   if(b.id!==c.server_test_id||Date.parse(c.server_test_deadline)<=Date.now()||b.sender!==c.server_test_sender)throw Error("승인된 내부 테스트 1건만 허용합니다.");
    const r=await query(sb.from("sanji_creator_prospects").select("*").eq("owner",owner).eq("id",b.id).single());
    if(r.handle!=="taemin_dtg"||r.body!=="산지 Instagram DM 발송 기능 확인용 테스트 메시지입니다. 확인되시면 답장 부탁드립니다!"||!r.profile_preview?.internalTest)throw Error("내부 테스트 대상·내용 불일치");
    if(path.endsWith("/test-result"))return await creatorLocal.execute(owner,c,b.sender,"/creator-local/worker/result",b,"server");
