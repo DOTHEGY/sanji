@@ -484,6 +484,58 @@ function replyRecipient(message, original) {
   return { email, changed: email.toLowerCase() !== original.toLowerCase() };
 }
 
+// supabase/functions/_shared/product-search.ts
+var productBrandName = (name) => String(name || "").split(/[,，·｜|]/)[0].replace(/(?:공식)?(?:온라인)?(?:쇼핑)?몰$|\s+온라인$/g, "").trim();
+var food = /건강기능식품|건강식품|요거트|그래놀라|두유|녹차|홍차|생강차|귀리|마누카꿀|견과|유산균|비타민|단백질|프로틴|올리브오일|우유|선식|홍삼|오메가|콜라겐|효소|커피|차류|오트밀|프로폴리스|밀크씨슬|루테인|마그네슘/;
+function marketProductLinks(html, source, brand) {
+  const rows = [], seen = /* @__PURE__ */ new Set(), identity = companyIdentity(brand).replace(/본사|공식|건강식품/g, "");
+  if (identity.length < 2) return rows;
+  for (const m of html.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) try {
+    let u = new URL(decodeHtml(m[1]), source);
+    if (u.pathname === "/url" && u.searchParams.get("q")) u = new URL(u.searchParams.get("q"));
+    if (u.searchParams.has("uddg")) u = new URL(u.searchParams.get("uddg"));
+    u = publicUrl(u.toString());
+    const allowed = /(^|\.)coupang\.com$/.test(u.hostname) && /^\/vp\/products\/\d+/.test(u.pathname) || /(^|\.)oliveyoung\.co\.kr$/.test(u.hostname) && u.pathname.includes("getGoodsDetail") && u.searchParams.has("goodsNo") || /^(?:smartstore|brand)\.naver\.com$/.test(u.hostname) && /\/products\/\d+/.test(u.pathname);
+    if (!allowed || seen.has(u.href)) continue;
+    const title = plainHtml(m[2]).replace(/새\s*창\s*열림/g, "").replace(/\s*[|｜]\s*(?:쿠팡|올리브영|네이버).*$/, "").replace(/\s*-\s*(?:쿠팡|올리브영|네이버).*$/, "").trim();
+    if (!companyIdentity(title).includes(identity) || !food.test(title) || title.length < 5 || title.length > 140 || /배송조회|쿠폰받기|상품리뷰|검색결과/.test(title)) continue;
+    const name = title.replace(/\s+-\s+(?:요거트|티백\/드립백 커피|커피|비타민|유산균|건강기능식품|영양제)\s*$/, "");
+    seen.add(u.href);
+    rows.push({ url: u.href, name, quote: title, searchSource: source });
+  } catch {
+  }
+  return rows.slice(0, 4);
+}
+async function searchProduct(brand, read) {
+  brand = productBrandName(brand);
+  const checked = (/* @__PURE__ */ new Date()).toISOString(), attempts = [];
+  let candidates = [];
+  const searches = [["Naver", brand + " \uCFE0\uD321"], ["Naver", brand + " \uC62C\uB9AC\uBE0C\uC601"], ["Naver", brand + " \uC2A4\uB9C8\uD2B8\uC2A4\uD1A0\uC5B4"], ["Google", brand + " \uC0C1\uD488"]];
+  for (const [engine, term] of searches) {
+    try {
+      const source = searchUrl(engine, term), r = await read(source, 2e6);
+      if (/unusual traffic|anomaly-modal|id=["'](?:captcha|challenge-form)/i.test(r.text)) throw Error("\uAC80\uC0C9 \uBCF4\uC548 \uD655\uC778 \xB7 \uC6B0\uD68C\uD558\uC9C0 \uC54A\uC74C");
+      candidates = marketProductLinks(r.text, source, brand);
+      attempts.push({ engine, query: term, candidates: candidates.length });
+      if (candidates.length) break;
+    } catch (e) {
+      attempts.push({ engine, query: term, error: String(e.message).slice(0, 140) });
+    }
+  }
+  for (const candidate2 of candidates.slice(0, 1)) {
+    try {
+      const u = new URL(candidate2.url), robots = await read(u.origin + "/robots.txt", 1e5, true);
+      if (!robotsAllowed(robots.text, u.pathname)) throw Error("\uD310\uB9E4\uCC98 robots.txt \uC218\uC9D1 \uC81C\uD55C");
+      const page = await read(candidate2.url, 2e6, true), e = parseOfficialPage(page.text, page.url, checked).publicEvidence;
+      const product = e.products.find((p) => companyIdentity(p.name).includes(companyIdentity(brand)) && food.test(p.name));
+      if (product) return { checked, attempts, products: [{ name: product.name, url: page.url, quote: product.quote, checked, sourceType: "marketplace_product_page", searchSource: candidate2.searchSource, uncertainty: "\uC678\uBD80 \uD310\uB9E4\uCC98 \uAC8C\uC2DC \uC0C1\uD488 \xB7 \uD310\uB9E4\uC790 \uAD8C\uD55C\xB7\uACF5\uAE09 \uAC00\uB2A5 \uC5EC\uBD80 \uBBF8\uD655\uC778" }] };
+    } catch (e) {
+      attempts.push({ url: candidate2.url, error: String(e.message).slice(0, 140) });
+    }
+  }
+  return { checked, attempts, products: candidates.slice(0, 1).map((c) => ({ ...c, quote: c.quote || c.name, checked, sourceType: "marketplace_search_index", uncertainty: "\uC678\uBD80 \uD310\uB9E4 \uD398\uC774\uC9C0 \uAC80\uC0C9 \uC0C9\uC778 \xB7 \uC6D0\uBB38\xB7\uD604\uD589 \uD310\uB9E4\xB7\uD310\uB9E4\uC790 \uAD8C\uD55C\xB7\uACF5\uAE09 \uAC00\uB2A5 \uC5EC\uBD80 \uBBF8\uD655\uC778" })) };
+}
+
 // supabase/functions/_shared/mail-template.ts
 function renderLeadText(text2, brand, product, intro = "") {
   let body = String(text2 || "").replace(/\{\{(브랜드명|회사명|제품명)\}\}/g, (_, key2) => key2 === "\uC81C\uD488\uBA85" ? product : brand);
@@ -508,7 +560,7 @@ var concreteProductName = (s) => {
   const t = String(s || "").trim();
   return t.length >= 3 && !/제품군|완제품|협의 가능한|제안 가능|공식몰|쇼핑몰|헬스케어몰|라이프 솔루션|^SHOP$|^공식몰 특가$|가을맞이|Big 세일|브랜드 페스타|최근.*상품|진심을 담은 커피/i.test(t);
 };
-var nonFoodProduct = (s) => /마스크팩|딥 마스크|선크림|바디로션|나이트크림|에센셜 오일|클로라겐 선/.test(String(s || ""));
+var nonFoodProduct = (s) => /마스크|세럼|토너|샴푸|딥 마스크|선크림|바디로션|나이트크림|에센셜 오일|클로라겐 선/.test(String(s || ""));
 var unsafe = /치료|예방|항암|완치|혈당|혈압|면역력|체지방|다이어트|키성장|키 성장|통증|개선|효능|효과|질병|성기능|발기/;
 var clean = (s) => String(s || "").replace(/\[[^\]]*\]|★[^★]*★|[★☆]/g, "").replace(/단독구매상품[\s\S]*$|상품옵션[\s\S]*$/g, "").replace(/\s+/g, " ").trim();
 function researchBrand(lead, template2, checked = (/* @__PURE__ */ new Date()).toISOString()) {
@@ -521,7 +573,7 @@ function researchBrand(lead, template2, checked = (/* @__PURE__ */ new Date()).t
     }
   });
   const pageText = pages.map((p) => [p.title, p.description, p.excerpt].join(" ")).join(" ");
-  const food = /건강기능식품|건강식품|견과|유산균|비타민|단백질|올리브|우유|유제품|선식|홍삼|오메가|콜라겐|효소|커피|차류|오트밀/.test(pageText);
+  const food2 = /건강기능식품|건강식품|견과|유산균|비타민|단백질|올리브|우유|유제품|선식|홍삼|오메가|콜라겐|효소|커피|차류|오트밀/.test(pageText);
   const device = /저주파|의료기기|안마기|마사지기|전기자극/.test(pageText) && !/건강기능식품|유산균|비타민|견과/.test(pageText);
   const candidates = [];
   for (const p of pages) {
@@ -539,6 +591,10 @@ function researchBrand(lead, template2, checked = (/* @__PURE__ */ new Date()).t
         break;
       }
     }
+  }
+  if (!product || !concreteProductName(product.name)) {
+    const external = (lead.marketProductEvidence || []).find((p) => p.url && p.checked && concreteProductName(p.name) && !nonFoodProduct(p.name) && !unsafe.test(p.name));
+    if (external) product = { ...external, external: true };
   }
   const oldName = String(lead.name || "");
   let brand = (lead.research?.method === "official_page_evidence" ? oldName : old.brandName) || oldName;
@@ -560,8 +616,8 @@ function researchBrand(lead, template2, checked = (/* @__PURE__ */ new Date()).t
     return { email: c.email, source: c.source, supported: sameName && sameSource && !device, checked };
   });
   const ownershipSupported = contactEvidence.length > 0 && contactEvidence.every((c) => c.supported);
-  const research = { checked, method: "official_page_evidence", ownership: ownershipSupported ? "source_supported" : "research_pending", contactEvidence, product: product?.name || "", productSource: product?.url || "", reason: device ? "\uD655\uC778\uB41C \uC0AC\uC774\uD2B8\uB294 \uC2DD\uD488\uC774 \uC544\uB2CC \uAE30\uAE30 \uC5C5\uCCB4\uC785\uB2C8\uB2E4. \uB3D9\uBA85 \uC2DD\uD488 \uBE0C\uB79C\uB4DC\uB97C \uC790\uB3D9 \uC7AC\uAC80\uC0C9\uD569\uB2C8\uB2E4." : !food ? "\uACF5\uC2DD \uD398\uC774\uC9C0\uC5D0\uC11C \uC2DD\uD488 \uC0C1\uD488 \uADFC\uAC70\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4." : !product ? "\uACF5\uC2DD \uD398\uC774\uC9C0\uC5D0\uC11C \uD2B9\uC815 \uC0C1\uD488\uBA85\uC744 \uCD94\uAC00 \uD655\uC778 \uC911\uC785\uB2C8\uB2E4." : !ownershipSupported ? "\uC81C\uC548 \uBE0C\uB79C\uB4DC\uC640 \uC774\uBA54\uC77C\uC774 \uAC8C\uC2DC\uB41C \uD68C\uC0AC\uC758 \uC5F0\uACB0 \uADFC\uAC70\uB97C \uCD94\uAC00 \uC870\uC0AC \uC911\uC785\uB2C8\uB2E4." : "\uACF5\uC2DD \uD398\uC774\uC9C0\uC758 \uBE0C\uB79C\uB4DC\xB7\uC0C1\uD488\xB7\uC774\uBA54\uC77C \uAC8C\uC2DC \uCD9C\uCC98 \uB300\uC870 \uC644\uB8CC" };
-  if (old.intro && !old.needsPersonalization && !old.sendBlockedReason && (!old.productName || concreteProductName(old.productName)) && !nonFoodProduct(old.productName)) {
+  const research = { checked, method: "official_page_evidence", ownership: ownershipSupported ? "source_supported" : "research_pending", contactEvidence, product: product?.name || "", productSource: product?.url || "", reason: device ? "\uD655\uC778\uB41C \uC0AC\uC774\uD2B8\uB294 \uC2DD\uD488\uC774 \uC544\uB2CC \uAE30\uAE30 \uC5C5\uCCB4\uC785\uB2C8\uB2E4. \uB3D9\uBA85 \uC2DD\uD488 \uBE0C\uB79C\uB4DC\uB97C \uC790\uB3D9 \uC7AC\uAC80\uC0C9\uD569\uB2C8\uB2E4." : !food2 ? "\uACF5\uC2DD \uD398\uC774\uC9C0\uC5D0\uC11C \uC2DD\uD488 \uC0C1\uD488 \uADFC\uAC70\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4." : !product ? "\uACF5\uC2DD \uD398\uC774\uC9C0\uC5D0\uC11C \uD2B9\uC815 \uC0C1\uD488\uBA85\uC744 \uCD94\uAC00 \uD655\uC778 \uC911\uC785\uB2C8\uB2E4." : !ownershipSupported ? "\uC81C\uC548 \uBE0C\uB79C\uB4DC\uC640 \uC774\uBA54\uC77C\uC774 \uAC8C\uC2DC\uB41C \uD68C\uC0AC\uC758 \uC5F0\uACB0 \uADFC\uAC70\uB97C \uCD94\uAC00 \uC870\uC0AC \uC911\uC785\uB2C8\uB2E4." : "\uACF5\uC2DD \uD398\uC774\uC9C0\uC758 \uBE0C\uB79C\uB4DC\xB7\uC0C1\uD488\xB7\uC774\uBA54\uC77C \uAC8C\uC2DC \uCD9C\uCC98 \uB300\uC870 \uC644\uB8CC" };
+  if (old.draftMode !== "brand_first" && old.intro && !old.needsPersonalization && !old.sendBlockedReason && (!old.productName || concreteProductName(old.productName)) && !nonFoodProduct(old.productName)) {
     const kept = { ...old };
     if (old.personalizationRevision === 3 && old.brandName && old.brandName !== brand) {
       for (const k of ["subject", "body", "signature"]) if (typeof kept[k] === "string") kept[k] = kept[k].split(old.brandName).join(brand);
@@ -571,7 +627,7 @@ function researchBrand(lead, template2, checked = (/* @__PURE__ */ new Date()).t
     return { research, outreach: kept };
   }
   if (product && (!concreteProductName(product.name) || nonFoodProduct(product.name))) product = void 0;
-  if (!product || !food || device) {
+  if (!product || !food2 && !product.external || device) {
     const draft2 = template2 ? leadOutreach(template2, { ...lead, outreach: { ...old, productName: "", intro: "" }, product: "" }, checked) : old;
     return { research, outreach: { ...draft2, needsPersonalization: !draft2.body || device, researchStatus: "pending", researchReason: research.reason, draftMode: "brand_first" } };
   }
@@ -580,8 +636,8 @@ function researchBrand(lead, template2, checked = (/* @__PURE__ */ new Date()).t
   else if (/단백질|쉐이크|프로틴/.test(product.name)) idea = "\uC6B4\uB3D9\xB7\uC6F0\uB2C8\uC2A4 \uD06C\uB9AC\uC5D0\uC774\uD130\uAC00 \uC2E4\uC81C \uC870\uB9AC\xB7\uC12D\uCDE8 \uC900\uBE44 \uACFC\uC815\uACFC \uC81C\uD488\uBCC4 \uAD6C\uC131\uC744 \uBCF4\uC5EC\uC8FC\uB294 \uCF58\uD150\uCE20\uB85C \uACF5\uB3D9\uAD6C\uB9E4\uB97C \uC81C\uC548\uB4DC\uB9AC\uACE0 \uC2F6\uC2B5\uB2C8\uB2E4.";
   else if (/오일|올리브/.test(product.name)) idea = "\uD478\uB4DC \uD06C\uB9AC\uC5D0\uC774\uD130\uC758 \uC2E4\uC81C \uC694\uB9AC\uC5D0\uC11C \uD65C\uC6A9 \uC7A5\uBA74\uACFC \uC81C\uD488 \uAD6C\uC131\uC744 \uD568\uAED8 \uBCF4\uC5EC\uC8FC\uB294 \uBC29\uC2DD\uC73C\uB85C \uACF5\uB3D9\uAD6C\uB9E4\uB97C \uC81C\uC548\uB4DC\uB9AC\uACE0 \uC2F6\uC2B5\uB2C8\uB2E4.";
   else if (/커피|디카페인/.test(product.name)) idea = "\uB77C\uC774\uD504\uC2A4\uD0C0\uC77C \uD06C\uB9AC\uC5D0\uC774\uD130\uAC00 \uC9C1\uC811 \uCEE4\uD53C\uB97C \uC900\uBE44\uD558\uB294 \uC77C\uC0C1 \uCF58\uD150\uCE20\uC5D0 \uC81C\uD488 \uAD6C\uC131\uACFC \uD65C\uC6A9 \uC7A5\uBA74\uC744 \uB2F4\uB294 \uACF5\uB3D9\uAD6C\uB9E4\uB97C \uC81C\uC548\uB4DC\uB9AC\uACE0 \uC2F6\uC2B5\uB2C8\uB2E4.";
-  const intro = "\uACF5\uC2DD\uBAB0\uC5D0\uC11C \u2018" + product.name + "\u2019" + (product.name.endsWith("\uC81C\uD488\uAD70") ? "\uC744 \uD655\uC778\uD588\uC2B5\uB2C8\uB2E4." : "\uC758 \uC0C1\uD488 \uAD6C\uC131\uC744 \uD655\uC778\uD588\uC2B5\uB2C8\uB2E4.") + "\n" + idea;
-  const updated = { ...lead, name: brand, outreach: { ...old, brandName: brand, companyName: brand, productName: product.name, intro, evidence: [{ url: product.url, description: "\uACF5\uC2DD \uC0C1\uD488\uBA85\xB7\uAD6C\uC131", quote: product.quote, checked }], personalizationRevision: 3, personalizationUpdated: checked, personalizationMethod: "\uACF5\uAC1C \uADFC\uAC70 \uAE30\uBC18 \uC790\uB3D9 \uC791\uC131", needsPersonalization: false, researchStatus: ownershipSupported ? "completed" : "pending", researchReason: research.reason } };
+  const intro = (product.external ? product.sourceType === "marketplace_search_index" ? "\uACF5\uAC1C \uD310\uB9E4 \uD398\uC774\uC9C0 \uAC80\uC0C9 \uACB0\uACFC\uC5D0 \u2018" + product.name + "\u2019\uC774 \uAC8C\uC2DC\uB418\uC5B4 \uC788\uC5B4 \uACF5\uB3D9\uAD6C\uB9E4 \uD611\uC5C5\uC744 \uAC80\uD1A0\uD558\uACE0 \uC2F6\uC2B5\uB2C8\uB2E4." : "\uACF5\uAC1C \uD310\uB9E4 \uD398\uC774\uC9C0\uC5D0\uC11C \u2018" + product.name + "\u2019 \uC0C1\uD488\uBA85\uC744 \uD655\uC778\uD588\uC2B5\uB2C8\uB2E4." : "\uACF5\uC2DD\uBAB0\uC5D0\uC11C \u2018" + product.name + "\u2019" + (product.name.endsWith("\uC81C\uD488\uAD70") ? "\uC744 \uD655\uC778\uD588\uC2B5\uB2C8\uB2E4." : "\uC758 \uC0C1\uD488 \uAD6C\uC131\uC744 \uD655\uC778\uD588\uC2B5\uB2C8\uB2E4.")) + "\n" + idea;
+  const updated = { ...lead, name: brand, outreach: { ...old, brandName: brand, companyName: brand, productName: product.name, intro, evidence: [{ url: product.url, description: product.external ? "\uC678\uBD80 \uD310\uB9E4\uCC98 \uC0C1\uD488\uBA85 \xB7 " + product.uncertainty : "\uACF5\uC2DD \uC0C1\uD488\uBA85\xB7\uAD6C\uC131", quote: product.quote, checked }], draftMode: "product", productSourceType: product.external ? product.sourceType : "official", uncertainty: product.external ? product.uncertainty : old.uncertainty || "", personalizationRevision: 3, personalizationUpdated: checked, personalizationMethod: "\uACF5\uAC1C \uADFC\uAC70 \uAE30\uBC18 \uC790\uB3D9 \uC791\uC131", needsPersonalization: false, researchStatus: ownershipSupported ? "completed" : "pending", researchReason: research.reason } };
   const outreach = template2 ? leadOutreach(template2, updated, checked) : updated.outreach;
   return { research, outreach };
 }
@@ -669,7 +725,7 @@ var defaults = { enabled: false, target: 40, keywords: ["\uAC74\uAC15\uAE30\uB2A
 var day = () => (/* @__PURE__ */ new Date()).toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
 function discoveryService(deps) {
   const { sb: sb2, query: query2, audit: audit2, putRecord: putRecord2 } = deps;
-  async function publicFetch(value, cap = 7e5) {
+  async function publicFetch(value, cap = 7e5, productOnly = false) {
     let url2 = publicUrl(value);
     const redirects = [];
     for (let redirect = 0; redirect < 3; redirect++) {
@@ -678,9 +734,9 @@ function discoveryService(deps) {
       const r = await fetch(url2, { redirect: "manual", headers: { "User-Agent": "SanjiResearch/1.0 (business-contact-research; no form submissions)", Accept: "text/html,text/plain" }, signal: AbortSignal.timeout(8e3) });
       if ([301, 302, 303, 307, 308].includes(r.status)) {
         const next = publicUrl(new URL(r.headers.get("location") || "", url2).toString());
-        if (marketplace(next.toString())) throw Error("\uD50C\uB7AB\uD3FC\uC73C\uB85C \uC774\uB3D9\uD55C \uC8FC\uC18C\uB294 \uD68C\uC0AC \uC774\uBA54\uC77C \uCD9C\uCC98\uB85C \uC790\uB3D9 \uC218\uC9D1\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4: " + next.hostname);
+        if (!productOnly && marketplace(next.toString())) throw Error("\uD50C\uB7AB\uD3FC\uC73C\uB85C \uC774\uB3D9\uD55C \uC8FC\uC18C\uB294 \uD68C\uC0AC \uC774\uBA54\uC77C \uCD9C\uCC98\uB85C \uC790\uB3D9 \uC218\uC9D1\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4: " + next.hostname);
         if (next.origin !== url2.origin && url2.pathname !== "/robots.txt") {
-          const policy = await publicFetch(next.origin + "/robots.txt", 1e5);
+          const policy = await publicFetch(next.origin + "/robots.txt", 1e5, productOnly);
           if (!robotsAllowed(policy.text, next.pathname)) throw Error("\uC774\uB3D9\uD55C \uC0AC\uC774\uD2B8\uC758 robots.txt\uC5D0\uC11C \uC218\uC9D1\uC774 \uC81C\uD55C\uB429\uB2C8\uB2E4.");
         }
         redirects.push(url2.toString());
@@ -960,9 +1016,12 @@ function discoveryService(deps) {
     await query2(sb2.from("sanji_discovery_leads").update({ data: { ...lead.data, publicEvidence: result.publicEvidence || [], evidenceError: result.error || "", evidenceChecked: (/* @__PURE__ */ new Date()).toISOString() }, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", u).eq("id", id));
     return { ok: true, pages: result.pages, evidenceCount: result.publicEvidence?.length || 0, error: result.error || "" };
   }
-  async function researchNext(u, requestedId = "") {
-    const all = await query2(sb2.from("sanji_discovery_leads").select("*").eq("owner", u).order("updated").limit(500));
-    const lead = all.sort((a, b) => Number(!a.data.outreach?.needsPersonalization && !a.data.outreach?.sendBlockedReason) - Number(!b.data.outreach?.needsPersonalization && !b.data.outreach?.sendBlockedReason)).find((l) => l.status !== "blocked" && (!requestedId || l.id === requestedId) && l.data.contacts?.length && (!l.data.research || l.data.outreach?.needsPersonalization || l.data.outreach?.sendBlockedReason || l.data.research?.ownership === "research_pending") && Number(l.data.research?.attempts || 0) < 3 && (requestedId || Number(l.data.research?.attempts || 0) === 0 || !l.data.research?.checked || Date.parse(l.data.research.checked) < Date.now() - 6 * 36e5));
+  async function researchNext(u, requestedId = "", productOnly = false) {
+    let leadsQuery = sb2.from("sanji_discovery_leads").select("*").eq("owner", u);
+    if (productOnly) leadsQuery = leadsQuery.eq("data->outreach->>draftMode", "brand_first");
+    const all = await query2(leadsQuery.order("updated").limit(500));
+    const sentTargets = productOnly ? new Set((await query2(sb2.from("sanji_outbox").select("target").eq("owner", u).in("status", ["accepted", "submitting", "outcome_unknown"]))).map((o) => o.target)) : /* @__PURE__ */ new Set();
+    const lead = all.filter((l) => !productOnly || !sentTargets.has(l.data.candidateId)).sort((a, b) => Number(!a.data.outreach?.needsPersonalization && !a.data.outreach?.sendBlockedReason) - Number(!b.data.outreach?.needsPersonalization && !b.data.outreach?.sendBlockedReason)).find((l) => l.status !== "blocked" && (!requestedId || l.id === requestedId) && l.data.contacts?.length && (!l.data.research || l.data.outreach?.needsPersonalization || l.data.outreach?.sendBlockedReason || l.data.research?.ownership === "research_pending" || l.data.outreach?.draftMode === "brand_first") && (productOnly ? l.data.outreach?.draftMode === "brand_first" && Number(l.data.productLookup?.attempts || 0) < 3 : Number(l.data.research?.attempts || 0) < 3) && (requestedId || Number(l.data.research?.attempts || 0) === 0 || !l.data.research?.checked || Date.parse(l.data.research.checked) < Date.now() - (productOnly ? 15 * 6e4 : 6 * 36e5)));
     if (!lead) return null;
     const liveConfig = await config(u);
     await query2(sb2.from("sanji_discovery_config").update({ runtime: { ...liveConfig.runtime, currentResearch: lead.data.name } }).eq("owner", u));
@@ -992,23 +1051,28 @@ function discoveryService(deps) {
       } catch (e) {
         data.researchLookupError = String(e.message).slice(0, 300);
       }
-    } else if (!data.publicEvidence?.some((p) => p.products?.length) && data.outreach?.needsPersonalization || !data.publicEvidence?.some((p) => {
+    } else if (!productOnly && (!data.publicEvidence?.some((p) => p.products?.length) && data.outreach?.needsPersonalization || !data.publicEvidence?.some((p) => {
       try {
         return new URL(p.url).origin === new URL(data.website).origin;
       } catch {
         return false;
       }
-    })) {
+    }))) {
       const result2 = await crawl(data.website, 3);
       if (result2.publicEvidence?.length) data.publicEvidence = Array.from(new Map([...data.publicEvidence || [], ...result2.publicEvidence].map((p) => [p.url, p])).values());
     }
     const missing = (data.contacts || []).map((c) => c.source).filter((url2) => url2 && !data.publicEvidence?.some((p) => p.url === url2));
-    for (const source of Array.from(new Set(missing)).slice(0, 2)) {
+    for (const source of Array.from(new Set(missing)).slice(0, productOnly ? 0 : 2)) {
       try {
         const result2 = await crawl(String(source), 1);
         if (result2.publicEvidence?.length) data.publicEvidence = Array.from(new Map([...data.publicEvidence || [], ...result2.publicEvidence].map((p) => [p.url, p])).values());
       } catch {
       }
+    }
+    if (!data.outreach?.sendBlockedReason && (!data.outreach?.productName || data.outreach?.draftMode === "brand_first" || data.outreach?.needsPersonalization)) {
+      const found = await searchProduct(data.outreach?.brandName || data.name, publicFetch);
+      data.marketProductEvidence = found.products;
+      data.productLookup = { ...found, attempts: Number(data.productLookup?.attempts || 0) + 1 };
     }
     const ts = await query2(sb2.from("sanji_records").select("id,data,version,updated").eq("owner", u).eq("kind", "template").order("updated").limit(20));
     const t = ts.find((t2) => t2.data.channel === "\uC774\uBA54\uC77C"), result = researchBrand(data, t);
@@ -1023,7 +1087,8 @@ function discoveryService(deps) {
       result.research.status = "excluded";
       result.research.reason = "\uACF5\uC2DD \uD648\uD398\uC774\uC9C0\uC640 \uB3D9\uBA85 \uC2DD\uD488 \uBE0C\uB79C\uB4DC \uC7AC\uAC80\uC0C9\uC744 \uB300\uC870\uD588\uC9C0\uB9CC \uC2DD\uD488 \uC81C\uC548 \uB300\uC0C1 \uD68C\uC0AC\xB7\uC774\uBA54\uC77C \uADFC\uAC70\uAC00 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC544 \uC790\uB3D9 \uC81C\uC678\uD588\uC2B5\uB2C8\uB2E4.";
     }
-    await query2(sb2.from("sanji_discovery_leads").update({ data: { ...data, ...result }, ...excluded2 ? { status: "blocked" } : {}, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", u).eq("id", lead.id));
+    const saved = await query2(sb2.from("sanji_discovery_leads").update({ data: { ...data, ...result }, ...excluded2 ? { status: "blocked" } : {}, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", u).eq("id", lead.id).eq("updated", lead.updated).select("id"));
+    if (!saved?.length) return { status: "research_stale", name: data.name };
     await audit2(u, "brand_researched", { lead: lead.id, ownership: result.research.ownership, personalized: !result.outreach.needsPersonalization, repaired });
     return { status: "brand_researched", name: data.name, ownership: result.research.ownership, personalized: !result.outreach.needsPersonalization, reason: result.research.reason };
   }
@@ -1035,7 +1100,8 @@ function discoveryService(deps) {
     await query2(sb2.from("sanji_discovery_config").update({ runtime: { ...cfg.runtime, lastStarted, status: "running" }, updated: lastStarted }).eq("owner", owner));
     try {
       let result;
-      if (input.task === "enrich" && typeof input.leadId === "string") result = await enrich(owner, input.leadId);
+      if (input.task === "product") result = await researchNext(owner, "", true) || { status: "product_research_idle" };
+      else if (input.task === "enrich" && typeof input.leadId === "string") result = await enrich(owner, input.leadId);
       else if (input.task === "research" && typeof input.leadId === "string") result = await researchNext(owner, input.leadId) || { status: "research_wait" };
       else {
         const refreshed = await refreshSources(owner);
@@ -1043,7 +1109,7 @@ function discoveryService(deps) {
         const researched = !refreshed?.added && !searched && Math.floor(Date.now() / 3e5) % 2 === 0 ? await researchNext(owner) : null;
         result = refreshed?.added ? refreshed : searched || researched || await cycle(owner);
       }
-      const completionNotification = deps.notifyOwner ? await deps.notifyOwner(owner) : null;
+      const completionNotification = input.task !== "product" && deps.notifyOwner ? await deps.notifyOwner(owner) : null;
       await query2(sb2.from("sanji_discovery_config").update({ runtime: { lastStarted, lastFinished: (/* @__PURE__ */ new Date()).toISOString(), status: "idle", result, completionNotification }, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner));
       return result;
     } catch (e) {

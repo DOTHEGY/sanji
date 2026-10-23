@@ -1,3 +1,4 @@
+import {searchProduct} from "./product-search.ts";
 import { researchBrand } from "./brand-research.ts";
 import { discoveryHealth } from "./discovery-health.ts";
 import { searchEngines, searchQuery, searchUrl, searchResults } from "./discovery-search.ts";
@@ -9,7 +10,7 @@ const defaults={enabled:false,target:40,keywords:["건강기능식품 유산균"
 const day=()=>new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Seoul"});
 export function discoveryService(deps:any){
  const {sb,query,audit,putRecord}=deps;
- async function publicFetch(value:string,cap=700000){
+ async function publicFetch(value:string,cap=700000,productOnly=false){
   let url=publicUrl(value);const redirects:string[]=[];
   for(let redirect=0;redirect<3;redirect++){
    // Resolve before every request, including redirects. Fail closed if DNS checks are unavailable.
@@ -18,9 +19,9 @@ export function discoveryService(deps:any){
    const r=await fetch(url,{redirect:"manual",headers:{"User-Agent":"SanjiResearch/1.0 (business-contact-research; no form submissions)",Accept:"text/html,text/plain"},signal:AbortSignal.timeout(8000)});
    if([301,302,303,307,308].includes(r.status)){
     const next=publicUrl(new URL(r.headers.get("location")||"",url).toString());
-    if(marketplace(next.toString()))throw Error("플랫폼으로 이동한 주소는 회사 이메일 출처로 자동 수집하지 않습니다: "+next.hostname);
+    if(!productOnly&&marketplace(next.toString()))throw Error("플랫폼으로 이동한 주소는 회사 이메일 출처로 자동 수집하지 않습니다: "+next.hostname);
     if(next.origin!==url.origin&&url.pathname!=="/robots.txt"){
-     const policy=await publicFetch(next.origin+"/robots.txt",100000);
+     const policy=await publicFetch(next.origin+"/robots.txt",100000,productOnly);
      if(!robotsAllowed(policy.text,next.pathname))throw Error("이동한 사이트의 robots.txt에서 수집이 제한됩니다.");
     }
     redirects.push(url.toString());
@@ -182,9 +183,11 @@ export function discoveryService(deps:any){
   await query(sb.from("sanji_discovery_leads").update({data:{...lead.data,publicEvidence:result.publicEvidence||[],evidenceError:result.error||"",evidenceChecked:new Date().toISOString()},updated:new Date().toISOString()}).eq("owner",u).eq("id",id));
   return {ok:true,pages:result.pages,evidenceCount:result.publicEvidence?.length||0,error:result.error||""};
  }
- async function researchNext(u:string,requestedId=""){
-  const all=await query(sb.from("sanji_discovery_leads").select("*").eq("owner",u).order("updated").limit(500));
-  const lead=all.sort((a:any,b:any)=>Number(!a.data.outreach?.needsPersonalization&&!a.data.outreach?.sendBlockedReason)-Number(!b.data.outreach?.needsPersonalization&&!b.data.outreach?.sendBlockedReason)).find((l:any)=>l.status!=="blocked"&&(!requestedId||l.id===requestedId)&&l.data.contacts?.length&&(!l.data.research||l.data.outreach?.needsPersonalization||l.data.outreach?.sendBlockedReason||l.data.research?.ownership==="research_pending")&&Number(l.data.research?.attempts||0)<3&&(requestedId||Number(l.data.research?.attempts||0)===0||!l.data.research?.checked||Date.parse(l.data.research.checked)<Date.now()-6*3600000));
+ async function researchNext(u:string,requestedId="",productOnly=false){
+  let leadsQuery=sb.from("sanji_discovery_leads").select("*").eq("owner",u);if(productOnly)leadsQuery=leadsQuery.eq("data->outreach->>draftMode","brand_first");
+  const all=await query(leadsQuery.order("updated").limit(500));
+  const sentTargets=productOnly?new Set((await query(sb.from("sanji_outbox").select("target").eq("owner",u).in("status",["accepted","submitting","outcome_unknown"]))).map((o:any)=>o.target)):new Set();
+  const lead=all.filter((l:any)=>!productOnly||!sentTargets.has(l.data.candidateId)).sort((a:any,b:any)=>Number(!a.data.outreach?.needsPersonalization&&!a.data.outreach?.sendBlockedReason)-Number(!b.data.outreach?.needsPersonalization&&!b.data.outreach?.sendBlockedReason)).find((l:any)=>l.status!=="blocked"&&(!requestedId||l.id===requestedId)&&l.data.contacts?.length&&(!l.data.research||l.data.outreach?.needsPersonalization||l.data.outreach?.sendBlockedReason||l.data.research?.ownership==="research_pending"||l.data.outreach?.draftMode==="brand_first")&&(productOnly?l.data.outreach?.draftMode==="brand_first"&&Number(l.data.productLookup?.attempts||0)<3:Number(l.data.research?.attempts||0)<3)&&(requestedId||Number(l.data.research?.attempts||0)===0||!l.data.research?.checked||Date.parse(l.data.research.checked)<Date.now()-(productOnly?15*60000:6*3600000)));
   if(!lead)return null;
   const liveConfig=await config(u);await query(sb.from("sanji_discovery_config").update({runtime:{...liveConfig.runtime,currentResearch:lead.data.name}}).eq("owner",u));
   const data={...lead.data};let repaired=false;
@@ -203,12 +206,16 @@ export function discoveryService(deps:any){
      }
     }
    }catch(e){data.researchLookupError=String(e.message).slice(0,300);}
-  }else if((!data.publicEvidence?.some((p:any)=>p.products?.length)&&data.outreach?.needsPersonalization)||!data.publicEvidence?.some((p:any)=>{try{return new URL(p.url).origin===new URL(data.website).origin;}catch{return false;}})){
+  }else if(!productOnly&&((!data.publicEvidence?.some((p:any)=>p.products?.length)&&data.outreach?.needsPersonalization)||!data.publicEvidence?.some((p:any)=>{try{return new URL(p.url).origin===new URL(data.website).origin;}catch{return false;}}))){
    const result=await crawl(data.website,3);if(result.publicEvidence?.length)data.publicEvidence=Array.from(new Map([...(data.publicEvidence||[]),...result.publicEvidence].map((p:any)=>[p.url,p])).values());
   }
   const missing=(data.contacts||[]).map((c:any)=>c.source).filter((url:string)=>url&&!data.publicEvidence?.some((p:any)=>p.url===url));
-  for(const source of Array.from(new Set(missing)).slice(0,2)){
+  for(const source of Array.from(new Set(missing)).slice(0,productOnly?0:2)){
    try{const result=await crawl(String(source),1);if(result.publicEvidence?.length)data.publicEvidence=Array.from(new Map([...(data.publicEvidence||[]),...result.publicEvidence].map((p:any)=>[p.url,p])).values());}catch{}
+  }
+  if(!data.outreach?.sendBlockedReason && (!data.outreach?.productName || data.outreach?.draftMode==="brand_first" || data.outreach?.needsPersonalization)){
+   const found=await searchProduct(data.outreach?.brandName||data.name,publicFetch);
+   data.marketProductEvidence=found.products;data.productLookup={...found,attempts:Number(data.productLookup?.attempts||0)+1};
   }
   const ts=await query(sb.from("sanji_records").select("id,data,version,updated").eq("owner",u).eq("kind","template").order("updated").limit(20));
   const t=ts.find((t:any)=>t.data.channel==="이메일"),result=researchBrand(data,t);
@@ -216,7 +223,8 @@ export function discoveryService(deps:any){
   if(data.outreach?.sendBlockedReason){result.outreach.sendBlockedReason=data.outreach.sendBlockedReason;result.research.ownership="research_pending";result.research.reason=data.outreach.sendBlockedReason;}
   const excluded=!!data.outreach?.sendBlockedReason&&result.research.attempts>=3;
   if(excluded){result.research.status="excluded";result.research.reason="공식 홈페이지와 동명 식품 브랜드 재검색을 대조했지만 식품 제안 대상 회사·이메일 근거가 일치하지 않아 자동 제외했습니다.";}
-  await query(sb.from("sanji_discovery_leads").update({data:{...data,...result},...(excluded?{status:"blocked"}:{}),updated:new Date().toISOString()}).eq("owner",u).eq("id",lead.id));
+  const saved=await query(sb.from("sanji_discovery_leads").update({data:{...data,...result},...(excluded?{status:"blocked"}:{}),updated:new Date().toISOString()}).eq("owner",u).eq("id",lead.id).eq("updated",lead.updated).select("id"));
+  if(!saved?.length)return {status:"research_stale",name:data.name};
   await audit(u,"brand_researched",{lead:lead.id,ownership:result.research.ownership,personalized:!result.outreach.needsPersonalization,repaired});
   return {status:"brand_researched",name:data.name,ownership:result.research.ownership,personalized:!result.outreach.needsPersonalization,reason:result.research.reason};
  }
@@ -228,7 +236,8 @@ export function discoveryService(deps:any){
   await query(sb.from("sanji_discovery_config").update({runtime:{...cfg.runtime,lastStarted,status:"running"},updated:lastStarted}).eq("owner",owner));
   try{
    let result;
-   if(input.task==="enrich"&&typeof input.leadId==="string")result=await enrich(owner,input.leadId);
+   if(input.task==="product")result=await researchNext(owner,"",true)||{status:"product_research_idle"};
+   else if(input.task==="enrich"&&typeof input.leadId==="string")result=await enrich(owner,input.leadId);
    else if(input.task==="research"&&typeof input.leadId==="string")result=await researchNext(owner,input.leadId)||{status:"research_wait"};
    else {
     const refreshed=await refreshSources(owner);
@@ -237,7 +246,7 @@ export function discoveryService(deps:any){
     const researched=(!refreshed?.added&&!searched&&Math.floor(Date.now()/300000)%2===0)?await researchNext(owner):null;
     result=refreshed?.added?refreshed:searched||researched||await cycle(owner);
    }
-   const completionNotification=deps.notifyOwner?await deps.notifyOwner(owner):null;
+   const completionNotification=input.task!=="product"&&deps.notifyOwner?await deps.notifyOwner(owner):null;
    await query(sb.from("sanji_discovery_config").update({runtime:{lastStarted,lastFinished:new Date().toISOString(),status:"idle",result,completionNotification},updated:new Date().toISOString()}).eq("owner",owner));
    return result;
   }catch(e){await query(sb.from("sanji_discovery_config").update({runtime:{lastStarted,lastFinished:new Date().toISOString(),status:"failed",error:String(e.message).slice(0,400)}}).eq("owner",owner));throw e;}
