@@ -49,6 +49,7 @@ export function creatorLocalService({sb,query,audit,encrypt,decrypt,putRecord}:a
   }
   if(path==="/creator-local/preview"){
    const r=await query(sb.from("sanji_creator_prospects").select("profile_preview").eq("owner",owner).eq("id",b.id).single());
+   if(b.avatar&&r.profile_preview?.avatarPath){const {data,error}=await sb.storage.from("sanji-creator-previews").createSignedUrl(r.profile_preview.avatarPath,300);if(error)throw Error("썸네일 조회 실패");return {url:data.signedUrl};}
    if(!r.profile_preview?.imagePath)return {url:null};const {data,error}=await sb.storage.from("sanji-creator-previews").createSignedUrl(r.profile_preview.imagePath,60);if(error)throw Error("미리보기 이미지 조회 실패");return {url:data.signedUrl};
   }
   throw Error("지원하지 않는 PC 연결 작업");
@@ -77,15 +78,16 @@ export function creatorLocalService({sb,query,audit,encrypt,decrypt,putRecord}:a
    if(r.status==="unknown"&&b.status==="unknown"&&r.approved_hash===b.approvedHash)return {ok:true};
    if(r.status!=="sending"||r.approved_hash!==b.approvedHash)throw Error("처리 중인 승인 건만 결과를 저장합니다.");
    const status=b.status==="sent"?"sent":b.status==="blocked"?"blocked":b.status==="failed"?"failed":"unknown";
-   await query(sb.from("sanji_creator_prospects").update({status,finished:new Date().toISOString(),result:{note:String(b.note||"").slice(0,350),method:"local_browser",deliveryConfirmed:false,readConfirmed:false}}).eq("owner",owner).eq("id",r.id).eq("status","sending"));return {ok:true};
+   await query(sb.from("sanji_creator_prospects").update({status,finished:new Date().toISOString(),result:{note:String(b.note||"").slice(0,350),method:executionOrigin==="server"?"server_browser":"local_browser",deliveryConfirmed:false,readConfirmed:false}}).eq("owner",owner).eq("id",r.id).eq("status","sending"));return {ok:true};
   }
   if(path==="/creator-local/worker/profile"){
-   const p=b.profile||{},preview:any={attempted:r.profile_preview?.attempted||new Date().toISOString(),checked:new Date().toISOString(),source:"https://www.instagram.com/"+r.handle+"/",status:p.status==="checked"?"checked":"unavailable",method:executionOrigin==="server"?"server_visible_profile":"local_visible_profile"};
+   const p=b.profile||{},preview:any={...(r.profile_preview?.internalTest?{internalTest:true}:{}),attempted:r.profile_preview?.attempted||new Date().toISOString(),checked:new Date().toISOString(),source:"https://www.instagram.com/"+r.handle+"/",status:p.status==="checked"?"checked":"unavailable",method:executionOrigin==="server"?"server_visible_profile":"local_visible_profile"};
    for(const k of ["displayName","bio","followersText","followingText","postsText","reason"])preview[k]=String(p[k]||"").slice(0,k==="bio"?1000:250);
    preview.businessEmails=profileBusinessEmails(preview.bio,preview.source,preview.checked);
    if(p.image){const bytes=Buffer.from(String(p.image),"base64");if(bytes.length>400000||bytes.subarray(0,8).toString("hex")!=="89504e470d0a1a0a")throw Error("프로필 이미지 형식·크기 오류");
     const imagePath=owner+"/"+r.id+".png",{error}=await sb.storage.from("sanji-creator-previews").upload(imagePath,bytes,{contentType:"image/png",upsert:true});if(error)throw Error("프로필 이미지 저장 실패");preview.imagePath=imagePath;
    }
+   if(p.avatar){const bytes=Buffer.from(String(p.avatar),"base64");if(bytes.length<=80000&&bytes.subarray(0,8).toString("hex")==="89504e470d0a1a0a"){const avatarPath=owner+"/"+r.id+"-avatar.png";const {error}=await sb.storage.from("sanji-creator-previews").upload(avatarPath,bytes,{contentType:"image/png",upsert:true});if(!error)preview.avatarPath=avatarPath;}}
    await query(sb.from("sanji_creator_prospects").update({profile_preview:preview}).eq("owner",owner).eq("id",r.id));return {ok:true};
   }
   throw Error("지원하지 않는 PC 실행기 요청");

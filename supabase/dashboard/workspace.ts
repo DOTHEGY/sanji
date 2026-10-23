@@ -1,5 +1,5 @@
 // supabase/functions/_shared/creator-server.ts
-import { Buffer as Buffer2 } from "node:buffer";
+import { Buffer as Buffer3 } from "node:buffer";
 
 // supabase/functions/_shared/creator-session.ts
 import { Buffer } from "node:buffer";
@@ -41,114 +41,11 @@ function creatorSessionService({ sb: sb2, query: query2, encrypt: encrypt2, decr
   return { handle: handle2 };
 }
 
-// supabase/functions/_shared/creator-server.ts
-var digest = async (s) => Buffer2.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s))).toString("hex");
-function creatorServerService({ sb: sb2, query: query2, encrypt: encrypt2, decrypt: decrypt2, audit: audit2, creatorLocal: creatorLocal2 }) {
-  const sessions = creatorSessionService({ sb: sb2, query: query2, encrypt: encrypt2, decrypt: decrypt2, audit: audit2 });
-  const get = async (owner) => await query2(sb2.from("sanji_creator_config").select("*").eq("owner", owner).single());
-  async function admin(path, owner, b) {
-    const c = await get(owner);
-    if (path === "/creator-server/key") {
-      if (!c.session_backup_enabled || !c.sender_handle) throw Error("PC\uC5D0\uC11C \uBC1C\uC2E0 \uACC4\uC815\uC744 \uC800\uC7A5\uD558\uACE0 DB \uC138\uC158 \uBC31\uC5C5\uC744 \uCF1C\uC138\uC694.");
-      const token = Buffer2.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url"), expires = new Date(Date.now() + 30 * 864e5).toISOString();
-      await query2(sb2.from("sanji_creator_config").update({ server_worker_hash: await digest(token), server_worker_expires: expires, server_enabled: false, server_lease_owner: null, server_lease_until: null, server_runtime: { ...c.server_runtime, status: "paused", reason: "\uC11C\uBC84 \uD0A4 \uBC1C\uAE09 \xB7 \uC7AC\uAC1C \uC2B9\uC778 \uC804", checked: c.server_runtime?.requiresNewSession ? c.server_runtime.checked : (/* @__PURE__ */ new Date()).toISOString() } }).eq("owner", owner));
-      await audit2(owner, "creator_server_key_issued", { expires });
-      return { token, expires };
-    }
-    if (path === "/creator-server/pause" || path === "/creator-server/revoke") {
-      const revoke = path.endsWith("/revoke");
-      await query2(sb2.from("sanji_creator_config").update({ server_enabled: false, server_lease_owner: null, server_lease_until: null, ...revoke ? { server_worker_hash: null, server_worker_expires: null } : {}, server_runtime: { ...c.server_runtime, status: "paused", reason: revoke ? "\uC11C\uBC84 \uC5F0\uACB0 \uD574\uC81C" : "\uC6B4\uC601\uC790 \uC77C\uC2DC\uC911\uC9C0", checked: c.server_runtime?.requiresNewSession ? c.server_runtime.checked : (/* @__PURE__ */ new Date()).toISOString() } }).eq("owner", owner));
-      return { ok: true };
-    }
-    if (path === "/creator-server/resume") {
-      if (!c.server_worker_hash || Date.parse(c.server_worker_expires) <= Date.now()) throw Error("\uC0C8 \uC11C\uBC84 \uC5F0\uACB0 \uD0A4\uB97C \uBC1C\uAE09\uD558\uC138\uC694.");
-      const s = await query2(sb2.from("sanji_instagram_pc_sessions").select("checked,expires").eq("owner", owner).eq("handle", c.sender_handle).maybeSingle());
-      if (!c.session_backup_enabled || !s || Date.parse(s.expires) <= Date.now()) throw Error("PC \uC2E4\uD589\uAE30\uC5D0\uC11C \uC9C1\uC811 \uB85C\uADF8\uC778\uD574 \uC138\uC158\uC744 DB\uC5D0 \uC800\uC7A5\uD558\uC138\uC694.");
-      if (c.server_runtime?.requiresNewSession && Date.parse(s.checked) <= Date.parse(c.server_runtime.checked)) throw Error("\uCD94\uAC00 \uC778\uC99D \uC774\uD6C4 PC\uC5D0\uC11C \uC0C8 \uC138\uC158\uC744 \uC800\uC7A5\uD55C \uB2E4\uC74C \uC7AC\uAC1C\uD558\uC138\uC694.");
-      await query2(sb2.from("sanji_creator_config").update({ server_enabled: true, server_revision: c.server_revision + 1, server_runtime: { status: "starting", reason: "\uC6B4\uC601\uC790\uAC00 \uC0C8 \uC138\uC158\uC73C\uB85C \uC7AC\uAC1C \uC2B9\uC778", checked: (/* @__PURE__ */ new Date()).toISOString(), sessionChecked: s.checked } }).eq("owner", owner));
-      await audit2(owner, "creator_server_resume_approved", { sender: c.sender_handle });
-      return { ok: true, previewOnly: true };
-    }
-    throw Error("\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uC11C\uBC84 \uC124\uC815");
-  }
-  async function worker(path, token, b) {
-    if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw Error("\uC11C\uBC84 \uC5F0\uACB0 \uD0A4\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.");
-    const c = await query2(sb2.from("sanji_creator_config").select("*").eq("server_worker_hash", await digest(token)).maybeSingle());
-    if (!c || Date.parse(c.server_worker_expires) <= Date.now() || b.sender !== c.sender_handle) throw Error("\uC11C\uBC84 \uD0A4 \uB9CC\uB8CC\xB7\uD574\uC81C \uB610\uB294 \uBC1C\uC2E0 \uACC4\uC815 \uBD88\uC77C\uCE58");
-    const owner = c.owner;
-    if (path === "/creator-server/worker/control") return { enabled: c.server_enabled, revision: c.server_revision, runtime: c.server_runtime, previewOnly: true };
-    if (!c.server_enabled) throw Error("\uC11C\uBC84 \uC2E4\uD589\uC774 \uC911\uC9C0\uB3FC \uC788\uC2B5\uB2C8\uB2E4.");
-    if (!/^[0-9a-f-]{36}$/i.test(b.instance || "")) throw Error("\uC11C\uBC84 \uC2E4\uD589 \uC2DD\uBCC4\uC790\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.");
-    const lease = await query2(sb2.rpc("sanji_creator_server_lease", { p_owner: owner, p_instance: b.instance, p_sender: b.sender }));
-    if (!lease) throw Error("\uB2E4\uB978 \uC11C\uBC84\uAC00 \uC2E4\uD589 \uC911\uC785\uB2C8\uB2E4. \uC911\uBCF5 \uBE0C\uB77C\uC6B0\uC800\uB97C \uC2E4\uD589\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
-    if (path === "/creator-server/worker/status") {
-      const reasons = { ready: "DB \uC138\uC158\xB7\uBC1C\uC2E0 \uACC4\uC815 \uD655\uC778 \xB7 \uBBF8\uB9AC\uBCF4\uAE30 \uC804\uC6A9", reauth_required: "PC\uC5D0\uC11C \uCD94\uAC00 \uC778\uC99D \uD6C4 \uC0C8 \uC138\uC158 \uC800\uC7A5 \uD544\uC694", error: "\uC11C\uBC84 \uC624\uB958 \xB7 \uC791\uC5C5 \uC911\uC9C0, \uC218\uB3D9 \uC7AC\uAC1C \uD544\uC694", daily_limit: "\uC11C\uBC84 \uD504\uB85C\uD544 \uC77C\uC77C \uD655\uC778 \uD55C\uB3C4 \uB3C4\uB2EC", idle: "\uC0C8 \uD655\uC778 \uC791\uC5C5 \uC5C6\uC74C" };
-      if (!reasons[b.status]) throw Error("\uC62C\uBC14\uB974\uC9C0 \uC54A\uC740 \uC11C\uBC84 \uC0C1\uD0DC");
-      const runtime = { status: b.status, reason: reasons[b.status], checked: (/* @__PURE__ */ new Date()).toISOString(), requiresNewSession: b.status === "reauth_required", instance: b.instance, sessionChecked: String(b.sessionChecked || "").slice(0, 40) };
-      await query2(sb2.from("sanji_creator_config").update({ server_runtime: runtime, ...["error", "reauth_required"].includes(b.status) ? { server_enabled: false, server_lease_until: null } : {} }).eq("owner", owner));
-      return { ok: true };
-    }
-    if (!c.session_backup_enabled) throw Error("DB \uC138\uC158 \uBC31\uC5C5\uC774 \uAEBC\uC838 \uC788\uC2B5\uB2C8\uB2E4.");
-    if (path === "/creator-server/worker/session") return await sessions.handle(owner, b.sender, true, "load", {});
-    if (path === "/creator-server/worker/next") {
-      if (b.live) throw Error("\uC11C\uBC84 DM \uBC1C\uC1A1\uC740 \uBCC4\uB3C4 \uAC80\uC99D\xB7\uC2B9\uC778 \uC804\uAE4C\uC9C0 \uBE44\uD65C\uC131\uC785\uB2C8\uB2E4.");
-      const start = (/* @__PURE__ */ new Date(new Date(Date.now() + 9 * 36e5).toISOString().slice(0, 10) + "T00:00:00+09:00")).toISOString();
-      const count = await query2(sb2.from("sanji_creator_prospects").select("id").eq("owner", owner).eq("profile_preview->>method", "server_visible_profile").gte("profile_preview->>attempted", start));
-      if (count.length >= 5) return { job: null, dailyLimit: true };
-      if (!["ready", "idle", "daily_limit"].includes(c.server_runtime.status)) throw Error("\uC138\uC158 \uD655\uC778 \uD6C4\uC5D0\uB9CC \uD504\uB85C\uD544 \uC791\uC5C5\uC744 \uC2DC\uC791\uD569\uB2C8\uB2E4.");
-      return { job: await query2(sb2.rpc("sanji_claim_local_creator", { p_owner: owner, p_sender: b.sender, p_send: false })) };
-    }
-    if (path === "/creator-server/worker/profile") return await creatorLocal2.execute(owner, c, b.sender, "/creator-local/worker/profile", b, "server");
-    throw Error("\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uC11C\uBC84 \uC2E4\uD589 \uC694\uCCAD");
-  }
-  return { admin, worker };
-}
-
-// supabase/functions/_shared/manual-reply.ts
-function manualReplyService({ sb: sb2, query: query2, putRecord: putRecord2, audit: audit2 }) {
-  return async function save(owner, b) {
-    const name = String(b.company || "").trim();
-    if (!name || !["phone", "sms"].includes(b.channel)) throw Error("\uC5C5\uCCB4\uBA85\uACFC \uC804\uD654\xB7\uBB38\uC790 \uACBD\uB85C\uB97C \uD655\uC778\uD558\uC138\uC694.");
-    const classification = String(b.classification || "\uBBF8\uBD84\uB958");
-    if (!["\uBBF8\uBD84\uB958", "\uAD00\uC2EC \uD68C\uC2E0", "\uB2E8\uC21C \uC548\uB0B4", "\uAC70\uC808", "\uC218\uC2E0 \uAC70\uBD80"].includes(classification)) throw Error("\uD68C\uC2E0 \uBD84\uB958\uB97C \uD655\uC778\uD558\uC138\uC694.");
-    const text2 = String(b.text || "").trim();
-    if (text2.length > 5e3) throw Error("\uD68C\uC2E0 \uBA54\uBAA8\uB294 5000\uC790 \uC774\uB0B4\uC785\uB2C8\uB2E4.");
-    const at = b.at ? new Date(b.at) : /* @__PURE__ */ new Date();
-    if (!Number.isFinite(at.getTime()) || at.getTime() > Date.now() + 6e4) throw Error("\uD68C\uC2E0 \uC77C\uC2DC\uB97C \uD655\uC778\uD558\uC138\uC694.");
-    const candidates = await query2(sb2.from("sanji_records").select("*").eq("owner", owner).eq("kind", "candidate"));
-    let rows = candidates.filter((r) => r.data.kind !== "\uD06C\uB9AC\uC5D0\uC774\uD130" && (b.target ? r.id === b.target : [r.data.name, r.data.company].includes(name)));
-    let target = rows[0];
-    if (b.target && (!target || ![target.data.name, target.data.company].includes(name))) throw Error("\uC785\uB825\uD55C \uC5C5\uCCB4\uBA85\uACFC \uC120\uD0DD\uD55C \uC5C5\uCCB4\uAC00 \uB2E4\uB985\uB2C8\uB2E4.");
-    if (rows.length > 1) throw Error("\uAC19\uC740 \uC774\uB984\uC758 \uC5C5\uCCB4\uAC00 \uC5EC\uB7EC \uACF3\uC785\uB2C8\uB2E4. \uC5C5\uCCB4 \uC120\uD0DD\uC5D0\uC11C \uC815\uD655\uD55C \uB300\uC0C1\uC744 \uC120\uD0DD\uD558\uC138\uC694.");
-    if (!target) {
-      const leads = await query2(sb2.from("sanji_discovery_leads").select("*").eq("owner", owner));
-      const matching = leads.filter((l2) => [l2.data.name, l2.data.outreach?.brandName].includes(name));
-      if (matching.length !== 1) throw Error("\uC800\uC7A5\uB41C \uC5C5\uCCB4\uBA85\uACFC \uC815\uD655\uD788 \uC77C\uCE58\uD558\uB294 \uB300\uC0C1\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uBE0C\uB79C\uB4DC \uBAA9\uB85D\uC758 \uC5C5\uCCB4\uBA85\uC744 \uC120\uD0DD\uD558\uC138\uC694.");
-      const l = matching[0];
-      target = await putRecord2(owner, "candidate", { name, company: name, companyKey: "manual:" + l.id, kind: "\uBE0C\uB79C\uB4DC", category: "\uBBF8\uD655\uC778", website: l.data.website || "", profile: "", handle: "", product: "", contact: { email: "", source: "", checked: "", owner: name, verified: false, purpose: "\uBBF8\uD655\uC778" }, topics: [], evidence: [], status: "\uD68C\uC2E0", next: "\uBB38\uC790\xB7\uC804\uD654 \uD68C\uC2E0 \uD6C4\uC18D \uD655\uC778", owner: "", due: "", note: "\uC218\uB3D9 \uD68C\uC2E0 \uAE30\uB85D\uC73C\uB85C \uC5F0\uACB0\uD55C \uC5C5\uCCB4" });
-      await query2(sb2.from("sanji_discovery_leads").update({ data: { ...l.data, candidateId: target.id, outreach: { ...l.data.outreach, candidateId: target.id } } }).eq("owner", owner).eq("id", l.id));
-    }
-    const records2 = await query2(sb2.from("sanji_records").select("*").eq("owner", owner).eq("kind", "thread"));
-    const old = records2.find((r) => r.data.target === target.id && r.data.channel === b.channel), label = b.channel === "phone" ? "\uC804\uD654" : "\uBB38\uC790";
-    const t = await putRecord2(owner, "thread", { ...old?.data || {}, target: target.id, channel: b.channel, subject: label + " \uD68C\uC2E0 \xB7 \uC218\uB3D9 \uAE30\uB85D", classification, owner: old?.data.owner || "", due: old?.data.due || "", next: old?.data.next || "", manual: true, messages: [...old?.data.messages || [], { id: crypto.randomUUID(), out: false, automatic: false, text: text2 || label + " \uD68C\uC2E0 \uC218\uC2E0 (\uB0B4\uC6A9 \uBBF8\uAE30\uB85D)", at: at.toISOString(), source: "operator_reported", recordedBy: owner, recordedAt: (/* @__PURE__ */ new Date()).toISOString() }], ...old ? { version: old.version } : {} }, old?.id);
-    const status = ["\uAC70\uC808", "\uC218\uC2E0 \uAC70\uBD80"].includes(classification) ? classification : ["\uAC70\uC808", "\uC218\uC2E0 \uAC70\uBD80", "\uD611\uC0C1", "\uB51C \uD655\uBCF4"].includes(target.data.status) ? target.data.status : "\uD68C\uC2E0";
-    await putRecord2(owner, "candidate", { ...target.data, status, lastManualReply: { channel: b.channel, at: at.toISOString(), thread: t.id }, version: target.version }, target.id);
-    if (status === "\uC218\uC2E0 \uAC70\uBD80") {
-      for (const identity of [...target.data.companyKey ? ["company:" + target.data.companyKey] : [], ...target.data.contact?.email ? ["email:" + target.data.contact.email.toLowerCase()] : []].filter((x) => x !== "company:")) await query2(sb2.from("sanji_suppression").upsert({ owner, identity, reason: "\uC6B4\uC601\uC790 \uAE30\uB85D \xB7 " + label + " \uC218\uC2E0 \uAC70\uBD80" }, { onConflict: "owner,identity" }));
-    }
-    const pending = await query2(sb2.from("sanji_drafts").select("id,data").eq("owner", owner).eq("used", false).eq("data->>target", target.id));
-    const initial = pending.filter((d) => !d.data.replyTo).map((d) => d.id);
-    if (initial.length) await query2(sb2.from("sanji_jobs").update({ status: "cancelled", result: { reason: label + " \uD68C\uC2E0 \uC218\uB3D9 \uAE30\uB85D \xB7 \uD6C4\uC18D \uB0B4\uC6A9 \uC7AC\uC2B9\uC778 \uD544\uC694" } }).eq("owner", owner).eq("status", "queued").in("draft_id", initial));
-    await audit2(owner, "manual_brand_reply_recorded", { target: target.id, channel: b.channel, classification });
-    return { ok: true, target: target.id, thread: t.id };
-  };
-}
-
 // supabase/functions/_shared/creator-local.ts
-import { Buffer as Buffer3 } from "node:buffer";
-var digest2 = async (s) => Buffer3.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s))).toString("hex");
+import { Buffer as Buffer2 } from "node:buffer";
+var digest = async (s) => Buffer2.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s))).toString("hex");
 var handle = (s) => String(s || "").replace(/^@/, "").toLowerCase();
-var localApprovalHash = (r) => digest2(JSON.stringify([r.id, r.handle, r.body, r.sender_handle]));
+var localApprovalHash = (r) => digest(JSON.stringify([r.id, r.handle, r.body, r.sender_handle]));
 function creatorLocalService({ sb: sb2, query: query2, audit: audit2, encrypt: encrypt2, decrypt: decrypt2, putRecord: putRecord2 }) {
   const sessions = creatorSessionService({ sb: sb2, query: query2, encrypt: encrypt2, decrypt: decrypt2, audit: audit2 });
   async function config(owner) {
@@ -158,8 +55,8 @@ function creatorLocalService({ sb: sb2, query: query2, audit: audit2, encrypt: e
     if (path === "/creator-local/pair") {
       const c = await config(owner);
       if (!/^[a-z0-9._]{2,30}$/.test(c.sender_handle)) throw Error("\uBA3C\uC800 \uBC1C\uC2E0 Instagram \uC544\uC774\uB514\uB97C \uC800\uC7A5\uD558\uC138\uC694.");
-      const token = Buffer3.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url"), expires = new Date(Date.now() + 7 * 864e5).toISOString();
-      await query2(sb2.from("sanji_creator_config").update({ worker_hash: await digest2(token), worker_expires: expires, worker_seen: null, worker_state: "awaiting_pc" }).eq("owner", owner));
+      const token = Buffer2.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url"), expires = new Date(Date.now() + 7 * 864e5).toISOString();
+      await query2(sb2.from("sanji_creator_config").update({ worker_hash: await digest(token), worker_expires: expires, worker_seen: null, worker_state: "awaiting_pc" }).eq("owner", owner));
       await audit2(owner, "creator_local_paired", { expires });
       return { token, expires };
     }
@@ -207,6 +104,11 @@ function creatorLocalService({ sb: sb2, query: query2, audit: audit2, encrypt: e
     }
     if (path === "/creator-local/preview") {
       const r = await query2(sb2.from("sanji_creator_prospects").select("profile_preview").eq("owner", owner).eq("id", b.id).single());
+      if (b.avatar && r.profile_preview?.avatarPath) {
+        const { data: data2, error: error2 } = await sb2.storage.from("sanji-creator-previews").createSignedUrl(r.profile_preview.avatarPath, 300);
+        if (error2) throw Error("\uC378\uB124\uC77C \uC870\uD68C \uC2E4\uD328");
+        return { url: data2.signedUrl };
+      }
       if (!r.profile_preview?.imagePath) return { url: null };
       const { data, error } = await sb2.storage.from("sanji-creator-previews").createSignedUrl(r.profile_preview.imagePath, 60);
       if (error) throw Error("\uBBF8\uB9AC\uBCF4\uAE30 \uC774\uBBF8\uC9C0 \uC870\uD68C \uC2E4\uD328");
@@ -216,7 +118,7 @@ function creatorLocalService({ sb: sb2, query: query2, audit: audit2, encrypt: e
   }
   async function worker(path, token, b) {
     if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw Error("PC \uC5F0\uACB0 \uD0A4\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.");
-    const c = await query2(sb2.from("sanji_creator_config").select("*").eq("worker_hash", await digest2(token)).maybeSingle());
+    const c = await query2(sb2.from("sanji_creator_config").select("*").eq("worker_hash", await digest(token)).maybeSingle());
     if (!c || Date.parse(c.worker_expires) < Date.now()) throw Error("PC \uC5F0\uACB0\uC774 \uB9CC\uB8CC\xB7\uD574\uC81C\uB410\uC2B5\uB2C8\uB2E4. \uC0C8 \uC5F0\uACB0 \uD0A4\uB97C \uBC1C\uAE09\uD558\uC138\uC694.");
     const owner = c.owner, sender = handle(b.sender);
     if (sender !== c.sender_handle) throw Error("\uB85C\uADF8\uC778\uD55C Instagram \uACC4\uC815\uC774 \uC2B9\uC778\uB41C \uBC1C\uC2E0 \uACC4\uC815\uACFC \uB2E4\uB985\uB2C8\uB2E4.");
@@ -240,19 +142,27 @@ function creatorLocalService({ sb: sb2, query: query2, audit: audit2, encrypt: e
       if (r.status === "unknown" && b.status === "unknown" && r.approved_hash === b.approvedHash) return { ok: true };
       if (r.status !== "sending" || r.approved_hash !== b.approvedHash) throw Error("\uCC98\uB9AC \uC911\uC778 \uC2B9\uC778 \uAC74\uB9CC \uACB0\uACFC\uB97C \uC800\uC7A5\uD569\uB2C8\uB2E4.");
       const status = b.status === "sent" ? "sent" : b.status === "blocked" ? "blocked" : b.status === "failed" ? "failed" : "unknown";
-      await query2(sb2.from("sanji_creator_prospects").update({ status, finished: (/* @__PURE__ */ new Date()).toISOString(), result: { note: String(b.note || "").slice(0, 350), method: "local_browser", deliveryConfirmed: false, readConfirmed: false } }).eq("owner", owner).eq("id", r.id).eq("status", "sending"));
+      await query2(sb2.from("sanji_creator_prospects").update({ status, finished: (/* @__PURE__ */ new Date()).toISOString(), result: { note: String(b.note || "").slice(0, 350), method: executionOrigin === "server" ? "server_browser" : "local_browser", deliveryConfirmed: false, readConfirmed: false } }).eq("owner", owner).eq("id", r.id).eq("status", "sending"));
       return { ok: true };
     }
     if (path === "/creator-local/worker/profile") {
-      const p = b.profile || {}, preview = { attempted: r.profile_preview?.attempted || (/* @__PURE__ */ new Date()).toISOString(), checked: (/* @__PURE__ */ new Date()).toISOString(), source: "https://www.instagram.com/" + r.handle + "/", status: p.status === "checked" ? "checked" : "unavailable", method: executionOrigin === "server" ? "server_visible_profile" : "local_visible_profile" };
+      const p = b.profile || {}, preview = { ...r.profile_preview?.internalTest ? { internalTest: true } : {}, attempted: r.profile_preview?.attempted || (/* @__PURE__ */ new Date()).toISOString(), checked: (/* @__PURE__ */ new Date()).toISOString(), source: "https://www.instagram.com/" + r.handle + "/", status: p.status === "checked" ? "checked" : "unavailable", method: executionOrigin === "server" ? "server_visible_profile" : "local_visible_profile" };
       for (const k of ["displayName", "bio", "followersText", "followingText", "postsText", "reason"]) preview[k] = String(p[k] || "").slice(0, k === "bio" ? 1e3 : 250);
       preview.businessEmails = profileBusinessEmails(preview.bio, preview.source, preview.checked);
       if (p.image) {
-        const bytes = Buffer3.from(String(p.image), "base64");
+        const bytes = Buffer2.from(String(p.image), "base64");
         if (bytes.length > 4e5 || bytes.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") throw Error("\uD504\uB85C\uD544 \uC774\uBBF8\uC9C0 \uD615\uC2DD\xB7\uD06C\uAE30 \uC624\uB958");
         const imagePath = owner + "/" + r.id + ".png", { error } = await sb2.storage.from("sanji-creator-previews").upload(imagePath, bytes, { contentType: "image/png", upsert: true });
         if (error) throw Error("\uD504\uB85C\uD544 \uC774\uBBF8\uC9C0 \uC800\uC7A5 \uC2E4\uD328");
         preview.imagePath = imagePath;
+      }
+      if (p.avatar) {
+        const bytes = Buffer2.from(String(p.avatar), "base64");
+        if (bytes.length <= 8e4 && bytes.subarray(0, 8).toString("hex") === "89504e470d0a1a0a") {
+          const avatarPath = owner + "/" + r.id + "-avatar.png";
+          const { error } = await sb2.storage.from("sanji-creator-previews").upload(avatarPath, bytes, { contentType: "image/png", upsert: true });
+          if (!error) preview.avatarPath = avatarPath;
+        }
       }
       await query2(sb2.from("sanji_creator_prospects").update({ profile_preview: preview }).eq("owner", owner).eq("id", r.id));
       return { ok: true };
@@ -264,6 +174,138 @@ function creatorLocalService({ sb: sb2, query: query2, audit: audit2, encrypt: e
 function profileBusinessEmails(bio, source, checked) {
   const found = [...new Set((String(bio).match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || []).map((s) => s.toLowerCase()))];
   return found.filter((e) => !/^(?:privacy|recruit|career|jobs|noreply|postmaster)(?:[._-]|@)/i.test(e)).map((email) => ({ email, source, checked, context: String(bio).split(/\n/).find((l) => l.toLowerCase().includes(email))?.slice(0, 300) || email, method: "visible_instagram_profile" }));
+}
+
+// supabase/functions/_shared/creator-server.ts
+var digest2 = async (s) => Buffer3.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s))).toString("hex");
+function creatorServerService({ sb: sb2, query: query2, encrypt: encrypt2, decrypt: decrypt2, audit: audit2, creatorLocal: creatorLocal2 }) {
+  const sessions = creatorSessionService({ sb: sb2, query: query2, encrypt: encrypt2, decrypt: decrypt2, audit: audit2 });
+  const get = async (owner) => await query2(sb2.from("sanji_creator_config").select("*").eq("owner", owner).single());
+  async function admin(path, owner, b) {
+    const c = await get(owner);
+    if (path === "/creator-server/approve-test") {
+      if (c.sender_handle !== "valu_est" || !c.server_enabled || c.server_runtime?.requiresNewSession || c.server_runtime?.workerVersion !== "server-test-v2" || !["ready", "idle", "daily_limit"].includes(c.server_runtime?.status)) throw Error("\uC11C\uBC84 \uC5C5\uB370\uC774\uD2B8\uC640 \uC0C8 \uC138\uC158 \uACC4\uC815 \uD655\uC778\uC744 \uBA3C\uC800 \uB9C8\uCE58\uC138\uC694.");
+      const r = await query2(sb2.from("sanji_creator_prospects").select("*").eq("owner", owner).eq("id", "a6cedd56-dbab-43b0-a2a5-1f3f893e1606").single());
+      const body = "\uC0B0\uC9C0 Instagram DM \uBC1C\uC1A1 \uAE30\uB2A5 \uD655\uC778\uC6A9 \uD14C\uC2A4\uD2B8 \uBA54\uC2DC\uC9C0\uC785\uB2C8\uB2E4. \uD655\uC778\uB418\uC2DC\uBA74 \uB2F5\uC7A5 \uBD80\uD0C1\uB4DC\uB9BD\uB2C8\uB2E4!";
+      if (r.handle !== "taemin_dtg" || r.sender_handle !== "valu_est" || r.body !== body || r.status !== "failed" || r.result?.clickStarted) throw Error("\uBC1C\uC1A1 \uC804 \uC911\uB2E8\uB41C \uB0B4\uBD80 \uD14C\uC2A4\uD2B8 1\uAC74\uB9CC \uD5C8\uC6A9\uD569\uB2C8\uB2E4. \uBC1C\uC1A1\xB7\uCC98\uB9AC \uC911\xB7\uACB0\uACFC \uBBF8\uD655\uC778 \uAC74\uC740 \uC7AC\uC2DC\uB3C4\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+      const changed = await query2(sb2.from("sanji_creator_prospects").update({ status: "queued", approved_hash: await localApprovalHash(r), profile_preview: { ...r.profile_preview, internalTest: true }, result: { note: "\uC6B4\uC601\uC790 \uC2B9\uC778 \xB7 \uC11C\uBC84 \uD14C\uC2A4\uD2B8 1\uAC74 \uB300\uAE30", previousAttempt: r.result } }).eq("owner", owner).eq("id", r.id).eq("status", "failed").select("id"));
+      if (changed.length !== 1) throw Error("\uC0C1\uD0DC \uBCC0\uACBD \xB7 \uD14C\uC2A4\uD2B8 \uC2B9\uC778 \uCDE8\uC18C");
+      await query2(sb2.from("sanji_creator_config").update({ server_test_id: r.id, server_test_deadline: new Date(Date.now() + 2 * 36e5).toISOString() }).eq("owner", owner));
+      await audit2(owner, "creator_server_internal_test_approved", { id: r.id, sender: "valu_est", recipient: "taemin_dtg", scope: "one-shot exact copy" });
+      return { ok: true, id: r.id };
+    }
+    if (path === "/creator-server/key") {
+      if (!c.session_backup_enabled || !c.sender_handle) throw Error("PC\uC5D0\uC11C \uBC1C\uC2E0 \uACC4\uC815\uC744 \uC800\uC7A5\uD558\uACE0 DB \uC138\uC158 \uBC31\uC5C5\uC744 \uCF1C\uC138\uC694.");
+      const token = Buffer3.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url"), expires = new Date(Date.now() + 30 * 864e5).toISOString();
+      await query2(sb2.from("sanji_creator_config").update({ server_worker_hash: await digest2(token), server_worker_expires: expires, server_enabled: false, server_lease_owner: null, server_lease_until: null, server_runtime: { ...c.server_runtime, status: "paused", reason: "\uC11C\uBC84 \uD0A4 \uBC1C\uAE09 \xB7 \uC7AC\uAC1C \uC2B9\uC778 \uC804", checked: c.server_runtime?.requiresNewSession ? c.server_runtime.checked : (/* @__PURE__ */ new Date()).toISOString() } }).eq("owner", owner));
+      await audit2(owner, "creator_server_key_issued", { expires });
+      return { token, expires };
+    }
+    if (path === "/creator-server/pause" || path === "/creator-server/revoke") {
+      const revoke = path.endsWith("/revoke");
+      await query2(sb2.from("sanji_creator_config").update({ server_enabled: false, server_lease_owner: null, server_lease_until: null, ...revoke ? { server_worker_hash: null, server_worker_expires: null } : {}, server_runtime: { ...c.server_runtime, status: "paused", reason: revoke ? "\uC11C\uBC84 \uC5F0\uACB0 \uD574\uC81C" : "\uC6B4\uC601\uC790 \uC77C\uC2DC\uC911\uC9C0", checked: c.server_runtime?.requiresNewSession ? c.server_runtime.checked : (/* @__PURE__ */ new Date()).toISOString() } }).eq("owner", owner));
+      return { ok: true };
+    }
+    if (path === "/creator-server/resume") {
+      if (!c.server_worker_hash || Date.parse(c.server_worker_expires) <= Date.now()) throw Error("\uC0C8 \uC11C\uBC84 \uC5F0\uACB0 \uD0A4\uB97C \uBC1C\uAE09\uD558\uC138\uC694.");
+      const s = await query2(sb2.from("sanji_instagram_pc_sessions").select("checked,expires").eq("owner", owner).eq("handle", c.sender_handle).maybeSingle());
+      if (!c.session_backup_enabled || !s || Date.parse(s.expires) <= Date.now()) throw Error("PC \uC2E4\uD589\uAE30\uC5D0\uC11C \uC9C1\uC811 \uB85C\uADF8\uC778\uD574 \uC138\uC158\uC744 DB\uC5D0 \uC800\uC7A5\uD558\uC138\uC694.");
+      if (c.server_runtime?.requiresNewSession && Date.parse(s.checked) <= Date.parse(c.server_runtime.checked)) throw Error("\uCD94\uAC00 \uC778\uC99D \uC774\uD6C4 PC\uC5D0\uC11C \uC0C8 \uC138\uC158\uC744 \uC800\uC7A5\uD55C \uB2E4\uC74C \uC7AC\uAC1C\uD558\uC138\uC694.");
+      await query2(sb2.from("sanji_creator_config").update({ server_enabled: true, server_revision: c.server_revision + 1, server_runtime: { status: "starting", reason: "\uC6B4\uC601\uC790\uAC00 \uC0C8 \uC138\uC158\uC73C\uB85C \uC7AC\uAC1C \uC2B9\uC778", checked: (/* @__PURE__ */ new Date()).toISOString(), sessionChecked: s.checked } }).eq("owner", owner));
+      await audit2(owner, "creator_server_resume_approved", { sender: c.sender_handle });
+      return { ok: true, previewOnly: true };
+    }
+    throw Error("\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uC11C\uBC84 \uC124\uC815");
+  }
+  async function worker(path, token, b) {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw Error("\uC11C\uBC84 \uC5F0\uACB0 \uD0A4\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.");
+    const c = await query2(sb2.from("sanji_creator_config").select("*").eq("server_worker_hash", await digest2(token)).maybeSingle());
+    if (!c || Date.parse(c.server_worker_expires) <= Date.now() || b.sender !== c.sender_handle) throw Error("\uC11C\uBC84 \uD0A4 \uB9CC\uB8CC\xB7\uD574\uC81C \uB610\uB294 \uBC1C\uC2E0 \uACC4\uC815 \uBD88\uC77C\uCE58");
+    const owner = c.owner;
+    if (path === "/creator-server/worker/control") return { enabled: c.server_enabled, revision: c.server_revision, runtime: c.server_runtime, previewOnly: true, testAllowed: !!c.server_test_id && Date.parse(c.server_test_deadline) > Date.now() };
+    if (!c.server_enabled) throw Error("\uC11C\uBC84 \uC2E4\uD589\uC774 \uC911\uC9C0\uB3FC \uC788\uC2B5\uB2C8\uB2E4.");
+    if (!/^[0-9a-f-]{36}$/i.test(b.instance || "")) throw Error("\uC11C\uBC84 \uC2E4\uD589 \uC2DD\uBCC4\uC790\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.");
+    const lease = await query2(sb2.rpc("sanji_creator_server_lease", { p_owner: owner, p_instance: b.instance, p_sender: b.sender }));
+    if (!lease) throw Error("\uB2E4\uB978 \uC11C\uBC84\uAC00 \uC2E4\uD589 \uC911\uC785\uB2C8\uB2E4. \uC911\uBCF5 \uBE0C\uB77C\uC6B0\uC800\uB97C \uC2E4\uD589\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+    if (path === "/creator-server/worker/status") {
+      const reasons = { ready: "DB \uC138\uC158\xB7\uBC1C\uC2E0 \uACC4\uC815 \uD655\uC778 \xB7 \uBBF8\uB9AC\uBCF4\uAE30 \uC804\uC6A9", reauth_required: "PC\uC5D0\uC11C \uCD94\uAC00 \uC778\uC99D \uD6C4 \uC0C8 \uC138\uC158 \uC800\uC7A5 \uD544\uC694", error: "\uC11C\uBC84 \uC624\uB958 \xB7 \uC791\uC5C5 \uC911\uC9C0, \uC218\uB3D9 \uC7AC\uAC1C \uD544\uC694", daily_limit: "\uC11C\uBC84 \uD504\uB85C\uD544 \uC77C\uC77C \uD655\uC778 \uD55C\uB3C4 \uB3C4\uB2EC", idle: "\uC0C8 \uD655\uC778 \uC791\uC5C5 \uC5C6\uC74C" };
+      if (!reasons[b.status]) throw Error("\uC62C\uBC14\uB974\uC9C0 \uC54A\uC740 \uC11C\uBC84 \uC0C1\uD0DC");
+      const runtime = { status: b.status, reason: reasons[b.status], checked: (/* @__PURE__ */ new Date()).toISOString(), requiresNewSession: b.status === "reauth_required", instance: b.instance, sessionChecked: String(b.sessionChecked || "").slice(0, 40), workerVersion: String(b.workerVersion || "preview-v1").slice(0, 30) };
+      await query2(sb2.from("sanji_creator_config").update({ server_runtime: runtime, ...["error", "reauth_required"].includes(b.status) ? { server_enabled: false, server_lease_until: null } : {} }).eq("owner", owner));
+      return { ok: true };
+    }
+    if (["/creator-server/worker/test-check", "/creator-server/worker/test-before-click", "/creator-server/worker/test-result"].includes(path)) {
+      if (b.id !== c.server_test_id || Date.parse(c.server_test_deadline) <= Date.now() || b.sender !== "valu_est") throw Error("\uC2B9\uC778\uB41C \uB0B4\uBD80 \uD14C\uC2A4\uD2B8 1\uAC74\uB9CC \uD5C8\uC6A9\uD569\uB2C8\uB2E4.");
+      const r = await query2(sb2.from("sanji_creator_prospects").select("*").eq("owner", owner).eq("id", b.id).single());
+      if (r.handle !== "taemin_dtg" || r.body !== "\uC0B0\uC9C0 Instagram DM \uBC1C\uC1A1 \uAE30\uB2A5 \uD655\uC778\uC6A9 \uD14C\uC2A4\uD2B8 \uBA54\uC2DC\uC9C0\uC785\uB2C8\uB2E4. \uD655\uC778\uB418\uC2DC\uBA74 \uB2F5\uC7A5 \uBD80\uD0C1\uB4DC\uB9BD\uB2C8\uB2E4!" || !r.profile_preview?.internalTest) throw Error("\uB0B4\uBD80 \uD14C\uC2A4\uD2B8 \uB300\uC0C1\xB7\uB0B4\uC6A9 \uBD88\uC77C\uCE58");
+      if (path.endsWith("/test-result")) return await creatorLocal2.execute(owner, c, b.sender, "/creator-local/worker/result", b, "server");
+      await creatorLocal2.execute(owner, c, b.sender, "/creator-local/worker/check", b, "server");
+      if (r.result?.clickStarted) throw Error("\uC774\uBBF8 \uD074\uB9AD\uC744 \uC2DC\uC791\uD55C \uAC74\uC740 \uC7AC\uC2DC\uB3C4\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+      if (path.endsWith("/test-before-click")) {
+        const updated = await query2(sb2.from("sanji_creator_prospects").update({ result: { note: "\uC804\uC1A1 \uD074\uB9AD \uC2DC\uC791 \xB7 \uACB0\uACFC \uBBF8\uD655\uC778 \uC2DC \uC7AC\uC2DC\uB3C4 \uAE08\uC9C0", clickStarted: true } }).eq("owner", owner).eq("id", r.id).eq("status", "sending").eq("result", JSON.stringify(r.result)).select("id"));
+        if (!updated.length) throw Error("\uD14C\uC2A4\uD2B8 \uC0C1\uD0DC \uBCC0\uACBD \xB7 \uC804\uC1A1 \uC911\uB2E8");
+      }
+      return { ok: true };
+    }
+    if (path === "/creator-server/worker/test-next") {
+      if (b.workerVersion !== "server-test-v2") throw Error("\uC11C\uBC84 \uC2E4\uD589\uAE30 \uC5C5\uB370\uC774\uD2B8 \uD544\uC694");
+      if (!["ready", "idle", "daily_limit"].includes(c.server_runtime.status)) throw Error("\uACC4\uC815 \uD655\uC778 \uD6C4 \uD14C\uC2A4\uD2B8\uD558\uC138\uC694.");
+      return { job: await query2(sb2.rpc("sanji_creator_server_test_claim", { p_owner: owner, p_sender: b.sender })) };
+    }
+    if (!c.session_backup_enabled) throw Error("DB \uC138\uC158 \uBC31\uC5C5\uC774 \uAEBC\uC838 \uC788\uC2B5\uB2C8\uB2E4.");
+    if (path === "/creator-server/worker/session") return await sessions.handle(owner, b.sender, true, "load", {});
+    if (path === "/creator-server/worker/next") {
+      if (b.live) throw Error("\uC11C\uBC84 DM \uBC1C\uC1A1\uC740 \uBCC4\uB3C4 \uAC80\uC99D\xB7\uC2B9\uC778 \uC804\uAE4C\uC9C0 \uBE44\uD65C\uC131\uC785\uB2C8\uB2E4.");
+      const start = (/* @__PURE__ */ new Date(new Date(Date.now() + 9 * 36e5).toISOString().slice(0, 10) + "T00:00:00+09:00")).toISOString();
+      const count = await query2(sb2.from("sanji_creator_prospects").select("id").eq("owner", owner).eq("profile_preview->>method", "server_visible_profile").gte("profile_preview->>attempted", start));
+      if (count.length >= 50) return { job: null, dailyLimit: true };
+      if (!["ready", "idle", "daily_limit"].includes(c.server_runtime.status)) throw Error("\uC138\uC158 \uD655\uC778 \uD6C4\uC5D0\uB9CC \uD504\uB85C\uD544 \uC791\uC5C5\uC744 \uC2DC\uC791\uD569\uB2C8\uB2E4.");
+      return { job: await query2(sb2.rpc("sanji_claim_local_creator", { p_owner: owner, p_sender: b.sender, p_send: false })) };
+    }
+    if (path === "/creator-server/worker/profile") return await creatorLocal2.execute(owner, c, b.sender, "/creator-local/worker/profile", b, "server");
+    throw Error("\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uC11C\uBC84 \uC2E4\uD589 \uC694\uCCAD");
+  }
+  return { admin, worker };
+}
+
+// supabase/functions/_shared/manual-reply.ts
+function manualReplyService({ sb: sb2, query: query2, putRecord: putRecord2, audit: audit2 }) {
+  return async function save(owner, b) {
+    const name = String(b.company || "").trim();
+    if (!name || !["phone", "sms"].includes(b.channel)) throw Error("\uC5C5\uCCB4\uBA85\uACFC \uC804\uD654\xB7\uBB38\uC790 \uACBD\uB85C\uB97C \uD655\uC778\uD558\uC138\uC694.");
+    const classification = String(b.classification || "\uBBF8\uBD84\uB958");
+    if (!["\uBBF8\uBD84\uB958", "\uAD00\uC2EC \uD68C\uC2E0", "\uB2E8\uC21C \uC548\uB0B4", "\uAC70\uC808", "\uC218\uC2E0 \uAC70\uBD80"].includes(classification)) throw Error("\uD68C\uC2E0 \uBD84\uB958\uB97C \uD655\uC778\uD558\uC138\uC694.");
+    const text2 = String(b.text || "").trim();
+    if (text2.length > 5e3) throw Error("\uD68C\uC2E0 \uBA54\uBAA8\uB294 5000\uC790 \uC774\uB0B4\uC785\uB2C8\uB2E4.");
+    const at = b.at ? new Date(b.at) : /* @__PURE__ */ new Date();
+    if (!Number.isFinite(at.getTime()) || at.getTime() > Date.now() + 6e4) throw Error("\uD68C\uC2E0 \uC77C\uC2DC\uB97C \uD655\uC778\uD558\uC138\uC694.");
+    const candidates = await query2(sb2.from("sanji_records").select("*").eq("owner", owner).eq("kind", "candidate"));
+    let rows = candidates.filter((r) => r.data.kind !== "\uD06C\uB9AC\uC5D0\uC774\uD130" && (b.target ? r.id === b.target : [r.data.name, r.data.company].includes(name)));
+    let target = rows[0];
+    if (b.target && (!target || ![target.data.name, target.data.company].includes(name))) throw Error("\uC785\uB825\uD55C \uC5C5\uCCB4\uBA85\uACFC \uC120\uD0DD\uD55C \uC5C5\uCCB4\uAC00 \uB2E4\uB985\uB2C8\uB2E4.");
+    if (rows.length > 1) throw Error("\uAC19\uC740 \uC774\uB984\uC758 \uC5C5\uCCB4\uAC00 \uC5EC\uB7EC \uACF3\uC785\uB2C8\uB2E4. \uC5C5\uCCB4 \uC120\uD0DD\uC5D0\uC11C \uC815\uD655\uD55C \uB300\uC0C1\uC744 \uC120\uD0DD\uD558\uC138\uC694.");
+    if (!target) {
+      const leads = await query2(sb2.from("sanji_discovery_leads").select("*").eq("owner", owner));
+      const matching = leads.filter((l2) => [l2.data.name, l2.data.outreach?.brandName].includes(name));
+      if (matching.length !== 1) throw Error("\uC800\uC7A5\uB41C \uC5C5\uCCB4\uBA85\uACFC \uC815\uD655\uD788 \uC77C\uCE58\uD558\uB294 \uB300\uC0C1\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uBE0C\uB79C\uB4DC \uBAA9\uB85D\uC758 \uC5C5\uCCB4\uBA85\uC744 \uC120\uD0DD\uD558\uC138\uC694.");
+      const l = matching[0];
+      target = await putRecord2(owner, "candidate", { name, company: name, companyKey: "manual:" + l.id, kind: "\uBE0C\uB79C\uB4DC", category: "\uBBF8\uD655\uC778", website: l.data.website || "", profile: "", handle: "", product: "", contact: { email: "", source: "", checked: "", owner: name, verified: false, purpose: "\uBBF8\uD655\uC778" }, topics: [], evidence: [], status: "\uD68C\uC2E0", next: "\uBB38\uC790\xB7\uC804\uD654 \uD68C\uC2E0 \uD6C4\uC18D \uD655\uC778", owner: "", due: "", note: "\uC218\uB3D9 \uD68C\uC2E0 \uAE30\uB85D\uC73C\uB85C \uC5F0\uACB0\uD55C \uC5C5\uCCB4" });
+      await query2(sb2.from("sanji_discovery_leads").update({ data: { ...l.data, candidateId: target.id, outreach: { ...l.data.outreach, candidateId: target.id } } }).eq("owner", owner).eq("id", l.id));
+    }
+    const records2 = await query2(sb2.from("sanji_records").select("*").eq("owner", owner).eq("kind", "thread"));
+    const old = records2.find((r) => r.data.target === target.id && r.data.channel === b.channel), label = b.channel === "phone" ? "\uC804\uD654" : "\uBB38\uC790";
+    const t = await putRecord2(owner, "thread", { ...old?.data || {}, target: target.id, channel: b.channel, subject: label + " \uD68C\uC2E0 \xB7 \uC218\uB3D9 \uAE30\uB85D", classification, owner: old?.data.owner || "", due: old?.data.due || "", next: old?.data.next || "", manual: true, messages: [...old?.data.messages || [], { id: crypto.randomUUID(), out: false, automatic: false, text: text2 || label + " \uD68C\uC2E0 \uC218\uC2E0 (\uB0B4\uC6A9 \uBBF8\uAE30\uB85D)", at: at.toISOString(), source: "operator_reported", recordedBy: owner, recordedAt: (/* @__PURE__ */ new Date()).toISOString() }], ...old ? { version: old.version } : {} }, old?.id);
+    const status = ["\uAC70\uC808", "\uC218\uC2E0 \uAC70\uBD80"].includes(classification) ? classification : ["\uAC70\uC808", "\uC218\uC2E0 \uAC70\uBD80", "\uD611\uC0C1", "\uB51C \uD655\uBCF4"].includes(target.data.status) ? target.data.status : "\uD68C\uC2E0";
+    await putRecord2(owner, "candidate", { ...target.data, status, lastManualReply: { channel: b.channel, at: at.toISOString(), thread: t.id }, version: target.version }, target.id);
+    if (status === "\uC218\uC2E0 \uAC70\uBD80") {
+      for (const identity of [...target.data.companyKey ? ["company:" + target.data.companyKey] : [], ...target.data.contact?.email ? ["email:" + target.data.contact.email.toLowerCase()] : []].filter((x) => x !== "company:")) await query2(sb2.from("sanji_suppression").upsert({ owner, identity, reason: "\uC6B4\uC601\uC790 \uAE30\uB85D \xB7 " + label + " \uC218\uC2E0 \uAC70\uBD80" }, { onConflict: "owner,identity" }));
+    }
+    const pending = await query2(sb2.from("sanji_drafts").select("id,data").eq("owner", owner).eq("used", false).eq("data->>target", target.id));
+    const initial = pending.filter((d) => !d.data.replyTo).map((d) => d.id);
+    if (initial.length) await query2(sb2.from("sanji_jobs").update({ status: "cancelled", result: { reason: label + " \uD68C\uC2E0 \uC218\uB3D9 \uAE30\uB85D \xB7 \uD6C4\uC18D \uB0B4\uC6A9 \uC7AC\uC2B9\uC778 \uD544\uC694" } }).eq("owner", owner).eq("status", "queued").in("draft_id", initial));
+    await audit2(owner, "manual_brand_reply_recorded", { target: target.id, channel: b.channel, classification });
+    return { ok: true, target: target.id, thread: t.id };
+  };
 }
 
 // supabase/functions/_shared/gmail-sync.ts

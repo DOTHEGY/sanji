@@ -36,8 +36,11 @@ async function profile(page,job){
  const stat=async name=>{const a=header.locator('a[href$="/'+name+'/"]').first();return await a.innerText({timeout:1500}).catch(()=>'');};
  const headerText=await header.innerText();const posts=headerText.match(/(?:게시물\s*[\d,.만천억KMB]+|[\d,.KMB]+\s+posts)/i)?.[0]||'';
  const displayName=await header.locator('h1').innerText({timeout:1000}).catch(()=>''),bio=headerText.slice(0,1000);
- const box=await header.boundingBox();let image='';if(box&&box.height>0&&box.width>0){const shot=await page.screenshot({clip:{x:Math.max(0,box.x),y:Math.max(0,box.y),width:Math.min(box.width,1100),height:Math.min(box.height,650)}});if(shot.length<=400000)image=shot.toString('base64');}
- return {status:'checked',displayName,bio,followersText:await stat('followers'),followingText:await stat('following'),postsText:posts,image};
+ await page.evaluate(()=>window.scrollTo(0,0));
+ const box=await page.locator('main').boundingBox();let image='',avatar='';
+ const avatarEl=header.locator('img').first();if(await avatarEl.isVisible().catch(()=>false)){const a=await avatarEl.screenshot().catch(()=>null);if(a&&a.length<=80000)avatar=a.toString('base64');}
+ if(box&&box.height>0&&box.width>0){const viewport=page.viewportSize()||{width:1100,height:1000};const x=Math.max(0,box.x),y=Math.max(0,box.y);const shot=await page.screenshot({clip:{x,y,width:Math.min(box.width,viewport.width-x),height:Math.min(box.height,viewport.height-y,950)}});if(shot.length<=400000)image=shot.toString('base64');}
+ return {status:'checked',displayName,bio,followersText:(await stat('followers'))||(headerText.match(/(?:팔로워\s*[\d,.만천억KMB]+|[\d,.KMB]+\s+followers)/i)?.[0]||''),followingText:(await stat('following'))||(headerText.match(/(?:팔로잉\s*[\d,.만천억KMB]+|[\d,.KMB]+\s+following)/i)?.[0]||''),postsText:posts,image,avatar};
  }catch(e){return {status:'unavailable',reason:e.message.slice(0,200),halt:true};}
 }
 async function conversationRecipient(editor,expected,inDirect){

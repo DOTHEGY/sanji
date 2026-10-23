@@ -1,4 +1,5 @@
 import {Buffer} from "node:buffer";
+import {localApprovalHash} from "./creator-local.ts";
 import {creatorSessionService} from "./creator-session.ts";
 const digest=async(s:string)=>Buffer.from(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(s))).toString("hex");
 export function creatorServerService({sb,query,encrypt,decrypt,audit,creatorLocal}:any){
@@ -6,6 +7,15 @@ export function creatorServerService({sb,query,encrypt,decrypt,audit,creatorLoca
  const get=async(owner:string)=>await query(sb.from("sanji_creator_config").select("*").eq("owner",owner).single());
  async function admin(path:string,owner:string,b:any){
   const c=await get(owner);
+  if(path==="/creator-server/approve-test"){
+   if(c.sender_handle!=="valu_est"||!c.server_enabled||c.server_runtime?.requiresNewSession||c.server_runtime?.workerVersion!=="server-test-v2"||!["ready","idle","daily_limit"].includes(c.server_runtime?.status))throw Error("서버 업데이트와 새 세션 계정 확인을 먼저 마치세요.");
+   const r=await query(sb.from("sanji_creator_prospects").select("*").eq("owner",owner).eq("id","a6cedd56-dbab-43b0-a2a5-1f3f893e1606").single());
+   const body="산지 Instagram DM 발송 기능 확인용 테스트 메시지입니다. 확인되시면 답장 부탁드립니다!";
+   if(r.handle!=="taemin_dtg"||r.sender_handle!=="valu_est"||r.body!==body||r.status!=="failed"||r.result?.clickStarted)throw Error("발송 전 중단된 내부 테스트 1건만 허용합니다. 발송·처리 중·결과 미확인 건은 재시도하지 않습니다.");
+   const changed=await query(sb.from("sanji_creator_prospects").update({status:"queued",approved_hash:await localApprovalHash(r),profile_preview:{...r.profile_preview,internalTest:true},result:{note:"운영자 승인 · 서버 테스트 1건 대기",previousAttempt:r.result}}).eq("owner",owner).eq("id",r.id).eq("status","failed").select("id"));if(changed.length!==1)throw Error("상태 변경 · 테스트 승인 취소");
+   await query(sb.from("sanji_creator_config").update({server_test_id:r.id,server_test_deadline:new Date(Date.now()+2*3600000).toISOString()}).eq("owner",owner));
+   await audit(owner,"creator_server_internal_test_approved",{id:r.id,sender:"valu_est",recipient:"taemin_dtg",scope:"one-shot exact copy"});return {ok:true,id:r.id};
+  }
   if(path==="/creator-server/key"){
    if(!c.session_backup_enabled||!c.sender_handle)throw Error("PC에서 발신 계정을 저장하고 DB 세션 백업을 켜세요.");
    const token=Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url"),expires=new Date(Date.now()+30*86400000).toISOString();
@@ -30,7 +40,7 @@ export function creatorServerService({sb,query,encrypt,decrypt,audit,creatorLoca
   const c=await query(sb.from("sanji_creator_config").select("*").eq("server_worker_hash",await digest(token)).maybeSingle());
   if(!c||Date.parse(c.server_worker_expires)<=Date.now()||b.sender!==c.sender_handle)throw Error("서버 키 만료·해제 또는 발신 계정 불일치");
   const owner=c.owner;
-  if(path==="/creator-server/worker/control")return {enabled:c.server_enabled,revision:c.server_revision,runtime:c.server_runtime,previewOnly:true};
+  if(path==="/creator-server/worker/control")return {enabled:c.server_enabled,revision:c.server_revision,runtime:c.server_runtime,previewOnly:true,testAllowed:!!c.server_test_id&&Date.parse(c.server_test_deadline)>Date.now()};
   if(!c.server_enabled)throw Error("서버 실행이 중지돼 있습니다.");
   if(!/^[0-9a-f-]{36}$/i.test(b.instance||""))throw Error("서버 실행 식별자가 필요합니다.");
   const lease=await query(sb.rpc("sanji_creator_server_lease",{p_owner:owner,p_instance:b.instance,p_sender:b.sender}));
@@ -38,8 +48,25 @@ export function creatorServerService({sb,query,encrypt,decrypt,audit,creatorLoca
   if(path==="/creator-server/worker/status"){
    const reasons:any={ready:"DB 세션·발신 계정 확인 · 미리보기 전용",reauth_required:"PC에서 추가 인증 후 새 세션 저장 필요",error:"서버 오류 · 작업 중지, 수동 재개 필요",daily_limit:"서버 프로필 일일 확인 한도 도달",idle:"새 확인 작업 없음"};
    if(!reasons[b.status])throw Error("올바르지 않은 서버 상태");
-   const runtime={status:b.status,reason:reasons[b.status],checked:new Date().toISOString(),requiresNewSession:b.status==="reauth_required",instance:b.instance,sessionChecked:String(b.sessionChecked||"").slice(0,40)};
+   const runtime={status:b.status,reason:reasons[b.status],checked:new Date().toISOString(),requiresNewSession:b.status==="reauth_required",instance:b.instance,sessionChecked:String(b.sessionChecked||"").slice(0,40),workerVersion:String(b.workerVersion||"preview-v1").slice(0,30)};
    await query(sb.from("sanji_creator_config").update({server_runtime:runtime,...(["error","reauth_required"].includes(b.status)?{server_enabled:false,server_lease_until:null}:{} )}).eq("owner",owner));return {ok:true};
+  }
+  if(["/creator-server/worker/test-check","/creator-server/worker/test-before-click","/creator-server/worker/test-result"].includes(path)){
+   if(b.id!==c.server_test_id||Date.parse(c.server_test_deadline)<=Date.now()||b.sender!=="valu_est")throw Error("승인된 내부 테스트 1건만 허용합니다.");
+   const r=await query(sb.from("sanji_creator_prospects").select("*").eq("owner",owner).eq("id",b.id).single());
+   if(r.handle!=="taemin_dtg"||r.body!=="산지 Instagram DM 발송 기능 확인용 테스트 메시지입니다. 확인되시면 답장 부탁드립니다!"||!r.profile_preview?.internalTest)throw Error("내부 테스트 대상·내용 불일치");
+   if(path.endsWith("/test-result"))return await creatorLocal.execute(owner,c,b.sender,"/creator-local/worker/result",b,"server");
+   await creatorLocal.execute(owner,c,b.sender,"/creator-local/worker/check",b,"server");
+   if(r.result?.clickStarted)throw Error("이미 클릭을 시작한 건은 재시도하지 않습니다.");
+   if(path.endsWith("/test-before-click")){
+    const updated=await query(sb.from("sanji_creator_prospects").update({result:{note:"전송 클릭 시작 · 결과 미확인 시 재시도 금지",clickStarted:true}}).eq("owner",owner).eq("id",r.id).eq("status","sending").eq("result",JSON.stringify(r.result)).select("id"));if(!updated.length)throw Error("테스트 상태 변경 · 전송 중단");
+   }
+   return {ok:true};
+  }
+  if(path==="/creator-server/worker/test-next"){
+   if(b.workerVersion!=="server-test-v2")throw Error("서버 실행기 업데이트 필요");
+   if(!["ready","idle","daily_limit"].includes(c.server_runtime.status))throw Error("계정 확인 후 테스트하세요.");
+   return {job:await query(sb.rpc("sanji_creator_server_test_claim",{p_owner:owner,p_sender:b.sender}))};
   }
   if(!c.session_backup_enabled)throw Error("DB 세션 백업이 꺼져 있습니다.");
   if(path==="/creator-server/worker/session")return await sessions.handle(owner,b.sender,true,"load",{});
@@ -47,7 +74,7 @@ export function creatorServerService({sb,query,encrypt,decrypt,audit,creatorLoca
    if(b.live)throw Error("서버 DM 발송은 별도 검증·승인 전까지 비활성입니다.");
    const start=new Date(new Date(Date.now()+9*3600000).toISOString().slice(0,10)+"T00:00:00+09:00").toISOString();
    const count=await query(sb.from("sanji_creator_prospects").select("id").eq("owner",owner).eq("profile_preview->>method","server_visible_profile").gte("profile_preview->>attempted",start));
-   if(count.length>=5)return {job:null,dailyLimit:true};
+   if(count.length>=50)return {job:null,dailyLimit:true};
    if(!["ready","idle","daily_limit"].includes(c.server_runtime.status))throw Error("세션 확인 후에만 프로필 작업을 시작합니다.");
    return {job:await query(sb.rpc("sanji_claim_local_creator",{p_owner:owner,p_sender:b.sender,p_send:false}))};
   }
