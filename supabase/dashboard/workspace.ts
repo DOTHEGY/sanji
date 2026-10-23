@@ -249,7 +249,11 @@ function creatorServerService({ sb: sb2, query: query2, encrypt: encrypt2, decry
       if (b.id !== c.server_test_id || Date.parse(c.server_test_deadline) <= Date.now() || b.sender !== c.server_test_sender) throw Error("\uC2B9\uC778\uB41C \uB0B4\uBD80 \uD14C\uC2A4\uD2B8 1\uAC74\uB9CC \uD5C8\uC6A9\uD569\uB2C8\uB2E4.");
       const r = await query2(sb2.from("sanji_creator_prospects").select("*").eq("owner", owner).eq("id", b.id).single());
       if (r.handle !== "taemin_dtg" || r.body !== "\uC0B0\uC9C0 Instagram DM \uBC1C\uC1A1 \uAE30\uB2A5 \uD655\uC778\uC6A9 \uD14C\uC2A4\uD2B8 \uBA54\uC2DC\uC9C0\uC785\uB2C8\uB2E4. \uD655\uC778\uB418\uC2DC\uBA74 \uB2F5\uC7A5 \uBD80\uD0C1\uB4DC\uB9BD\uB2C8\uB2E4!" || !r.profile_preview?.internalTest) throw Error("\uB0B4\uBD80 \uD14C\uC2A4\uD2B8 \uB300\uC0C1\xB7\uB0B4\uC6A9 \uBD88\uC77C\uCE58");
-      if (path.endsWith("/test-result")) return await creatorLocal2.execute(owner, c, b.sender, "/creator-local/worker/result", b, "server");
+      if (path.endsWith("/test-result")) {
+        const result = await creatorLocal2.execute(owner, c, b.sender, "/creator-local/worker/result", b, "server");
+        await query2(sb2.from("sanji_creator_config").update({ server_test_deadline: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("server_test_id", b.id));
+        return result;
+      }
       await creatorLocal2.execute(owner, c, b.sender, "/creator-local/worker/check", b, "server");
       if (r.result?.clickStarted) throw Error("\uC774\uBBF8 \uD074\uB9AD\uC744 \uC2DC\uC791\uD55C \uAC74\uC740 \uC7AC\uC2DC\uB3C4\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
       if (path.endsWith("/test-before-click")) {

@@ -66,7 +66,10 @@ export function creatorServerService({sb,query,encrypt,decrypt,audit,creatorLoca
    if(b.id!==c.server_test_id||Date.parse(c.server_test_deadline)<=Date.now()||b.sender!==c.server_test_sender)throw Error("승인된 내부 테스트 1건만 허용합니다.");
    const r=await query(sb.from("sanji_creator_prospects").select("*").eq("owner",owner).eq("id",b.id).single());
    if(r.handle!=="taemin_dtg"||r.body!=="산지 Instagram DM 발송 기능 확인용 테스트 메시지입니다. 확인되시면 답장 부탁드립니다!"||!r.profile_preview?.internalTest)throw Error("내부 테스트 대상·내용 불일치");
-   if(path.endsWith("/test-result"))return await creatorLocal.execute(owner,c,b.sender,"/creator-local/worker/result",b,"server");
+   if(path.endsWith("/test-result")){
+    const result=await creatorLocal.execute(owner,c,b.sender,"/creator-local/worker/result",b,"server");
+    await query(sb.from("sanji_creator_config").update({server_test_deadline:new Date().toISOString()}).eq("owner",owner).eq("server_test_id",b.id));return result;
+   }
    await creatorLocal.execute(owner,c,b.sender,"/creator-local/worker/check",b,"server");
    if(r.result?.clickStarted)throw Error("이미 클릭을 시작한 건은 재시도하지 않습니다.");
    if(path.endsWith("/test-before-click")){
