@@ -102,6 +102,7 @@ const deal = z.object({
   state: z.enum(["협의 중", "확정"]).default("협의 중"),
 });
 const template = z.object({
+  purpose: z.enum(["brand_proposal","brand_reply","creator_proposal"]).default("brand_proposal"),
   aiEnabled: z.boolean().default(true),
   personalizationGuide: z.string().max(2000).default(""),
   name: short.min(1),

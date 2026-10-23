@@ -1,3 +1,4 @@
+import {manualReplyService} from "../_shared/manual-reply.ts";
 import {creatorLocalService} from "../_shared/creator-local.ts";
 import {gmailSyncService} from "../_shared/gmail-sync.ts";
 import {assessDispatch,permanentFailureEmails} from "../_shared/mail-integrity.ts";
@@ -148,7 +149,8 @@ async function saveConnection(u: string, p: string, data: any) {
 const emailTracking=emailTrackingService({sb,query,env,audit,baseUrl:env("SUPABASE_URL")+"/functions/v1/"+(env("WORKSPACE_FUNCTION_NAME")||"bright-function")});
 const notifyOwner = discoveryCompletionNotifier({sb,query,gmailToken,remote,audit,env});
 const creatorDiscovery = creatorDiscoveryService({sb,query,audit,env});
-const creatorLocal=creatorLocalService({sb,query,audit});
+const saveManualReply=manualReplyService({sb,query,putRecord,audit});
+const creatorLocal=creatorLocalService({sb,query,audit,encrypt,decrypt,putRecord});
 const discovery = discoveryService({sb,query,connection,saveConnection,env,audit,putRecord,notifyOwner});
 async function remote(url: string, options: any = {}, stage = "") {
   const r = await fetch(url, {
@@ -262,6 +264,9 @@ function render(text: string, c: any, deals: any[], brandNames: string[]) {
     제품명: deals.length
       ? deals.map((d) => d.name).join(" / ")
       : c.product || "미확인",
+    인플루언서명: c.kind === "크리에이터" ? c.name : "해당 없음",
+    상품명: deals.length?deals.map((d:any)=>d.name).join(" / "):c.product||"{{상품명}}",
+    링크: deals.length?deals.map((d:any)=>d.productUrl).filter(Boolean).join(" / "):"{{링크}}",
     크리에이터명: c.kind === "크리에이터" ? c.name : "해당 없음",
     공동구매가:
       deals
@@ -803,6 +808,9 @@ Deno.serve(async (req: Request) => {
         fail(413, "요청 크기 초과");
       return text ? JSON.parse(text) : {};
     };
+    if(path==="/manual-reply"&&req.method==="POST"){
+      try{return json(await saveManualReply(u,await input()));}catch(e){fail(400,String(e.message||"수동 회신 저장 실패"));}
+    }
     if(path.startsWith("/creator-local/")&&req.method==="POST"){
       try{return json(await creatorLocal.admin(path,u,await input()));}catch(e){fail(400,String(e.message||"PC 실행기 설정 실패"));}
     }
@@ -1119,6 +1127,7 @@ Deno.serve(async (req: Request) => {
         (!c.contact.verified || !c.contact.email)
       )
         fail(400, "공식 연락처 확인이 필요합니다.");
+      if(c.kind==="크리에이터"&&inputData.channel!=="email"&&!inputData.replyTo&&c.contact?.verified&&c.contact?.email)fail(400,"공개 이메일이 확인된 크리에이터는 이메일로 먼저 제안하세요. DM 중복 제안은 진행하지 않습니다.");
       const deals = await Promise.all(
         inputData.dealIds.map((id: string) => owned(u, id, "deal")),
       );

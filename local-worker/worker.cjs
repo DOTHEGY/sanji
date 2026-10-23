@@ -66,18 +66,27 @@ async function sendApproved(page,job,check,beforeClick){
   return {status:'unknown',note:'전송 버튼 클릭 후 발신 표시 미확인 · 재시도 안 함',halt:true};
  }catch(e){return {status:clicked?'unknown':'failed',note:(clicked?'클릭 후 결과 미확인: ':'전송 전 중단: ')+e.message.slice(0,180),halt:true};}
 }
+function instagramOnlyState(state){return {cookies:state.cookies.filter(c=>['instagram.com','.instagram.com','www.instagram.com'].includes(c.domain)),origins:(state.origins||[]).filter(o=>o.origin==='https://www.instagram.com')};}
 async function run(){
  const readline=require('node:readline/promises'),io=readline.createInterface({input:process.stdin,output:process.stdout});let context;
  try{
-  console.log('산지 PC 실행기 · 로그인 세션은 이 PC에만 보관합니다. 종료: Ctrl+C');
+  console.log('산지 PC 실행기 · 로그인 세션은 DB 백업 설정에 따라 암호화 보관합니다. 종료: Ctrl+C');
   const token=(await io.question('산지 화면에서 발급한 PC 연결 키: ')).trim();if(!/^[A-Za-z0-9_-]{43}$/.test(token))throw Error('연결 키 형식 오류');
   const sender=(await io.question('로그인할 발신 아이디 (@ 제외): ')).trim().replace(/^@/,'').toLowerCase();if(!validHandle(sender))throw Error('아이디 형식 오류');
   const live=process.argv.includes('--send-approved');if(live&&(await io.question('웹에서 승인한 DM을 실제 전송합니다. 실행하려면 SEND 입력: ')).trim()!=='SEND')throw Error('발송 모드 취소');
   const dir=stateDirectory();fs.mkdirSync(dir,{recursive:true,mode:0o700});
   const {chromium}=require('playwright');context=await chromium.launchPersistentContext(path.join(dir,'browser-'+sender),{headless:false,viewport:{width:1280,height:900},locale:'ko-KR',timezoneId:'Asia/Seoul'});
-  const page=await context.newPage();await page.goto('https://www.instagram.com/accounts/login/',{waitUntil:'domcontentloaded'});
-  await io.question('열린 Instagram 창에서 직접 로그인·2단계 인증을 마치고 Enter: ');await identity(page,sender);
-  const request=(route,data={})=>api(token,route,{...data,sender,live});await request('heartbeat');
+  const request=(route,data={})=>api(token,route,{...data,sender,live});
+  const page=await context.newPage();let restored=false;
+  const saved=await request('session/load');
+  if(saved.state){
+   await context.clearCookies({domain:/instagram\.com$/});await context.addCookies(saved.state.cookies);
+   if(saved.state.origins?.length){await page.goto('https://www.instagram.com/',{waitUntil:'domcontentloaded'});await page.evaluate(entries=>{for(const x of entries)localStorage.setItem(x.name,x.value);},saved.state.origins[0].localStorage);}
+   try{await identity(page,sender);restored=true;console.log('DB의 암호화된 로그인 세션을 복원·확인했습니다.');}catch{console.log('저장된 세션이 만료됐거나 추가 인증이 필요합니다. 직접 로그인해 주세요.');}
+  }
+  if(!restored){await page.goto('https://www.instagram.com/accounts/login/',{waitUntil:'domcontentloaded'});await io.question('열린 Instagram 창에서 직접 로그인·2단계 인증을 마치고 Enter: ');await identity(page,sender);}
+  if(!saved.disabled){const state=await context.storageState();await request('session/save',{state:instagramOnlyState(state)});console.log('로그인 세션을 DB에 암호화해 백업했습니다. 보관기간: 7일.');}else console.log('DB 세션 백업 꺼짐 · 이 PC의 로그인 상태만 사용합니다.');
+  await request('heartbeat');
   const journalFile=path.join(dir,'pending-'+sender+'.json');
   if(fs.existsSync(journalFile)){const j=JSON.parse(fs.readFileSync(journalFile,'utf8'));await request('result',{...j,status:'unknown',note:'이전 실행이 전송 도중 종료됨 · 자동 재시도 안 함'});fs.unlinkSync(journalFile);}
   console.log(live?'승인된 DM만 처리합니다. 새 대상·카피는 웹에서 승인하세요.':'프로필 미리보기 모드입니다. DM을 보내지 않습니다.');
@@ -97,5 +106,5 @@ async function run(){
   }
  }finally{io.close();await context?.close();}
 }
-module.exports={validHandle,identity,openProfile,profile,sendApproved,stateDirectory};
+module.exports={instagramOnlyState,validHandle,identity,openProfile,profile,sendApproved,stateDirectory};
 if(require.main===module)run().catch(e=>{console.error(e.message);process.exitCode=1;});

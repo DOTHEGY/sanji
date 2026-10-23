@@ -11,7 +11,7 @@ begin
  if p_send and lower(c.sender_handle)=lower(p_sender) then
   select * into r from public.sanji_creator_prospects where owner=p_owner and status='queued' and sender_handle=p_sender and approved_hash<>'' order by checked for update skip locked limit 1;
   if found then
-   if exists(select 1 from public.sanji_suppression where owner=p_owner and identity in ('instagram:'||r.handle,r.handle)) or exists(select 1 from public.sanji_records where owner=p_owner and kind='candidate' and lower(replace(data->>'handle','@',''))=r.handle and (data->>'status' in ('거절','수신 거부') or exists(select 1 from public.sanji_outbox o where o.owner=p_owner and o.target=sanji_records.id and o.status in ('accepted','submitting','outcome_unknown')))) then
+   if jsonb_array_length(coalesce(r.profile_preview->'businessEmails','[]'::jsonb))>0 or exists(select 1 from public.sanji_suppression where owner=p_owner and identity in ('instagram:'||r.handle,r.handle)) or exists(select 1 from public.sanji_records where owner=p_owner and kind='candidate' and lower(replace(data->>'handle','@',''))=r.handle and (data->>'status' in ('거절','수신 거부') or exists(select 1 from public.sanji_outbox o where o.owner=p_owner and o.target=sanji_records.id and o.status in ('accepted','submitting','outcome_unknown')))) then
     update public.sanji_creator_prospects set status='blocked',result=result||'{"note":"수신 거부·기존 연락 이력 확인 필요"}'::jsonb where id=r.id;return null;
    end if;
    update public.sanji_creator_prospects set status='sending',claimed=now() where id=r.id;
