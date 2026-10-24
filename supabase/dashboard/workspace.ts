@@ -3189,6 +3189,14 @@ Deno.serve(async (req) => {
         reviewRequired: true
       });
     }
+    if (path === "/schedule-status" && req.method === "GET") {
+      const jobs = await query(sb.from("sanji_jobs").select("id,draft_id,status,run_at,attempts,result,approved_at").eq("owner", u).order("run_at", { ascending: false }).limit(200));
+      const drafts = jobs.length ? await query(sb.from("sanji_drafts").select("id,data").eq("owner", u).in("id", jobs.map((j) => j.draft_id))) : [];
+      return json({ jobs: jobs.map((j) => {
+        const d = drafts.find((d2) => d2.id === j.draft_id)?.data;
+        return { ...j, target: d?.target || null, email: d?.email || "", emails: d?.emails || [], subject: d?.subject || "", body: d?.body || "", snapshotAvailable: !!d };
+      }) });
+    }
     if (path === "/schedule" && req.method === "POST") {
       const b = await input();
       if (b.approved !== true || typeof b.hash !== "string")

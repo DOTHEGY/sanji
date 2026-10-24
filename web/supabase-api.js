@@ -176,6 +176,7 @@ export async function workspaceApi(path, method = "GET", body) {
       !["PGRST205", "42P01"].includes(jobsResult.error.code)
     )
       throw error("예약 목록 조회에 실패했습니다.");
+    const scheduleStatus=await edge("/schedule-status","GET");
     const records = rows.map((r) => ({ ...unpack(r), _kind: r.kind }));
     return {
       candidates: records.filter((r) => r._kind === "candidate"),
@@ -183,7 +184,7 @@ export async function workspaceApi(path, method = "GET", body) {
       templates: records.filter((r) => r._kind === "template"),
       threads: records.filter((r) => r._kind === "thread"),
       outbox,
-      jobs: jobsResult.data || [],
+      jobs: scheduleStatus.jobs || jobsResult.data || [],
       suppression,
       settings: records.find((r) => r._kind === "settings") || {
         senderName: "",
