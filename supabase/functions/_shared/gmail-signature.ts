@@ -11,7 +11,7 @@ export function gmailSignature(input:string){
   const styles=[];for(const part of String(attrs.style||'').split(';')){const [raw,...rest]=part.split(':'),k=raw.trim().toLowerCase(),v=rest.join(':').trim();if(['color','background-color'].includes(k)&&/^(#[\da-f]{3,8}|[a-z]{3,20}|rgba?\([\d., %]+\))$/i.test(v)||['font-size','line-height','padding','margin','width','height'].includes(k)&&/^[\d.]+(?:px|pt|em|%)?$/.test(v)||k==='font-weight'&&/^(normal|bold|[1-9]00)$/.test(v)||k==='text-align'&&/^(left|right|center)$/.test(v)||k==='font-family'&&/^[a-zA-Z0-9 ,'-]{1,100}$/.test(v))styles.push(k+':'+v);}
   if(styles.length)out.push('style="'+escape(styles.join(';'))+'"');return '<'+name+(out.length?' '+out.join(' '):'')+'>';
  }).join('');
- const text=decode(html.replace(/<img\b[^>]*>/gi,'[서명 이미지]').replace(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,(_,url,label)=>label+(decode(label.replace(/<[^>]*>/g,''))===decode(url)?'':' ('+url+')')).replace(/<br\s*\/?\s*>|<\/(?:div|p|tr)>/gi,'\n').replace(/<[^>]*>/g,'')).replace(/\n{3,}/g,'\n\n').trim();
+ const text=decode(html.replace(/<img\b[^>]*>/gi,'').replace(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,(_,url,label)=>label+(decode(label.replace(/<[^>]*>/g,'')).trim()===decode(url).replace(/^(?:mailto:|tel:)/i,'').trim()?'':' ('+url+')')).replace(/<br\s*\/?\s*>|<\/(?:div|p|tr)>/gi,'\n').replace(/<[^>]*>/g,'')).replace(/\n{3,}/g,'\n\n').trim();
  return {html,text};
 }
 export function selectGmailSignature(result:any,email:string){const row=(result.sendAs||[]).find((r:any)=>String(r.sendAsEmail||'').toLowerCase()===String(email).toLowerCase());if(!row)throw Error('현재 Gmail 발신 주소의 서명을 확인하지 못했습니다. 다른 별칭의 서명을 자동 사용하지 않습니다.');return {...gmailSignature(String(row.signature||'')),email:row.sendAsEmail};}

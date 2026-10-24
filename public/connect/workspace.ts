@@ -63,7 +63,7 @@ function gmailSignature(input) {
     if (styles.length) out.push('style="' + escape(styles.join(";")) + '"');
     return "<" + name + (out.length ? " " + out.join(" ") : "") + ">";
   }).join("");
-  const text2 = decode(html.replace(/<img\b[^>]*>/gi, "[\uC11C\uBA85 \uC774\uBBF8\uC9C0]").replace(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (_, url2, label) => label + (decode(label.replace(/<[^>]*>/g, "")) === decode(url2) ? "" : " (" + url2 + ")")).replace(/<br\s*\/?\s*>|<\/(?:div|p|tr)>/gi, "\n").replace(/<[^>]*>/g, "")).replace(/\n{3,}/g, "\n\n").trim();
+  const text2 = decode(html.replace(/<img\b[^>]*>/gi, "").replace(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (_, url2, label) => label + (decode(label.replace(/<[^>]*>/g, "")).trim() === decode(url2).replace(/^(?:mailto:|tel:)/i, "").trim() ? "" : " (" + url2 + ")")).replace(/<br\s*\/?\s*>|<\/(?:div|p|tr)>/gi, "\n").replace(/<[^>]*>/g, "")).replace(/\n{3,}/g, "\n\n").trim();
   return { html, text: text2 };
 }
 function selectGmailSignature(result, email) {
