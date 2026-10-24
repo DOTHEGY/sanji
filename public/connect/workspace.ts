@@ -1003,7 +1003,7 @@ function creatorDiscoveryService({ sb: sb2, query: query2, audit: audit2, env: e
     if (path === "/creator-discovery" && method === "GET") {
       const recent = await query2(sb2.from("sanji_creator_prospects").select("checked").eq("owner", owner).gte("checked", new Date(Date.now() - 48 * 36e5).toISOString()).limit(1e3));
       const day2 = (time) => new Date(time + 9 * 36e5).toISOString().slice(0, 10), today = day2(Date.now()), yesterday = day2(Date.now() - 864e5);
-      return { config: safe(await get(owner)), counts: { today: recent.filter((r) => day2(Date.parse(r.checked)) === today).length, yesterday: recent.filter((r) => day2(Date.parse(r.checked)) === yesterday).length }, prospects: await query2(sb2.from("sanji_creator_prospects").select("*").eq("owner", owner).order("checked", { ascending: false }).limit(300)) };
+      return { apify: { configured: !!env2("APIFY_TOKEN"), trialBudgetUsd: 0.35, target: 30 }, config: safe(await get(owner)), counts: { today: recent.filter((r) => day2(Date.parse(r.checked)) === today).length, yesterday: recent.filter((r) => day2(Date.parse(r.checked)) === yesterday).length }, prospects: await query2(sb2.from("sanji_creator_prospects").select("*").eq("owner", owner).order("checked", { ascending: false }).limit(300)) };
     }
     const b = await input();
     if (path === "/creator-discovery/settings" && method === "POST") {
