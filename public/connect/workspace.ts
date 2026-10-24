@@ -1,3 +1,77 @@
+// supabase/functions/_shared/gmail-signature-sync.ts
+function gmailSignatureSync({ sb: sb2, query: query2, getSignature, audit: audit2 }) {
+  return async () => {
+    const rows = await query2(sb2.from("sanji_records").select("*").eq("kind", "settings").eq("data->>gmailSignatureSyncRequested", "true").limit(1));
+    if (!rows.length) return { status: "idle" };
+    const r = rows[0], base = { ...r.data, gmailSignatureSyncRequested: false, gmailSignatureSyncState: "loading" };
+    const claim = await query2(sb2.from("sanji_records").update({ data: base, version: r.version + 1, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", r.owner).eq("id", r.id).eq("version", r.version).select("id"));
+    if (!claim.length) return { status: "busy" };
+    let next = base, status = "error";
+    try {
+      const s = await getSignature(r.owner);
+      status = s.needsConsent ? "needs_consent" : !s.text && !s.html ? "empty" : "imported";
+      next = { ...base, gmailSignatureSyncState: status, gmailSignatureNeedsConsent: !!s.needsConsent, ...status === "imported" ? { emailSignature: s.text, gmailSignatureHtml: s.html, gmailSignatureEmail: s.email, signatureSource: "gmail", signatureChecked: s.checked } : {} };
+    } catch {
+      next = { ...base, gmailSignatureSyncState: "error" };
+    }
+    const saved = await query2(sb2.from("sanji_records").update({ data: next, version: r.version + 2, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", r.owner).eq("id", r.id).eq("version", r.version + 1).select("id"));
+    await audit2(r.owner, "gmail_signature_sync_checked", { status: saved.length ? status : "settings_changed", noMailSent: true });
+    return { status: saved.length ? status : "settings_changed" };
+  };
+}
+
+// supabase/functions/_shared/gmail-signature.ts
+var decode = (s) => s.replace(/&#(x[0-9a-f]+|\d+);?/gi, (_, v) => {
+  const n = v[0].toLowerCase() === "x" ? parseInt(v.slice(1), 16) : Number(v);
+  return n > 0 && n <= 1114111 ? String.fromCodePoint(n) : "";
+}).replace(/&(amp|lt|gt|quot|apos|nbsp);/gi, (_, k) => ({ amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " })[k.toLowerCase()] || "");
+var escape = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+function gmailSignature(input) {
+  if (typeof input !== "string" || input.length > 3e4) throw Error("Gmail \uC11C\uBA85 \uD06C\uAE30 \uC81C\uD55C");
+  const allowed = new Set("div span p br b strong i em u small table tbody tr td th a img font hr".split(" "));
+  const html = input.replace(/<(script|style|iframe|object|svg|math)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "").replace(/<!--[\s\S]*?-->/g, "").split(/(<\/?[A-Za-z][^>]*>)/g).map((token) => {
+    if (!token.startsWith("<")) return escape(decode(token));
+    const match = /^<(\/?)([A-Za-z][\w:-]*)\b([^>]*)>$/.exec(token);
+    if (!match) return escape(token);
+    const name = match[2].toLowerCase();
+    if (!allowed.has(name)) return "";
+    if (match[1]) return ["img", "br", "hr"].includes(name) ? "" : "</" + name + ">";
+    const attrs = {};
+    for (const m of match[3].matchAll(/(?:^|\s)([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)) attrs[m[1].toLowerCase()] = decode(m[2] ?? m[3] ?? m[4] ?? "");
+    const out = [];
+    if (name === "a" || name === "img") {
+      const key2 = name === "a" ? "href" : "src", value = attrs[key2] || "";
+      try {
+        const u = new URL(value);
+        if (!(name === "img" ? ["https:"] : ["https:", "http:", "mailto:", "tel:"]).includes(u.protocol) || u.username || u.password || /\/email-events\/pixel\//.test(u.pathname)) return "";
+        out.push(key2 + '="' + escape(u.toString()) + '"');
+      } catch {
+        return "";
+      }
+      if (name === "a") out.push('rel="noopener noreferrer"');
+    }
+    if (name === "img") {
+      if (Number(attrs.width) === 1 && Number(attrs.height) === 1) return "";
+      out.push('alt="' + escape(attrs.alt || "\uC11C\uBA85 \uC774\uBBF8\uC9C0") + '"');
+      for (const k of ["width", "height"]) if (/^\d{1,4}$/.test(attrs[k] || "")) out.push(k + '="' + attrs[k] + '"');
+    }
+    const styles = [];
+    for (const part of String(attrs.style || "").split(";")) {
+      const [raw, ...rest] = part.split(":"), k = raw.trim().toLowerCase(), v = rest.join(":").trim();
+      if (["color", "background-color"].includes(k) && /^(#[\da-f]{3,8}|[a-z]{3,20}|rgba?\([\d., %]+\))$/i.test(v) || ["font-size", "line-height", "padding", "margin", "width", "height"].includes(k) && /^[\d.]+(?:px|pt|em|%)?$/.test(v) || k === "font-weight" && /^(normal|bold|[1-9]00)$/.test(v) || k === "text-align" && /^(left|right|center)$/.test(v) || k === "font-family" && /^[a-zA-Z0-9 ,'-]{1,100}$/.test(v)) styles.push(k + ":" + v);
+    }
+    if (styles.length) out.push('style="' + escape(styles.join(";")) + '"');
+    return "<" + name + (out.length ? " " + out.join(" ") : "") + ">";
+  }).join("");
+  const text2 = decode(html.replace(/<img\b[^>]*>/gi, "[\uC11C\uBA85 \uC774\uBBF8\uC9C0]").replace(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (_, url2, label) => label + (decode(label.replace(/<[^>]*>/g, "")) === decode(url2) ? "" : " (" + url2 + ")")).replace(/<br\s*\/?\s*>|<\/(?:div|p|tr)>/gi, "\n").replace(/<[^>]*>/g, "")).replace(/\n{3,}/g, "\n\n").trim();
+  return { html, text: text2 };
+}
+function selectGmailSignature(result, email) {
+  const row = (result.sendAs || []).find((r) => String(r.sendAsEmail || "").toLowerCase() === String(email).toLowerCase());
+  if (!row) throw Error("\uD604\uC7AC Gmail \uBC1C\uC2E0 \uC8FC\uC18C\uC758 \uC11C\uBA85\uC744 \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uB2E4\uB978 \uBCC4\uCE6D\uC758 \uC11C\uBA85\uC744 \uC790\uB3D9 \uC0AC\uC6A9\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+  return { ...gmailSignature(String(row.signature || "")), email: row.sendAsEmail };
+}
+
 // supabase/functions/_shared/instagram-setup.ts
 function instagramSetupService({ sb: sb2, query: query2, connection: connection2, saveConnection: saveConnection2, remote: remote2, capabilities, version, audit: audit2 }) {
   return async function processRequested() {
@@ -218,7 +292,7 @@ function creatorServerService({ sb: sb2, query: query2, encrypt: encrypt2, decry
       const s = c.sender_handle ? await query2(sb2.from("sanji_instagram_pc_sessions").select("handle,checked,expires").eq("owner", owner).eq("handle", c.sender_handle).maybeSingle()) : null;
       const valid = !!s && Date.parse(s.expires) > Date.now(), runtime = c.server_runtime || {}, same = !!s && runtime.verifiedSender === c.sender_handle && Date.parse(runtime.sessionChecked) === Date.parse(s.checked), confirmed = valid && same && !runtime.requiresNewSession;
       const state = !s ? "not_saved" : !valid ? "session_expired" : runtime.requiresNewSession && Date.parse(s.checked) <= Date.parse(runtime.checked) ? "reauth_required" : confirmed ? "identity_confirmed" : "saved_unverified";
-      return { sender: c.sender_handle || "", state, saved: !!s, sessionChecked: s?.checked || null, sessionExpires: s?.expires || null, identityConfirmed: confirmed, identityConfirmedAt: confirmed ? runtime.identityChecked || null : null, serverEnabled: !!c.server_enabled, serverResponding: c.server_enabled && Date.parse(c.server_lease_until) > Date.now(), runtimeReason: runtime.reason || "" };
+      return { sender: c.sender_handle || "", state, saved: !!s, sessionChecked: s?.checked || null, sessionExpires: s?.expires || null, identityConfirmed: confirmed, identityConfirmedAt: confirmed ? runtime.identityChecked || null : null, serverEnabled: !!c.server_enabled, serverResponding: c.server_enabled && Date.parse(c.server_lease_until) > Date.now(), runtimeReason: runtime.reason || "", workerContactAt: c.server_last_attempt || null, reportedSender: c.server_reported_sender || "", workerIssue: c.server_connection_issue || null, workerReachable: Date.parse(c.server_last_attempt) > Date.now() - 12e4 };
     }
     if (path === "/creator-server/approve-test") {
       if (!/^[a-z0-9._]{2,30}$/.test(c.sender_handle || "") || !c.server_enabled || c.server_runtime?.requiresNewSession || !["server-test-v2", "server-background-v3", "server-background-v4"].includes(c.server_runtime?.workerVersion) || !["ready", "idle", "daily_limit"].includes(c.server_runtime?.status)) throw Error("\uC11C\uBC84 \uC5C5\uB370\uC774\uD2B8\uC640 \uC0C8 \uC138\uC158 \uACC4\uC815 \uD655\uC778\uC744 \uBA3C\uC800 \uB9C8\uCE58\uC138\uC694.");
@@ -257,7 +331,12 @@ function creatorServerService({ sb: sb2, query: query2, encrypt: encrypt2, decry
   async function worker(path, token, b) {
     if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw Error("\uC11C\uBC84 \uC5F0\uACB0 \uD0A4\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.");
     const c = await query2(sb2.from("sanji_creator_config").select("*").eq("server_worker_hash", await digest2(token)).maybeSingle());
-    if (!c || Date.parse(c.server_worker_expires) <= Date.now() || b.sender !== c.sender_handle) throw Error("\uC11C\uBC84 \uD0A4 \uB9CC\uB8CC\xB7\uD574\uC81C \uB610\uB294 \uBC1C\uC2E0 \uACC4\uC815 \uBD88\uC77C\uCE58");
+    if (!c) throw Error("\uC11C\uBC84 \uD0A4\uAC00 \uD574\uC81C\uB410\uAC70\uB098 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+    const issue = Date.parse(c.server_worker_expires) <= Date.now() ? "key_expired" : b.sender !== c.sender_handle ? "sender_mismatch" : null;
+    if (issue || path === "/creator-server/worker/control") {
+      if (issue !== c.server_connection_issue || !c.server_last_attempt || Date.parse(c.server_last_attempt) < Date.now() - 6e4) await query2(sb2.from("sanji_creator_config").update({ server_last_attempt: (/* @__PURE__ */ new Date()).toISOString(), server_reported_sender: /^[a-z0-9._]{2,30}$/.test(b.sender || "") ? b.sender : "", server_connection_issue: issue }).eq("owner", c.owner));
+    }
+    if (issue) throw Error(issue === "sender_mismatch" ? "Render \uBC1C\uC2E0 \uC544\uC774\uB514 \uBD88\uC77C\uCE58 \xB7 SANJI_SENDER_HANDLE \uAC12\uC744 \uD604\uC7AC \uACC4\uC815\uC73C\uB85C \uBCC0\uACBD\uD558\uC138\uC694." : "\uC11C\uBC84 \uC5F0\uACB0 \uD0A4 \uB9CC\uB8CC \xB7 \uC0C8 \uD0A4\uB97C \uBC1C\uAE09\uD558\uACE0 Render\uC5D0\uC11C \uAC31\uC2E0\uD558\uC138\uC694.");
     const owner = c.owner;
     if (path === "/creator-server/worker/control") return { enabled: c.server_enabled, revision: c.server_revision, runtime: c.server_runtime, previewOnly: true, discoveryEnabled: c.enabled === true, testAllowed: !!c.server_test_id && Date.parse(c.server_test_deadline) > Date.now() };
     if (!c.server_enabled) throw Error("\uC11C\uBC84 \uC2E4\uD589\uC774 \uC911\uC9C0\uB3FC \uC788\uC2B5\uB2C8\uB2E4.");
@@ -1146,23 +1225,33 @@ function encodedHeader(value) {
 }
 var base64Body = (text2) => Buffer6.from(text2, "utf8").toString("base64").match(/.{1,76}/g)?.join("\r\n") || "";
 function trackingHtml(d) {
-  const escape = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-  let url2;
+  const escape2 = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  let url2 = null;
   try {
-    url2 = new URL(d.trackingPixelUrl);
-    if (url2.protocol !== "https:" || !/^\/functions\/v1\/[^/]+\/email-events\/pixel\/[A-Za-z0-9_-]{43}\.gif$/.test(url2.pathname) || url2.search || url2.hash || url2.username || url2.password) return null;
+    const u = new URL(d.trackingPixelUrl);
+    if (u.protocol === "https:" && /^\/functions\/v1\/[^/]+\/email-events\/pixel\/[A-Za-z0-9_-]{43}\.gif$/.test(u.pathname) && !u.search && !u.hash && !u.username && !u.password) url2 = u;
   } catch {
-    return null;
   }
-  const text2 = String(d.body), parts = [];
-  let last = 0;
-  for (const m of text2.matchAll(/https?:\/\/[^\s<>"']+/g)) {
-    parts.push(escape(text2.slice(last, m.index)));
-    parts.push('<a href="' + escape(m[0]) + '">' + escape(m[0]) + "</a>");
-    last = m.index + m[0].length;
+  let signature = null;
+  if (d.signatureHtml && d.signatureText) {
+    const clean2 = gmailSignature(d.signatureHtml);
+    if (clean2.text === d.signatureText && String(d.body).includes(clean2.text)) signature = clean2;
   }
-  parts.push(escape(text2.slice(last)));
-  return '<!doctype html><html><head><meta charset="utf-8"></head><body><div style="white-space:pre-wrap">' + parts.join("") + '</div><img src="' + escape(url2.toString()) + '" width="1" height="1" alt="" referrerpolicy="no-referrer" style="width:1px;height:1px;border:0" /></body></html>';
+  if (!url2 && !signature) return null;
+  const linkify = (text3) => {
+    const parts = [];
+    let last = 0;
+    for (const m of text3.matchAll(/https?:\/\/[^\s<>"']+/g)) {
+      parts.push(escape2(text3.slice(last, m.index)));
+      parts.push('<a href="' + escape2(m[0]) + '">' + escape2(m[0]) + "</a>");
+      last = m.index + m[0].length;
+    }
+    parts.push(escape2(text3.slice(last)));
+    return parts.join("");
+  };
+  const text2 = String(d.body), i = signature ? text2.lastIndexOf(signature.text) : -1;
+  const content = i >= 0 ? '<div style="white-space:pre-wrap">' + linkify(text2.slice(0, i)) + "</div><div>" + signature.html + '</div><div style="white-space:pre-wrap">' + linkify(text2.slice(i + signature.text.length)) + "</div>" : '<div style="white-space:pre-wrap">' + linkify(text2) + "</div>";
+  return '<!doctype html><html><head><meta charset="utf-8"></head><body>' + content + (url2 ? '<img src="' + escape2(url2.toString()) + '" width="1" height="1" alt="" referrerpolicy="no-referrer" style="width:1px;height:1px;border:0" />' : "") + "</body></html>";
 }
 function mime(d, from) {
   const lines = [
@@ -2170,9 +2259,6 @@ function selectInstagramAccount(accounts, thread) {
     return accounts.find((a) => a.provider === thread.connectionKey) || null;
   return accounts.length === 1 ? accounts[0] : null;
 }
-function sameInstagramConversation(thread, provider, senderId) {
-  return thread.channel === "instagram" && thread.senderId === senderId && (thread.connectionKey === provider || !thread.connectionKey && provider === "instagram");
-}
 
 // supabase/functions/_shared/function-route.ts
 function functionRoute(requestUrl, projectUrl) {
@@ -2474,6 +2560,7 @@ async function saveConnection(u, p, data) {
   );
 }
 var processInstagramSetup = instagramSetupService({ sb, query, connection, saveConnection, remote, capabilities: instagramCapabilities, version: env("META_GRAPH_VERSION") || "v24.0", audit });
+var syncRequestedGmailSignature = gmailSignatureSync({ sb, query, getSignature: loadGmailSignature, audit });
 var emailTracking = emailTrackingService({ sb, query, env, audit, baseUrl: env("SUPABASE_URL") + "/functions/v1/" + (env("WORKSPACE_FUNCTION_NAME") || "bright-function") });
 var notifyOwner = discoveryCompletionNotifier({ sb, query, gmailToken, remote, audit, env });
 var creatorDiscovery = creatorDiscoveryService({ sb, query, audit, env });
@@ -2481,6 +2568,16 @@ var saveManualReply = manualReplyService({ sb, query, putRecord, audit });
 var creatorLocal = creatorLocalService({ sb, query, audit, encrypt, decrypt, putRecord });
 var creatorServer = creatorServerService({ sb, query, encrypt, decrypt, audit, creatorLocal, creatorDiscovery });
 var discovery = discoveryService({ sb, query, connection, saveConnection, env, audit, putRecord, notifyOwner });
+async function loadGmailSignature(u) {
+  const c = await gmailToken(u);
+  try {
+    const result = await remote("https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs", { headers: { Authorization: "Bearer " + c.access_token } }, "Gmail \uAE30\uBCF8 \uC11C\uBA85 \uC870\uD68C");
+    return { ...selectGmailSignature(result, c.email), checked: now(), needsConsent: false };
+  } catch (e) {
+    if (e instanceof HttpError && e.status === 403) return { needsConsent: true, message: "Gmail \uC124\uC815 \uC811\uADFC \uAD8C\uD55C \uC2B9\uC778\uC774 \uD544\uC694\uD569\uB2C8\uB2E4. \uC0B0\uC9C0\uB294 \uC11C\uBA85 \uC870\uD68C\uC5D0\uB9CC \uC0AC\uC6A9\uD569\uB2C8\uB2E4." };
+    throw e;
+  }
+}
 async function remote(url2, options = {}, stage = "") {
   const r = await fetch(url2, {
     ...options,
@@ -2580,77 +2677,6 @@ function render(text2, c, deals, brandNames) {
     \uC77C\uC815: deals.map((d) => d.schedule).join(" / ") || "\uBBF8\uD655\uC778"
   };
   return text2.replace(/\{\{(.*?)\}\}/g, (_, v) => vars[v] ?? "{{" + v + "}}");
-}
-async function webhook(req, url2) {
-  if (req.method === "GET") {
-    if (env("META_VERIFY_TOKEN") && url2.searchParams.get("hub.mode") === "subscribe" && url2.searchParams.get("hub.verify_token") === env("META_VERIFY_TOKEN"))
-      return new Response(url2.searchParams.get("hub.challenge"));
-    fail(403, "\uC6F9\uD6C5 \uAC80\uC99D \uC2E4\uD328");
-  }
-  if (!env("META_APP_SECRET")) fail(503, "Meta \uC124\uC815\uC774 \uD544\uC694\uD569\uB2C8\uB2E4.");
-  const bytes = await req.arrayBuffer();
-  if (bytes.byteLength > 1048576) fail(413, "\uC694\uCCAD \uD06C\uAE30 \uCD08\uACFC");
-  const k = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(env("META_APP_SECRET")),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["verify"]
-  ), signature = req.headers.get("x-hub-signature-256") || "";
-  if (!/^sha256=[0-9a-f]{64}$/.test(signature) || !await crypto.subtle.verify(
-    "HMAC",
-    k,
-    Buffer7.from(signature.slice(7), "hex"),
-    bytes
-  ))
-    fail(403, "\uC6F9\uD6C5 \uC11C\uBA85 \uBD88\uC77C\uCE58");
-  const body = JSON.parse(new TextDecoder().decode(bytes));
-  const connections = await query(
-    sb.from("sanji_connections").select("owner,provider,encrypted").or("provider.eq.instagram,provider.like.instagram:%")
-  );
-  for (const entry of body.entry || [])
-    for (const event of entry.messaging || []) {
-      if (!event.message?.mid || event.message?.is_echo || !event.sender?.id)
-        continue;
-      const { error } = await sb.from("sanji_webhook_events").insert({ id: event.message.mid });
-      if (error?.code === "23505") continue;
-      if (error) fail(500, "\uC6F9\uD6C5 \uAE30\uB85D \uC2E4\uD328");
-      for (const row of connections) {
-        const c = await decrypt(row.encrypted);
-        if (String(c.id) !== String(entry.id)) continue;
-        const old = (await records(row.owner, "thread")).find(
-          (t2) => sameInstagramConversation(t2, row.provider, String(event.sender.id))
-        );
-        const t = old || {
-          channel: "instagram",
-          connectionKey: row.provider,
-          accountUsername: c.username,
-          target: "",
-          senderId: String(event.sender.id),
-          subject: "Instagram \uC218\uC2E0 \uB300\uD654",
-          owner: "",
-          next: "\uACF5\uAC1C \uACC4\uC815\uACFC \uD6C4\uBCF4 \uAD00\uACC4 \uD655\uC778 \uD544\uC694",
-          due: "",
-          classification: "\uBBF8\uBD84\uB958",
-          messages: []
-        };
-        t.connectionKey = row.provider;
-        t.accountUsername = c.username;
-        t.messages.push({
-          id: event.message.mid,
-          out: false,
-          text: event.message.text || "[\uCCA8\uBD80 \uBA54\uC2DC\uC9C0]",
-          at: new Date(Number(event.timestamp) || Date.now()).toISOString(),
-          automatic: false
-        });
-        t.lastInbound = Math.max(
-          t.lastInbound || 0,
-          Math.min(Date.now(), Number(event.timestamp) || 0)
-        );
-        await putRecord(row.owner, "thread", t, t.id);
-      }
-    }
-  return new Response("EVENT_RECEIVED");
 }
 async function callback(req, url2, provider, base) {
   const state = url2.searchParams.get("state") || "";
@@ -2993,7 +3019,7 @@ Deno.serve(async (req) => {
       fail(403, "\uD5C8\uC6A9\uB418\uC9C0 \uC54A\uC740 \uCD9C\uCC98");
     if (req.method === "OPTIONS")
       return new Response(null, { status: 204, headers: cors });
-    if (path === "/instagram/webhook") return await webhook(req, url2);
+    if (path.startsWith("/instagram/") || path === "/oauth/instagram/callback") return json({ error: "\uACF5\uC2DD Instagram API \uC5F0\uB3D9\uC740 \uC81C\uC678\uB410\uC2B5\uB2C8\uB2E4. \uC11C\uBC84 \uB85C\uADF8\uC778 \uAD00\uB9AC\uB97C \uC0AC\uC6A9\uD558\uC138\uC694." }, 410);
     if (/^\/oauth\/(gmail|instagram)\/callback$/.test(path)) {
       try {
         return await callback(req, url2, path.split("/")[2], base);
@@ -3009,12 +3035,12 @@ Deno.serve(async (req) => {
     }
     if (path === "/creator-discovery/tick" && req.method === "POST") {
       if (!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403, "\uBC1C\uAD74 \uC2E4\uD589\uAE30 \uC778\uC99D \uC2E4\uD328");
-      return json({ ...await creatorDiscovery.scheduled(), officialSetup: await processInstagramSetup() });
+      return json(await creatorDiscovery.scheduled());
     }
     if (path === "/gmail/tick" && req.method === "POST") {
       if (!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403, "\uD68C\uC2E0 \uB3D9\uAE30\uD654 \uC2E4\uD589\uAE30 \uC778\uC99D \uC2E4\uD328");
       const owners = await query(sb.from("sanji_connections").select("owner").eq("provider", "gmail").limit(5));
-      return json({ results: await Promise.all(owners.map((c) => gmailSync.sync(c.owner))) });
+      return json({ results: await Promise.all(owners.map((c) => gmailSync.sync(c.owner))), signature: await syncRequestedGmailSignature() });
     }
     if (path.startsWith("/creator-server/worker/") && req.method === "POST") {
       const raw = await req.text();
@@ -3225,6 +3251,7 @@ Deno.serve(async (req) => {
       await saveConnection(u, row.provider, session);
       return json({ connected: true, username: session.username, capabilities: session.capabilities });
     }
+    if (path === "/gmail/signature" && req.method === "POST") return json(await loadGmailSignature(u));
     if (path === "/connections" && req.method === "GET") {
       const gmail = await connection(u, "gmail"), accounts = await instagramAccounts(u);
       const ig = accounts.find((a) => Number(a.summary?.expires) > Date.now() && !a.summary?.checkpointRequired)?.summary;
@@ -3239,11 +3266,12 @@ Deno.serve(async (req) => {
           enabled: env("EMAIL_SENDING_ENABLED") === "true"
         },
         instagram: {
-          configured: !!env("META_APP_ID") && !!env("META_APP_SECRET"),
-          connected: !!ig,
+          configured: false,
+          disabled: true,
+          connected: false,
           username: ig?.username || "",
-          accounts: accounts.map((a) => ({ key: a.provider, ...a.summary })),
-          loginPending: loginPending.map((a) => ({ key: a.provider, ...a.summary, requiresLogin: !canRetryPending, canRetry: canRetryPending })),
+          accounts: [],
+          loginPending: [],
           enabled: env("INSTAGRAM_SENDING_ENABLED") === "true"
         },
         search: { configured: !!env("BRAVE_SEARCH_API_KEY") || await discovery.configured(u) },
@@ -3268,6 +3296,7 @@ Deno.serve(async (req) => {
     if (path.startsWith("/oauth/") && req.method === "POST") {
       await key();
       const provider = path.split("/")[2];
+      if (provider === "instagram") fail(410, "\uACF5\uC2DD Instagram API \uC5F0\uB3D9\uC740 \uC0AC\uC6A9\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. \uD06C\uB9AC\uC5D0\uC774\uD130 \uD654\uBA74\uC758 \uC11C\uBC84 \uB85C\uADF8\uC778 \uAD00\uB9AC\uB97C \uC0AC\uC6A9\uD558\uC138\uC694.");
       if (provider === "gmail" && (!env("GOOGLE_CLIENT_ID") || !env("GOOGLE_CLIENT_SECRET")) || provider === "instagram" && (!env("META_APP_ID") || !env("META_APP_SECRET")))
         fail(503, "\uACF5\uC2DD OAuth \uC571 \uC124\uC815\uC774 \uD544\uC694\uD569\uB2C8\uB2E4.");
       if (!["gmail", "instagram"].includes(provider))
@@ -3289,7 +3318,7 @@ Deno.serve(async (req) => {
         client_id: env("GOOGLE_CLIENT_ID"),
         redirect_uri: base + "/oauth/gmail/callback",
         response_type: "code",
-        scope: "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly",
+        scope: "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly" + (oauthInput.includeSignature === true ? " https://www.googleapis.com/auth/gmail.settings.basic" : ""),
         access_type: "offline",
         prompt: "consent",
         state,
@@ -3379,6 +3408,13 @@ Deno.serve(async (req) => {
           async (d2) => (await owned(u, d2.brand, "candidate")).name
         )
       );
+      let richSignature = null;
+      if (inputData.channel === "email" && settings?.signatureSource === "gmail") {
+        const c2 = await connection(u, "gmail");
+        if (c2?.email?.toLowerCase() !== String(settings.gmailSignatureEmail || "").toLowerCase()) fail(409, "Gmail \uACC4\uC815\uC774 \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4. \uD604\uC7AC \uACC4\uC815\uC758 \uC11C\uBA85\uC744 \uB2E4\uC2DC \uBD88\uB7EC\uC624\uC138\uC694.");
+        const candidate2 = gmailSignature(settings.gmailSignatureHtml || "");
+        if (candidate2.text === String(settings.emailSignature || "").trim()) richSignature = candidate2;
+      }
       const subject = render(inputData.subject, c, deals, brandNames), baseBody = mailContent(render(inputData.body, c, deals, brandNames), inputData.signature, settings, inputData.channel === "email", inputData.marketing);
       const notice = await emailTracking.withNotice(u, { ...inputData, trackingRequested: rawInput.trackingRequested, trackingNoticeAcknowledged: rawInput.trackingNoticeAcknowledged }, baseBody, c.kind === "\uD06C\uB9AC\uC5D0\uC774\uD130" ? "creator" : "brand");
       inputData = { ...inputData, ...notice.input };
@@ -3427,6 +3463,7 @@ Deno.serve(async (req) => {
       const d = {
         ...inputData,
         tracking,
+        ...richSignature ? { signatureText: richSignature.text, signatureHtml: richSignature.html } : {},
         ...reply,
         subject,
         body,

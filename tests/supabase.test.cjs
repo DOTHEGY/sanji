@@ -285,12 +285,7 @@ test("Edge function compiles and denies unauthenticated/disallowed-origin reques
       assert.equal(health.status, 200);
       assert.equal((await health.json()).version, 12);
       const callback = await handler(new Request("https://project.example" + prefix + "/oauth/instagram/callback"));
-      assert.equal(callback.status, 302);
-      const back = new URL(callback.headers.get("location"));
-      assert.equal(back.origin, "https://dothegy.github.io");
-      assert.match(back.searchParams.get("oauth_error"), /state/);
-      assert.equal(back.hash, "#settings");
-      assert.equal(await callback.text(), "");
+      assert.equal(callback.status,410);assert.match((await callback.json()).error,/공식 Instagram API 연동은 제외/);
       assert.equal(
         (
           await handler(
@@ -938,7 +933,7 @@ test("Instagram capability checks distinguish real profile, conversation permiss
  const no=await m.exports.instagramCapabilities({id:'123',access_token:'mock-token'},async()=>{throw Error('permission denied');},'v24.0');assert.equal(no.profileVerified,true);assert.equal(no.messagesReadable,false);assert.equal(no.webhookSubscribed,false);
 });
 
-test("Clean integration settings show expired Instagram auth honestly and offer profile-only login",async()=>{
+test("Clean integration settings omit official Instagram OAuth and provide Gmail signature import",async()=>{
  const express=require('express'),app=express();app.use(express.json());let loginBody;
  const state={candidates:[],deals:[],templates:[],threads:[],outbox:[],jobs:[],suppression:[],settings:{senderName:'운영자',senderAddress:'사업장',senderPhone:'번호',dailyLimit:20}};
  app.all(/^\/api\/.*/,(req,res)=>{const p=req.path.replace('/api','');
@@ -949,8 +944,7 @@ test("Clean integration settings show expired Instagram auth honestly and offer 
  const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.on('listening',r));let browser;
  try{browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',headless:true,args:['--no-sandbox']});const page=await browser.newPage({viewport:{width:1365,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto('http://127.0.0.1:'+server.address().port+'/app/#settings');await page.locator('#brand-discovery-settings > summary').click();await page.waitForSelector('#discovery-settings [name=target]');
- assert.equal(await page.locator('#discovery-settings [name=target]').inputValue(),'40');assert.match(await page.locator('.account-pending').textContent(),/재로그인 필요/);assert.equal(await page.getByText('로그인 응답 수신 · 계정 조회 대기',{exact:true}).count(),0);
- await page.getByText('Instagram 공식 API · 받은 대화 연동 설정',{exact:false}).click();await page.locator('.account-pending [data-action=connect-instagram-basic]').click();assert.deepEqual(loginBody,{profileOnly:true});
+ assert.equal(await page.locator('#discovery-settings [name=target]').inputValue(),'40');assert.equal(await page.locator('.account-pending').count(),0);assert.equal(await page.locator('[data-action=connect-instagram-basic]').count(),0);assert.equal(await page.locator('[data-action=gmail-signature-import]').count(),1);
  await page.screenshot({path:'/tmp/sanji-settings-desktop.png',fullPage:true});await page.setViewportSize({width:390,height:844});await page.screenshot({path:'/tmp/sanji-settings-mobile.png',fullPage:true});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);assert.deepEqual(errors,[]);
  }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
 });

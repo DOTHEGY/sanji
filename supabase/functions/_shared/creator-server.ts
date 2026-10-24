@@ -17,7 +17,7 @@ export function creatorServerService({sb,query,encrypt,decrypt,audit,creatorLoca
    const s=c.sender_handle?await query(sb.from("sanji_instagram_pc_sessions").select("handle,checked,expires").eq("owner",owner).eq("handle",c.sender_handle).maybeSingle()):null;
    const valid=!!s&&Date.parse(s.expires)>Date.now(),runtime=c.server_runtime||{},same=!!s&&runtime.verifiedSender===c.sender_handle&&Date.parse(runtime.sessionChecked)===Date.parse(s.checked),confirmed=valid&&same&&!runtime.requiresNewSession;
    const state=!s?"not_saved":!valid?"session_expired":runtime.requiresNewSession&&Date.parse(s.checked)<=Date.parse(runtime.checked)?"reauth_required":confirmed?"identity_confirmed":"saved_unverified";
-   return {sender:c.sender_handle||"",state,saved:!!s,sessionChecked:s?.checked||null,sessionExpires:s?.expires||null,identityConfirmed:confirmed,identityConfirmedAt:confirmed?runtime.identityChecked||null:null,serverEnabled:!!c.server_enabled,serverResponding:c.server_enabled&&Date.parse(c.server_lease_until)>Date.now(),runtimeReason:runtime.reason||""};
+   return {sender:c.sender_handle||"",state,saved:!!s,sessionChecked:s?.checked||null,sessionExpires:s?.expires||null,identityConfirmed:confirmed,identityConfirmedAt:confirmed?runtime.identityChecked||null:null,serverEnabled:!!c.server_enabled,serverResponding:c.server_enabled&&Date.parse(c.server_lease_until)>Date.now(),runtimeReason:runtime.reason||"",workerContactAt:c.server_last_attempt||null,reportedSender:c.server_reported_sender||"",workerIssue:c.server_connection_issue||null,workerReachable:Date.parse(c.server_last_attempt)>Date.now()-120000};
   }
   if(path==="/creator-server/approve-test"){
    if(!/^[a-z0-9._]{2,30}$/.test(c.sender_handle||"")||!c.server_enabled||c.server_runtime?.requiresNewSession||!["server-test-v2","server-background-v3","server-background-v4"].includes(c.server_runtime?.workerVersion)||!["ready","idle","daily_limit"].includes(c.server_runtime?.status))throw Error("서버 업데이트와 새 세션 계정 확인을 먼저 마치세요.");
@@ -50,7 +50,12 @@ export function creatorServerService({sb,query,encrypt,decrypt,audit,creatorLoca
  async function worker(path:string,token:string,b:any){
   if(!/^[A-Za-z0-9_-]{43}$/.test(token))throw Error("서버 연결 키가 필요합니다.");
   const c=await query(sb.from("sanji_creator_config").select("*").eq("server_worker_hash",await digest(token)).maybeSingle());
-  if(!c||Date.parse(c.server_worker_expires)<=Date.now()||b.sender!==c.sender_handle)throw Error("서버 키 만료·해제 또는 발신 계정 불일치");
+  if(!c)throw Error("서버 키가 해제됐거나 일치하지 않습니다.");
+  const issue=Date.parse(c.server_worker_expires)<=Date.now()?"key_expired":b.sender!==c.sender_handle?"sender_mismatch":null;
+  if(issue||path==="/creator-server/worker/control"){
+   if(issue!==c.server_connection_issue||!c.server_last_attempt||Date.parse(c.server_last_attempt)<Date.now()-60000)await query(sb.from("sanji_creator_config").update({server_last_attempt:new Date().toISOString(),server_reported_sender:/^[a-z0-9._]{2,30}$/.test(b.sender||"")?b.sender:"",server_connection_issue:issue}).eq("owner",c.owner));
+  }
+  if(issue)throw Error(issue==="sender_mismatch"?"Render 발신 아이디 불일치 · SANJI_SENDER_HANDLE 값을 현재 계정으로 변경하세요.":"서버 연결 키 만료 · 새 키를 발급하고 Render에서 갱신하세요.");
   const owner=c.owner;
   if(path==="/creator-server/worker/control")return {enabled:c.server_enabled,revision:c.server_revision,runtime:c.server_runtime,previewOnly:true,discoveryEnabled:c.enabled===true,testAllowed:!!c.server_test_id&&Date.parse(c.server_test_deadline)>Date.now()};
   if(!c.server_enabled)throw Error("서버 실행이 중지돼 있습니다.");

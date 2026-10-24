@@ -1,3 +1,5 @@
+import {gmailSignatureSync} from "../_shared/gmail-signature-sync.ts";
+import {gmailSignature,selectGmailSignature} from "../_shared/gmail-signature.ts";
 import {instagramSetupService} from "../_shared/instagram-setup.ts";
 import {creatorServerService} from "../_shared/creator-server.ts";
 import {manualReplyService} from "../_shared/manual-reply.ts";
@@ -150,6 +152,7 @@ async function saveConnection(u: string, p: string, data: any) {
   );
 }
 const processInstagramSetup=instagramSetupService({sb,query,connection,saveConnection,remote,capabilities:instagramCapabilities,version:env("META_GRAPH_VERSION")||"v24.0",audit});
+const syncRequestedGmailSignature=gmailSignatureSync({sb,query,getSignature:loadGmailSignature,audit});
 const emailTracking=emailTrackingService({sb,query,env,audit,baseUrl:env("SUPABASE_URL")+"/functions/v1/"+(env("WORKSPACE_FUNCTION_NAME")||"bright-function")});
 const notifyOwner = discoveryCompletionNotifier({sb,query,gmailToken,remote,audit,env});
 const creatorDiscovery = creatorDiscoveryService({sb,query,audit,env});
@@ -157,6 +160,10 @@ const saveManualReply=manualReplyService({sb,query,putRecord,audit});
 const creatorLocal=creatorLocalService({sb,query,audit,encrypt,decrypt,putRecord});
 const creatorServer=creatorServerService({sb,query,encrypt,decrypt,audit,creatorLocal,creatorDiscovery});
 const discovery = discoveryService({sb,query,connection,saveConnection,env,audit,putRecord,notifyOwner});
+async function loadGmailSignature(u:string){
+ const c=await gmailToken(u);try{const result=await remote("https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs",{headers:{Authorization:"Bearer "+c.access_token}},"Gmail 기본 서명 조회");return {...selectGmailSignature(result,c.email),checked:now(),needsConsent:false};}
+ catch(e){if(e instanceof HttpError&&e.status===403)return {needsConsent:true,message:"Gmail 설정 접근 권한 승인이 필요합니다. 산지는 서명 조회에만 사용합니다."};throw e;}
+}
 async function remote(url: string, options: any = {}, stage = "") {
   const r = await fetch(url, {
       ...options,
@@ -763,7 +770,7 @@ Deno.serve(async (req: Request) => {
       fail(403, "허용되지 않은 출처");
     if (req.method === "OPTIONS")
       return new Response(null, { status: 204, headers: cors });
-    if (path === "/instagram/webhook") return await webhook(req, url);
+    if(path.startsWith("/instagram/")||path==="/oauth/instagram/callback")return json({error:"공식 Instagram API 연동은 제외됐습니다. 서버 로그인 관리를 사용하세요."},410);
     if (/^\/oauth\/(gmail|instagram)\/callback$/.test(path)) {
       try { return await callback(req, url, path.split("/")[2], base); }
       catch (e) {
@@ -778,12 +785,12 @@ Deno.serve(async (req: Request) => {
     }
     if(path === "/creator-discovery/tick" && req.method === "POST"){
       if(!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403,"발굴 실행기 인증 실패");
-      return json({...await creatorDiscovery.scheduled(),officialSetup:await processInstagramSetup()});
+      return json(await creatorDiscovery.scheduled());
     }
     if(path==="/gmail/tick"&&req.method==="POST"){
       if(!env("DISCOVERY_RUNNER_TOKEN")||req.headers.get("x-job-token")!==env("DISCOVERY_RUNNER_TOKEN"))fail(403,"회신 동기화 실행기 인증 실패");
       const owners=await query(sb.from("sanji_connections").select("owner").eq("provider","gmail").limit(5));
-      return json({results:await Promise.all(owners.map((c:any)=>gmailSync.sync(c.owner)))});
+      return json({results:await Promise.all(owners.map((c:any)=>gmailSync.sync(c.owner))),signature:await syncRequestedGmailSignature()});
     }
     if(path.startsWith("/creator-server/worker/")&&req.method==="POST"){
       const raw=await req.text();if(Buffer.byteLength(raw)>600000)fail(413,"서버 요청 크기 초과");
@@ -971,6 +978,7 @@ Deno.serve(async (req: Request) => {
       const profile=await instagramProfile(old,remote,env("META_GRAPH_VERSION")||"v24.0"),session={...old,...profile,apiVerified:true,profileChecked:now()};
       session.capabilities=await instagramCapabilities(session,remote,env("META_GRAPH_VERSION")||"v24.0");await saveConnection(u,row.provider,session);return json({connected:true,username:session.username,capabilities:session.capabilities});
     }
+    if(path==="/gmail/signature"&&req.method==="POST")return json(await loadGmailSignature(u));
     if (path === "/connections" && req.method === "GET") {
       const gmail = await connection(u, "gmail"),
         accounts = await instagramAccounts(u);
@@ -987,11 +995,11 @@ Deno.serve(async (req: Request) => {
           enabled: env("EMAIL_SENDING_ENABLED") === "true",
         },
         instagram: {
-          configured: !!env("META_APP_ID") && !!env("META_APP_SECRET"),
-          connected: !!ig,
+          configured: false,disabled:true,
+          connected: false,
           username: ig?.username || "",
-          accounts: accounts.map((a: any) => ({ key: a.provider, ...a.summary })),
-          loginPending:loginPending.map((a:any)=>({key:a.provider,...a.summary,requiresLogin:!canRetryPending,canRetry:canRetryPending})),
+          accounts: [],
+          loginPending: [],
           enabled: env("INSTAGRAM_SENDING_ENABLED") === "true",
         },
         search: { configured: !!env("BRAVE_SEARCH_API_KEY") || await discovery.configured(u) },
@@ -1020,6 +1028,7 @@ Deno.serve(async (req: Request) => {
     if (path.startsWith("/oauth/") && req.method === "POST") {
       await key();
       const provider = path.split("/")[2];
+      if(provider==="instagram")fail(410,"공식 Instagram API 연동은 사용하지 않습니다. 크리에이터 화면의 서버 로그인 관리를 사용하세요.");
       if (
         (provider === "gmail" &&
           (!env("GOOGLE_CLIENT_ID") || !env("GOOGLE_CLIENT_SECRET"))) ||
@@ -1050,7 +1059,7 @@ Deno.serve(async (req: Request) => {
               redirect_uri: base + "/oauth/gmail/callback",
               response_type: "code",
               scope:
-                "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly",
+                "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly"+(oauthInput.includeSignature===true?" https://www.googleapis.com/auth/gmail.settings.basic":""),
               access_type: "offline",
               prompt: "consent",
               state,
@@ -1164,6 +1173,11 @@ Deno.serve(async (req: Request) => {
           async (d: any) => (await owned(u, d.brand, "candidate")).name,
         ),
       );
+      let richSignature:any=null;
+      if(inputData.channel==="email"&&settings?.signatureSource==="gmail"){
+        const c=await connection(u,"gmail");if(c?.email?.toLowerCase()!==String(settings.gmailSignatureEmail||"").toLowerCase())fail(409,"Gmail 계정이 변경됐습니다. 현재 계정의 서명을 다시 불러오세요.");
+        const candidate=gmailSignature(settings.gmailSignatureHtml||"");if(candidate.text===String(settings.emailSignature||"").trim())richSignature=candidate;
+      }
       const subject = render(inputData.subject, c, deals, brandNames),
         baseBody = mailContent(render(inputData.body,c,deals,brandNames),inputData.signature,settings,inputData.channel==="email",inputData.marketing);
       const notice=await emailTracking.withNotice(u,{...inputData,trackingRequested:rawInput.trackingRequested,trackingNoticeAcknowledged:rawInput.trackingNoticeAcknowledged},baseBody,c.kind==="크리에이터"?"creator":"brand");
@@ -1221,6 +1235,7 @@ Deno.serve(async (req: Request) => {
       const d = {
           ...inputData,
           tracking,
+          ...(richSignature?{signatureText:richSignature.text,signatureHtml:richSignature.html}:{}),
           ...reply,
           subject,
           body,

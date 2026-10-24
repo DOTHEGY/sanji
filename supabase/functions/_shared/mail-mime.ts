@@ -1,3 +1,4 @@
+import {gmailSignature} from "./gmail-signature.ts";
 import { Buffer } from "node:buffer";
 import {mailRecipients} from "./mail-recipients.ts";
 function attachmentType(content: string) {
@@ -25,10 +26,13 @@ export function encodedHeader(value:string){
 const base64Body=(text:string)=>Buffer.from(text,"utf8").toString("base64").match(/.{1,76}/g)?.join("\r\n")||"";
 function trackingHtml(d:any){
  const escape=(s:string)=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!));
- let url;try{url=new URL(d.trackingPixelUrl);if(url.protocol!=="https:"||!/^\/functions\/v1\/[^/]+\/email-events\/pixel\/[A-Za-z0-9_-]{43}\.gif$/.test(url.pathname)||url.search||url.hash||url.username||url.password)return null;}catch{return null;}
- const text=String(d.body),parts:string[]=[];let last=0;
- for(const m of text.matchAll(/https?:\/\/[^\s<>"']+/g)){parts.push(escape(text.slice(last,m.index)));parts.push('<a href="'+escape(m[0])+'">'+escape(m[0])+'</a>');last=m.index!+m[0].length;}parts.push(escape(text.slice(last)));
- return '<!doctype html><html><head><meta charset="utf-8"></head><body><div style="white-space:pre-wrap">'+parts.join('')+'</div><img src="'+escape(url.toString())+'" width="1" height="1" alt="" referrerpolicy="no-referrer" style="width:1px;height:1px;border:0" /></body></html>';
+ let url:any=null;try{const u=new URL(d.trackingPixelUrl);if(u.protocol==="https:"&&/^\/functions\/v1\/[^/]+\/email-events\/pixel\/[A-Za-z0-9_-]{43}\.gif$/.test(u.pathname)&&!u.search&&!u.hash&&!u.username&&!u.password)url=u;}catch{}
+ let signature:any=null;if(d.signatureHtml&&d.signatureText){const clean=gmailSignature(d.signatureHtml);if(clean.text===d.signatureText&&String(d.body).includes(clean.text))signature=clean;}
+ if(!url&&!signature)return null;
+ const linkify=(text:string)=>{const parts:string[]=[];let last=0;for(const m of text.matchAll(/https?:\/\/[^\s<>"']+/g)){parts.push(escape(text.slice(last,m.index)));parts.push('<a href="'+escape(m[0])+'">'+escape(m[0])+'</a>');last=m.index!+m[0].length;}parts.push(escape(text.slice(last)));return parts.join('');};
+ const text=String(d.body),i=signature?text.lastIndexOf(signature.text):-1;
+ const content=i>=0?'<div style="white-space:pre-wrap">'+linkify(text.slice(0,i))+'</div><div>'+signature.html+'</div><div style="white-space:pre-wrap">'+linkify(text.slice(i+signature.text.length))+'</div>':'<div style="white-space:pre-wrap">'+linkify(text)+'</div>';
+ return '<!doctype html><html><head><meta charset="utf-8"></head><body>'+content+(url?'<img src="'+escape(url.toString())+'" width="1" height="1" alt="" referrerpolicy="no-referrer" style="width:1px;height:1px;border:0" />':'')+'</body></html>';
 }
 export function mime(d: any, from: string) {
   const lines = [
