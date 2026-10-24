@@ -295,7 +295,7 @@ function creatorServerService({ sb: sb2, query: query2, encrypt: encrypt2, decry
       return { sender: c.sender_handle || "", state, saved: !!s, sessionChecked: s?.checked || null, sessionExpires: s?.expires || null, identityConfirmed: confirmed, identityConfirmedAt: confirmed ? runtime.identityChecked || null : null, serverKeyConfigured: !!c.server_worker_hash && Date.parse(c.server_worker_expires) > Date.now(), serverEnabled: !!c.server_enabled, serverResponding: c.server_enabled && Date.parse(c.server_lease_until) > Date.now(), runtimeReason: runtime.reason || "", workerContactAt: c.server_last_attempt || null, reportedSender: c.server_reported_sender || "", workerIssue: c.server_connection_issue || null, workerReachable: Date.parse(c.server_last_attempt) > Date.now() - 12e4 };
     }
     if (path === "/creator-server/approve-test") {
-      if (!/^[a-z0-9._]{2,30}$/.test(c.sender_handle || "") || !c.server_enabled || c.server_runtime?.requiresNewSession || !["server-test-v2", "server-background-v3", "server-background-v4"].includes(c.server_runtime?.workerVersion) || !["ready", "idle", "daily_limit"].includes(c.server_runtime?.status)) throw Error("\uC11C\uBC84 \uC5C5\uB370\uC774\uD2B8\uC640 \uC0C8 \uC138\uC158 \uACC4\uC815 \uD655\uC778\uC744 \uBA3C\uC800 \uB9C8\uCE58\uC138\uC694.");
+      if (!/^[a-z0-9._]{2,30}$/.test(c.sender_handle || "") || !c.server_enabled || c.server_runtime?.requiresNewSession || !["server-test-v2", "server-background-v3", "server-background-v4", "server-background-v5"].includes(c.server_runtime?.workerVersion) || !["ready", "idle", "daily_limit"].includes(c.server_runtime?.status)) throw Error("\uC11C\uBC84 \uC5C5\uB370\uC774\uD2B8\uC640 \uC0C8 \uC138\uC158 \uACC4\uC815 \uD655\uC778\uC744 \uBA3C\uC800 \uB9C8\uCE58\uC138\uC694.");
       const r = await query2(sb2.from("sanji_creator_prospects").select("*").eq("owner", owner).eq("id", "a6cedd56-dbab-43b0-a2a5-1f3f893e1606").single());
       const body = "\uC0B0\uC9C0 Instagram DM \uBC1C\uC1A1 \uAE30\uB2A5 \uD655\uC778\uC6A9 \uD14C\uC2A4\uD2B8 \uBA54\uC2DC\uC9C0\uC785\uB2C8\uB2E4. \uD655\uC778\uB418\uC2DC\uBA74 \uB2F5\uC7A5 \uBD80\uD0C1\uB4DC\uB9BD\uB2C8\uB2E4!";
       if (r.handle !== "taemin_dtg" || r.body !== body || r.status !== "failed" || r.result?.clickStarted) throw Error("\uBC1C\uC1A1 \uC804 \uC911\uB2E8\uB41C \uB0B4\uBD80 \uD14C\uC2A4\uD2B8 1\uAC74\uB9CC \uD5C8\uC6A9\uD569\uB2C8\uB2E4. \uBC1C\uC1A1\xB7\uCC98\uB9AC \uC911\xB7\uACB0\uACFC \uBBF8\uD655\uC778 \uAC74\uC740 \uC7AC\uC2DC\uB3C4\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
@@ -382,7 +382,7 @@ function creatorServerService({ sb: sb2, query: query2, encrypt: encrypt2, decry
       return { ok: true };
     }
     if (path === "/creator-server/worker/test-next") {
-      if (!["server-test-v2", "server-background-v3", "server-background-v4"].includes(b.workerVersion)) throw Error("\uC11C\uBC84 \uC2E4\uD589\uAE30 \uC5C5\uB370\uC774\uD2B8 \uD544\uC694");
+      if (!["server-test-v2", "server-background-v3", "server-background-v4", "server-background-v5"].includes(b.workerVersion)) throw Error("\uC11C\uBC84 \uC2E4\uD589\uAE30 \uC5C5\uB370\uC774\uD2B8 \uD544\uC694");
       if (!["ready", "idle", "daily_limit"].includes(c.server_runtime.status)) throw Error("\uACC4\uC815 \uD655\uC778 \uD6C4 \uD14C\uC2A4\uD2B8\uD558\uC138\uC694.");
       return { job: await query2(sb2.rpc("sanji_creator_server_test_claim", { p_owner: owner, p_sender: b.sender })) };
     }

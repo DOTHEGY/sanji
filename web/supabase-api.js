@@ -215,7 +215,7 @@ export async function workspaceApi(path, method = "GET", body) {
           p_kind: "settings",
           p_data: body,
           p_id: rows[0]?.id || null,
-          p_version: rows[0]?.version || null,
+          p_version: body.version ?? rows[0]?.version ?? null,
         }),
       ),
     );

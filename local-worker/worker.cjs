@@ -66,6 +66,19 @@ async function conversationRecipient(editor,expected,inDirect){
   return handles.size===1&&handles.has(expected);
  },{expected,inDirect});
 }
+async function openMessageComposer(page,handle){
+ await page.goto('https://www.instagram.com/direct/new/',{waitUntil:'domcontentloaded'});
+ if(/\/(?:challenge|checkpoint)|\/accounts\/login/.test(new URL(page.url()).pathname))throw Error('메시지 작성 화면에서 로그인·인증 요구 · 중단');
+ const dialog=page.getByRole('dialog').last();await dialog.waitFor({state:'visible',timeout:10000});
+ const text=await dialog.innerText();if(/Action Blocked|Try Again Later|일시적으로 차단|계정이 제한/i.test(text))throw Error('메시지 작성 제한 · 중단');
+ const search=dialog.locator('input[name="queryBox"],input[placeholder*="Search"],input[placeholder*="검색"],input[aria-label*="검색"],input[aria-label*="Search"]').last();
+ await search.waitFor({state:'visible',timeout:8000});await search.fill(handle);
+ const target=dialog.getByText(handle,{exact:true}).first();await target.waitFor({state:'visible',timeout:10000});await target.click();
+ if(await dialog.locator('input:checked,[role="checkbox"][aria-checked="true"]').count()>1)throw Error('복수 수신자 선택 감지 · 전송 중단');
+ const chat=dialog.getByRole('button',{name:/^(채팅|다음|Chat|Next)$/i}).last();await chat.waitFor({state:'visible',timeout:5000});
+ for(let i=0;i<5&&!await chat.isEnabled();i++)await page.waitForTimeout(200);
+ if(!await chat.isEnabled())throw Error('대상 계정의 채팅 시작이 허용되지 않음');await chat.click();
+}
 async function sendApproved(page,job,check,beforeClick){
  if(!job.body?.trim()||!validHandle(job.handle))return {status:'failed',note:'대상·카피 미확인 · 전송 안 함'};
  let clicked=false;
@@ -74,8 +87,7 @@ async function sendApproved(page,job,check,beforeClick){
   if(/비공개 계정|This account is private/i.test(profileText))return {status:'failed',note:'비공개 계정 · 전송하지 않음'};
   const message=page.getByRole('button',{name:/^(메시지|메시지 보내기|Message|Send message)$/i}).or(page.getByRole('link',{name:/^(메시지|메시지 보내기|Message|Send message)$/i})).first();
   await message.waitFor({state:'visible',timeout:10000}).catch(()=>{});
-  if(!await message.isVisible().catch(()=>false))return {status:'failed',note:'메시지 버튼 없음 · 팔로우하지 않고 중단'};
-  await message.click();
+  if(await message.isVisible().catch(()=>false))await message.click();else await openMessageComposer(page,job.handle);
   const editor=page.locator('div[role="textbox"][contenteditable="true"],textarea[placeholder="Message..."],textarea[placeholder="메시지 입력..."]').last();await editor.waitFor({timeout:12000});
   // Instagram may open a chat dialog without changing the profile URL.
   if(!await conversationRecipient(editor,job.handle,/\/direct\//.test(new URL(page.url()).pathname)))return {status:'failed',note:'대화 수신자 확인 불가 · 전송 안 함'};
@@ -132,5 +144,5 @@ async function run(){
   }
  }finally{io.close();await context?.close();}
 }
-module.exports={failureKind,visibleMetrics,conversationRecipient,instagramOnlyState,validHandle,identity,openProfile,profile,sendApproved,stateDirectory};
+module.exports={openMessageComposer,failureKind,visibleMetrics,conversationRecipient,instagramOnlyState,validHandle,identity,openProfile,profile,sendApproved,stateDirectory};
 if(require.main===module)run().catch(e=>{console.error(e.message);process.exitCode=1;});
