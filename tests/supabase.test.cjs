@@ -1132,14 +1132,14 @@ test("Inline morning scheduling stores approved KST times without sending or cre
  if(p==="/discovery")return res.json({settings:{enabled:true,target:40,keywords:[]},leads,usage:{emails:2},activity:[]});
  if(p==="/discovery/outreach")return res.json({ok:true});if(p==="/discovery/prepare-contact"){preparedCount++;return res.json({candidateId:req.body.id});}
  if(p==="/drafts"){const id=req.body.target;return res.json({id,hash:"hash-"+id,target:id,email:id+"@brand.test",subject:req.body.subject,body:req.body.body+"\n\n"+req.body.signature,attachments:[]});}
- if(p==="/schedule"){scheduled.push(req.body);return res.json({id:"job-"+req.body.draftId,run_at:req.body.runAt});}
+ if(p==="/schedule"){scheduled.push(req.body);state.jobs.push({id:"job-"+req.body.draftId,target:req.body.draftId,draft_id:req.body.draftId,status:"queued",run_at:req.body.runAt,email:req.body.draftId+"@brand.test",subject:"승인 당시 제목",body:"승인 당시 본문",snapshotAvailable:true});return res.json({id:"job-"+req.body.draftId,run_at:req.body.runAt});}
  if(/^\/drafts\/[^/]+\/send$/.test(p)){if(preparedAtFirstSend===null)preparedAtFirstSend=preparedCount;sent.push({path:p,...req.body});return res.json({note:"Gmail 서버 접수"});}res.status(404).json({error:"unknown"});});
  app.use("/app",express.static("private/ui"));const server=app.listen(0,"127.0.0.1");let browser;
  try{browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||"/usr/bin/chromium",args:["--no-sandbox"]});const page=await browser.newPage();await page.goto("http://127.0.0.1:"+server.address().port+"/app/#brands");
  await page.locator('[data-action="mail-select-all"]').click();await page.getByText('선택한 메일 예약하기',{exact:true}).click();assert.ok((await page.locator('#inline-run-at').inputValue()).endsWith('T09:00'));
  const day=new Date(Date.now()+2*86400000).toISOString().slice(0,10),value=day+'T09:00';await page.locator('#inline-run-at').fill(value);await page.locator('[data-action="mail-schedule-selected"]').click();
  await page.waitForFunction(()=>document.querySelector('#inline-mail-summary').textContent.includes('전송 처리 완료'));assert.equal(sent.length,0);assert.equal(scheduled.length,4);assert.ok(scheduled.every(x=>x.approved&&x.runAt===new Date(value+'+09:00').toISOString()&&x.hash==='hash-'+x.draftId));
- assert.ok((await page.locator('#mail-state-b').textContent()).includes('예약 완료'));await page.locator('[data-action="mail-schedule-selected"]').click();assert.equal(scheduled.length,4);assert.equal(sent.length,0);
+ await page.locator('[data-action="brand-tab"][data-id="scheduled"]').click();await page.locator('#discovery-results [data-action="cancel-job"]').first().waitFor();assert.equal(await page.locator('#discovery-results [data-action="cancel-job"]').count(),4);assert.match(await page.locator("#discovery-results").innerText(),/예약 완료 · 발송 대기/);await page.locator("#discovery-results summary").first().click();assert.match(await page.locator("#discovery-results").innerText(),/승인 당시 본문/);await page.locator('[data-action="brand-tab"][data-id="pending"]').click();await page.locator('[data-action="mail-select-all"]').waitFor();assert.equal(await page.locator(".mail-card").count(),0);assert.equal(scheduled.length,4);assert.equal(sent.length,0);
 
  }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
 });
