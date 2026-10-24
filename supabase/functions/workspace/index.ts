@@ -980,12 +980,7 @@ Deno.serve(async (req: Request) => {
     }
     if(path==="/gmail/signature"&&req.method==="POST")return json(await loadGmailSignature(u));
     if (path === "/connections" && req.method === "GET") {
-      const gmail = await connection(u, "gmail"),
-        accounts = await instagramAccounts(u);
-      const ig = accounts.find((a: any) => Number(a.summary?.expires) > Date.now()&&!a.summary?.checkpointRequired)?.summary;
-      const loginPending = await query(sb.from("sanji_connections").select("provider,summary").eq("owner",u).like("provider","instagram_login:%"));
-      const pendingState=await query(sb.from("sanji_connections").select("summary").eq("owner",u).eq("provider","instagram_pending").maybeSingle());
-      const canRetryPending=Number(pendingState?.summary?.expires||0)>Date.now();
+      const gmail=await connection(u,"gmail");
       return json({
         gmail: {
           configured:
@@ -997,10 +992,10 @@ Deno.serve(async (req: Request) => {
         instagram: {
           configured: false,disabled:true,
           connected: false,
-          username: ig?.username || "",
+          username: "",
           accounts: [],
           loginPending: [],
-          enabled: env("INSTAGRAM_SENDING_ENABLED") === "true",
+          enabled: false,
         },
         search: { configured: !!env("BRAVE_SEARCH_API_KEY") || await discovery.configured(u) },
         ai: {

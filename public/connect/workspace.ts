@@ -3,8 +3,8 @@ function gmailSignatureSync({ sb: sb2, query: query2, getSignature, audit: audit
   return async () => {
     const rows = await query2(sb2.from("sanji_records").select("*").eq("kind", "settings").eq("data->>gmailSignatureSyncRequested", "true").limit(1));
     if (!rows.length) return { status: "idle" };
-    const r = rows[0], base = { ...r.data, gmailSignatureSyncRequested: false, gmailSignatureSyncState: "loading" };
-    const claim = await query2(sb2.from("sanji_records").update({ data: base, version: r.version + 1, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", r.owner).eq("id", r.id).eq("version", r.version).select("id"));
+    const r = rows[0], version = Number(r.version), base = { ...r.data, gmailSignatureSyncRequested: false, gmailSignatureSyncState: "loading" };
+    const claim = await query2(sb2.from("sanji_records").update({ data: base, version: version + 1, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", r.owner).eq("id", r.id).eq("version", version).select("id"));
     if (!claim.length) return { status: "busy" };
     let next = base, status = "error";
     try {
@@ -14,7 +14,7 @@ function gmailSignatureSync({ sb: sb2, query: query2, getSignature, audit: audit
     } catch {
       next = { ...base, gmailSignatureSyncState: "error" };
     }
-    const saved = await query2(sb2.from("sanji_records").update({ data: next, version: r.version + 2, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", r.owner).eq("id", r.id).eq("version", r.version + 1).select("id"));
+    const saved = await query2(sb2.from("sanji_records").update({ data: next, version: version + 2, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", r.owner).eq("id", r.id).eq("version", version + 1).select("id"));
     await audit2(r.owner, "gmail_signature_sync_checked", { status: saved.length ? status : "settings_changed", noMailSent: true });
     return { status: saved.length ? status : "settings_changed" };
   };
@@ -292,7 +292,7 @@ function creatorServerService({ sb: sb2, query: query2, encrypt: encrypt2, decry
       const s = c.sender_handle ? await query2(sb2.from("sanji_instagram_pc_sessions").select("handle,checked,expires").eq("owner", owner).eq("handle", c.sender_handle).maybeSingle()) : null;
       const valid = !!s && Date.parse(s.expires) > Date.now(), runtime = c.server_runtime || {}, same = !!s && runtime.verifiedSender === c.sender_handle && Date.parse(runtime.sessionChecked) === Date.parse(s.checked), confirmed = valid && same && !runtime.requiresNewSession;
       const state = !s ? "not_saved" : !valid ? "session_expired" : runtime.requiresNewSession && Date.parse(s.checked) <= Date.parse(runtime.checked) ? "reauth_required" : confirmed ? "identity_confirmed" : "saved_unverified";
-      return { sender: c.sender_handle || "", state, saved: !!s, sessionChecked: s?.checked || null, sessionExpires: s?.expires || null, identityConfirmed: confirmed, identityConfirmedAt: confirmed ? runtime.identityChecked || null : null, serverEnabled: !!c.server_enabled, serverResponding: c.server_enabled && Date.parse(c.server_lease_until) > Date.now(), runtimeReason: runtime.reason || "", workerContactAt: c.server_last_attempt || null, reportedSender: c.server_reported_sender || "", workerIssue: c.server_connection_issue || null, workerReachable: Date.parse(c.server_last_attempt) > Date.now() - 12e4 };
+      return { sender: c.sender_handle || "", state, saved: !!s, sessionChecked: s?.checked || null, sessionExpires: s?.expires || null, identityConfirmed: confirmed, identityConfirmedAt: confirmed ? runtime.identityChecked || null : null, serverKeyConfigured: !!c.server_worker_hash && Date.parse(c.server_worker_expires) > Date.now(), serverEnabled: !!c.server_enabled, serverResponding: c.server_enabled && Date.parse(c.server_lease_until) > Date.now(), runtimeReason: runtime.reason || "", workerContactAt: c.server_last_attempt || null, reportedSender: c.server_reported_sender || "", workerIssue: c.server_connection_issue || null, workerReachable: Date.parse(c.server_last_attempt) > Date.now() - 12e4 };
     }
     if (path === "/creator-server/approve-test") {
       if (!/^[a-z0-9._]{2,30}$/.test(c.sender_handle || "") || !c.server_enabled || c.server_runtime?.requiresNewSession || !["server-test-v2", "server-background-v3", "server-background-v4"].includes(c.server_runtime?.workerVersion) || !["ready", "idle", "daily_limit"].includes(c.server_runtime?.status)) throw Error("\uC11C\uBC84 \uC5C5\uB370\uC774\uD2B8\uC640 \uC0C8 \uC138\uC158 \uACC4\uC815 \uD655\uC778\uC744 \uBA3C\uC800 \uB9C8\uCE58\uC138\uC694.");
@@ -3253,11 +3253,7 @@ Deno.serve(async (req) => {
     }
     if (path === "/gmail/signature" && req.method === "POST") return json(await loadGmailSignature(u));
     if (path === "/connections" && req.method === "GET") {
-      const gmail = await connection(u, "gmail"), accounts = await instagramAccounts(u);
-      const ig = accounts.find((a) => Number(a.summary?.expires) > Date.now() && !a.summary?.checkpointRequired)?.summary;
-      const loginPending = await query(sb.from("sanji_connections").select("provider,summary").eq("owner", u).like("provider", "instagram_login:%"));
-      const pendingState = await query(sb.from("sanji_connections").select("summary").eq("owner", u).eq("provider", "instagram_pending").maybeSingle());
-      const canRetryPending = Number(pendingState?.summary?.expires || 0) > Date.now();
+      const gmail = await connection(u, "gmail");
       return json({
         gmail: {
           configured: !!env("GOOGLE_CLIENT_ID") && !!env("GOOGLE_CLIENT_SECRET"),
@@ -3269,10 +3265,10 @@ Deno.serve(async (req) => {
           configured: false,
           disabled: true,
           connected: false,
-          username: ig?.username || "",
+          username: "",
           accounts: [],
           loginPending: [],
-          enabled: env("INSTAGRAM_SENDING_ENABLED") === "true"
+          enabled: false
         },
         search: { configured: !!env("BRAVE_SEARCH_API_KEY") || await discovery.configured(u) },
         ai: {

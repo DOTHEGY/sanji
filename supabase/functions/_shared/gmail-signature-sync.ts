@@ -1,7 +1,7 @@
 export function gmailSignatureSync({sb,query,getSignature,audit}:any){return async()=>{
- const rows=await query(sb.from("sanji_records").select("*").eq("kind","settings").eq("data->>gmailSignatureSyncRequested","true").limit(1));if(!rows.length)return {status:"idle"};const r=rows[0],base={...r.data,gmailSignatureSyncRequested:false,gmailSignatureSyncState:"loading"};
- const claim=await query(sb.from("sanji_records").update({data:base,version:r.version+1,updated:new Date().toISOString()}).eq("owner",r.owner).eq("id",r.id).eq("version",r.version).select("id"));if(!claim.length)return {status:"busy"};
+ const rows=await query(sb.from("sanji_records").select("*").eq("kind","settings").eq("data->>gmailSignatureSyncRequested","true").limit(1));if(!rows.length)return {status:"idle"};const r=rows[0],version=Number(r.version),base={...r.data,gmailSignatureSyncRequested:false,gmailSignatureSyncState:"loading"};
+ const claim=await query(sb.from("sanji_records").update({data:base,version:version+1,updated:new Date().toISOString()}).eq("owner",r.owner).eq("id",r.id).eq("version",version).select("id"));if(!claim.length)return {status:"busy"};
  let next=base,status="error";try{const s=await getSignature(r.owner);status=s.needsConsent?"needs_consent":!s.text&&!s.html?"empty":"imported";next={...base,gmailSignatureSyncState:status,gmailSignatureNeedsConsent:!!s.needsConsent,...(status==="imported"?{emailSignature:s.text,gmailSignatureHtml:s.html,gmailSignatureEmail:s.email,signatureSource:"gmail",signatureChecked:s.checked}:{})};}catch{next={...base,gmailSignatureSyncState:"error"};}
- const saved=await query(sb.from("sanji_records").update({data:next,version:r.version+2,updated:new Date().toISOString()}).eq("owner",r.owner).eq("id",r.id).eq("version",r.version+1).select("id"));
+ const saved=await query(sb.from("sanji_records").update({data:next,version:version+2,updated:new Date().toISOString()}).eq("owner",r.owner).eq("id",r.id).eq("version",version+1).select("id"));
  await audit(r.owner,"gmail_signature_sync_checked",{status:saved.length?status:"settings_changed",noMailSent:true});return {status:saved.length?status:"settings_changed"};
 };}
