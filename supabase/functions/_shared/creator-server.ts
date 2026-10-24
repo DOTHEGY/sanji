@@ -103,6 +103,7 @@ export function creatorServerService({sb,query,encrypt,decrypt,audit,creatorLoca
   if(path==="/creator-server/worker/session")return await sessions.handle(owner,b.sender,true,"load",{});
   if(path==="/creator-server/worker/next"){
    if(b.live)throw Error("서버 DM 발송은 별도 검증·승인 전까지 비활성입니다.");
+   if(!c.enabled)return {job:null,paused:true};
    const start=new Date(new Date(Date.now()+9*3600000).toISOString().slice(0,10)+"T00:00:00+09:00").toISOString();
    const count=await query(sb.from("sanji_creator_prospects").select("id").eq("owner",owner).gte("profile_preview->>attempted",start));
    if(count.length>=50)return {job:null,dailyLimit:true};

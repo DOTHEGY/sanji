@@ -390,6 +390,7 @@ function creatorServerService({ sb: sb2, query: query2, encrypt: encrypt2, decry
     if (path === "/creator-server/worker/session") return await sessions.handle(owner, b.sender, true, "load", {});
     if (path === "/creator-server/worker/next") {
       if (b.live) throw Error("\uC11C\uBC84 DM \uBC1C\uC1A1\uC740 \uBCC4\uB3C4 \uAC80\uC99D\xB7\uC2B9\uC778 \uC804\uAE4C\uC9C0 \uBE44\uD65C\uC131\uC785\uB2C8\uB2E4.");
+      if (!c.enabled) return { job: null, paused: true };
       const start = (/* @__PURE__ */ new Date(new Date(Date.now() + 9 * 36e5).toISOString().slice(0, 10) + "T00:00:00+09:00")).toISOString();
       const count = await query2(sb2.from("sanji_creator_prospects").select("id").eq("owner", owner).gte("profile_preview->>attempted", start));
       if (count.length >= 50) return { job: null, dailyLimit: true };
