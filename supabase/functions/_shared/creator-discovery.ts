@@ -44,7 +44,7 @@ export function creatorDiscoveryService({sb,query,audit,env}:any){
   if(path==="/creator-discovery"&&method==="GET"){
    const recent=await query(sb.from("sanji_creator_prospects").select("checked").eq("owner",owner).gte("checked",new Date(Date.now()-48*3600000).toISOString()).limit(1000));
    const day=(time:number)=>new Date(time+9*3600000).toISOString().slice(0,10),today=day(Date.now()),yesterday=day(Date.now()-86400000);
-   return {apify:{configured:!!env("APIFY_TOKEN"),trialBudgetUsd:0.35,target:30},config:safe(await get(owner)),counts:{today:recent.filter((r:any)=>day(Date.parse(r.checked))===today).length,yesterday:recent.filter((r:any)=>day(Date.parse(r.checked))===yesterday).length},prospects:await query(sb.from("sanji_creator_prospects").select("*").eq("owner",owner).order("checked",{ascending:false}).limit(300))};
+   return {apify:{configured:!!env("APIFY_TOKEN"),trialBudgetUsd:0.35,target:30,trial:(await query(sb.from("sanji_apify_creator_trials").select("id,status,budget_usd,target,accepted,reviewed,cost_usd,runs,excluded,error,updated").eq("owner",owner).order("created",{ascending:false}).limit(1)))[0]||null},config:safe(await get(owner)),counts:{today:recent.filter((r:any)=>day(Date.parse(r.checked))===today).length,yesterday:recent.filter((r:any)=>day(Date.parse(r.checked))===yesterday).length},prospects:await query(sb.from("sanji_creator_prospects").select("*").eq("owner",owner).order("checked",{ascending:false}).limit(300))};
   }
   const b=await input();
   if(path==="/creator-discovery/settings"&&method==="POST"){

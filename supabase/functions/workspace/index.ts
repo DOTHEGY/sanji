@@ -1,3 +1,4 @@
+import {apifyTrialService} from "../_shared/apify-creators.ts";
 import {gmailSignatureSync} from "../_shared/gmail-signature-sync.ts";
 import {gmailSignature,selectGmailSignature} from "../_shared/gmail-signature.ts";
 import {instagramSetupService} from "../_shared/instagram-setup.ts";
@@ -156,6 +157,7 @@ const syncRequestedGmailSignature=gmailSignatureSync({sb,query,getSignature:load
 const emailTracking=emailTrackingService({sb,query,env,audit,baseUrl:env("SUPABASE_URL")+"/functions/v1/"+(env("WORKSPACE_FUNCTION_NAME")||"bright-function")});
 const notifyOwner = discoveryCompletionNotifier({sb,query,gmailToken,remote,audit,env});
 const creatorDiscovery = creatorDiscoveryService({sb,query,audit,env});
+const apifyTrials=apifyTrialService({sb,query,env,audit});
 const saveManualReply=manualReplyService({sb,query,putRecord,audit});
 const creatorLocal=creatorLocalService({sb,query,audit,encrypt,decrypt,putRecord});
 const creatorServer=creatorServerService({sb,query,encrypt,decrypt,audit,creatorLocal,creatorDiscovery});
@@ -785,7 +787,7 @@ Deno.serve(async (req: Request) => {
     }
     if(path === "/creator-discovery/tick" && req.method === "POST"){
       if(!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403,"발굴 실행기 인증 실패");
-      return json(await creatorDiscovery.scheduled());
+      const apify=await apifyTrials.tick();return json(apify||{status:"disabled",reason:"기존 자동 검색 중단 · 승인된 Apify 시험만 실행"});
     }
     if(path==="/gmail/tick"&&req.method==="POST"){
       if(!env("DISCOVERY_RUNNER_TOKEN")||req.headers.get("x-job-token")!==env("DISCOVERY_RUNNER_TOKEN"))fail(403,"회신 동기화 실행기 인증 실패");

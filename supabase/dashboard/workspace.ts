@@ -1,3 +1,103 @@
+// supabase/functions/_shared/apify-creators.ts
+var profileUrl = (h) => "https://www.instagram.com/" + encodeURIComponent(h) + "/";
+function apifyCreator(raw, run, checked = (/* @__PURE__ */ new Date()).toISOString()) {
+  const handle2 = String(raw.username || "").replace(/^@/, "").toLowerCase();
+  const no = (reason) => ({ accepted: false, handle: handle2, reason });
+  if (!/^[a-z0-9._]{2,30}$/.test(handle2) || raw.error) return no("\uC720\uD6A8\uD55C \uACF5\uAC1C \uD504\uB85C\uD544 \uACB0\uACFC \uC544\uB2D8");
+  if (raw.isPrivate === true) return no("\uBE44\uACF5\uAC1C \uACC4\uC815");
+  const bio = String(raw.biography || ""), name = String(raw.fullName || handle2), posts = (Array.isArray(raw.latestPosts) ? raw.latestPosts : []).filter((p) => p.url && p.caption), korean = posts.filter((p) => (String(p.caption).match(/[가-힣]/g) || []).length >= 15), text2 = [bio, ...posts.map((p) => p.caption)].join("\n");
+  if (/유소년|축구성장기|초[1-6]\s*.*성장기|키즈모델/.test(name + " " + bio)) return no("\uC544\uB3D9 \uC911\uC2EC \uACC4\uC815 \xB7 \uC131\uC778 \uACF5\uB3D9\uAD6C\uB9E4 \uD611\uC5C5 \uC120\uBCC4\uC5D0\uC11C \uC81C\uC678");
+  const identityPost = posts.find((p) => /(?:저는\s*한국인|한국인인\s*저|한국인으로서|我是韓國人|身為韓國人|韓国人の私|\b(?:I'm|I am|as a|being a)\s+(?:a\s+)?Korean\b)/i.test(String(p.caption)));
+  const selfHandle = /^korean[_.]?mom(?:[_.]|co+ks|life|diary|daily|blog|$)/i.test(handle2);
+  if (!identityPost && !selfHandle && !/(?:한국\s*(?:인(?!삼)|사람|엄마|아빠|여자|남자|크리에이터)|韓國(?:人|媽媽)|韓国(?:人|ママ)|대한민국\s*국적|Korean\s+(?:creator|mom|mother|dad|father|woman|man|influencer|chef|cook|baker|foodie)\b|(?:I'm|I am)\s+Korean)/i.test(name + " " + bio)) return no("\uACF5\uAC1C \uC790\uAE30\uC18C\uAC1C\uC5D0\uC11C \uD55C\uAD6D \uD06C\uB9AC\uC5D0\uC774\uD130\uB77C\uB294 \uADFC\uAC70 \uBBF8\uD655\uC778 \xB7 \uC5B8\uC5B4\xB7\uC774\uB984\xB7\uC678\uBAA8\uB85C \uD310\uC815\uD558\uC9C0 \uC54A\uC74C");
+  if (!posts.length) return no("\uC2E4\uC81C \uACF5\uAC1C \uCF58\uD150\uCE20 \uADFC\uAC70 \uBD80\uC871");
+  if (!/공동구매|공구|레시피|식단|요리|베이킹|푸드|홈카페|웰니스|운동|건강식|라이프스타일|살림|육아|책육아|집밥|먹방|홈쿡|recipe|cook|chef|food|baking|wellness|fitness|lifestyle|parenting|motherhood/i.test(text2)) return no("\uD478\uB4DC\xB7\uC6F0\uB2C8\uC2A4 \uACF5\uB3D9\uAD6C\uB9E4 \uCF58\uD150\uCE20 \uC801\uD569\uC131 \uADFC\uAC70 \uBD80\uC871");
+  if (/브랜드\s*공식|공식\s*(계정|스토어|쇼핑몰)|고객센터|주식회사|도매\s*문의/.test(bio)) return no("\uAE30\uC5C5\xB7\uD310\uB9E4\uC810 \uACC4\uC815 \uAC00\uB2A5\uC131 \xB7 \uAC1C\uC778 \uD06C\uB9AC\uC5D0\uC774\uD130 \uC120\uBCC4\uC5D0\uC11C \uC81C\uC678");
+  const dated = posts.map((p) => Date.parse(p.timestamp)).filter(Number.isFinite), latest = dated.length ? Math.max(...dated) : null;
+  if (!latest || Date.parse(checked) - latest > 120 * 864e5) return no("\uCD5C\uADFC 120\uC77C \uACF5\uAC1C \uD65C\uB3D9 \uD655\uC778 \uBD88\uAC00");
+  const source = profileUrl(handle2), emails = [...new Set((bio.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || []).map((s) => s.toLowerCase()))].filter((e) => !/(?:privacy|recruit|career|noreply|no-reply)/i.test(e));
+  const businessEmails = emails.map((email) => ({ email, source, checked, context: bio, purpose: "\uACF5\uAC1C \uD504\uB85C\uD544\uC5D0 \uAC8C\uC2DC \xB7 \uBE44\uC988\uB2C8\uC2A4 \uC6A9\uB3C4 \uCD94\uAC00 \uD655\uC778", verified: true }));
+  const previewPosts = posts.slice(0, 3).map((p) => ({ url: p.url, caption: String(p.caption).slice(0, 1e3), timestamp: p.timestamp, thumbnailUrl: String(p.displayUrl || ""), likesCount: Number.isFinite(p.likesCount) && p.likesCount >= 0 ? p.likesCount : null, commentsCount: Number.isFinite(p.commentsCount) && p.commentsCount >= 0 ? p.commentsCount : null, viewsCount: Number.isFinite(p.videoViewCount) && p.videoViewCount >= 0 ? p.videoViewCount : null }));
+  const followers = Number.isFinite(raw.followersCount) ? raw.followersCount : null;
+  return { accepted: true, handle: handle2, record: { handle: handle2, profile: source, name, source_url: source, excerpt: bio, checked, status: "new", body: "", approved_hash: "", sender_handle: "", reasons: ["\uACF5\uAC1C \uC790\uAE30\uC18C\uAC1C\uC5D0\uC11C \uD55C\uAD6D\uC778 \uC815\uCCB4\uC131 \uBA85\uC2DC \uD655\uC778", "\uD478\uB4DC\xB7\uC6F0\uB2C8\uC2A4\xB7\uB77C\uC774\uD504\uC2A4\uD0C0\uC77C \uAD00\uB828 \uACF5\uAC1C \uC8FC\uC81C \uD655\uC778", "\uCD5C\uADFC 120\uC77C \uB0B4 \uACF5\uAC1C \uAC8C\uC2DC\uBB3C \uD655\uC778"], uncertainties: ["\uACF5\uAC1C \uC790\uAE30\uC18C\uAC1C\uC5D0 \uAE30\uBC18 \xB7 \uBC95\uC801 \uAD6D\uC801 \uC11C\uB958\uC640 \uD55C\uAD6D \uD314\uB85C\uC6CC \uBE44\uC728\uC740 \uD655\uC778\uD558\uC9C0 \uC54A\uC74C", "\uACF5\uB3D9\uAD6C\uB9E4 \uC131\uACFC\xB7\uAC70\uB798 \uC870\uAC74 \uBBF8\uD655\uC778", ...posts.length < 3 ? ["\uCF58\uD150\uCE20 \uD45C\uBCF8 3\uAC1C \uBBF8\uB9CC \xB7 \uCD94\uAC00 \uC801\uD569\uC131 \uD655\uC778 \uD544\uC694"] : [], ...followers !== null && followers < 1e3 ? ["\uACF5\uAC1C \uD314\uB85C\uC6CC 1\uCC9C \uBA85 \uBBF8\uB9CC \xB7 \uD310\uB9E4 \uC801\uD569\uC131\uC740 \uBBF8\uD655\uC778"] : [], ...emails.length ? ["\uACF5\uAC1C \uC774\uBA54\uC77C \uC6A9\uB3C4\xB7\uC18C\uC720 \uAD00\uACC4\uB294 \uC81C\uC548 \uC804 \uAC80\uD1A0"] : ["\uACF5\uAC1C \uD504\uB85C\uD544 \uC774\uBA54\uC77C \uBBF8\uBC1C\uACAC \xB7 DM \uBCF4\uB958"]], result: { note: "Apify \uC120\uBCC4 \xB7 \uC5F0\uB77D\xB7\uBC1C\uC1A1 \uC5C6\uC74C" }, profile_preview: { status: "checked", checked, displayName: name, bio, avatarUrl: String(raw.profilePicUrlHD || raw.profilePicUrl || ""), followersText: followers === null ? "\uBBF8\uD655\uC778" : followers.toLocaleString("ko-KR") + "\uBA85", followersCount: followers, postsText: Number.isFinite(raw.postsCount) ? raw.postsCount + "\uAC1C \uAC8C\uC2DC\uBB3C" : "\uAC8C\uC2DC\uBB3C \uC218 \uBBF8\uD655\uC778", businessEmails, previewPosts, lastPostAt: new Date(latest).toISOString(), source, provider: "apify", runId: run, followingCount: Number.isFinite(raw.followsCount) ? raw.followsCount : null, isVerified: raw.verified === true, category: raw.businessCategoryName || null, koreanIdentityEvidence: { url: identityPost?.url || source, quote: identityPost ? String(identityPost.caption).slice(0, 1500) : "@" + handle2 + "\n" + name + "\n" + bio, checked, method: "explicit_public_self_description" }, koreanEvidence: korean.slice(0, 3).map((p) => ({ url: p.url, quote: String(p.caption).slice(0, 300) })) } } };
+}
+function apifyTrialService({ sb: sb2, query: query2, env: env2, audit: audit2, request = fetch }) {
+  async function remote2(path, body) {
+    const token = env2("APIFY_TOKEN");
+    if (!token) throw Error("APIFY_TOKEN \uC124\uC815 \uD544\uC694");
+    const r = await request("https://api.apify.com/v2/" + path, { method: body ? "POST" : "GET", headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" }, ...body ? { body: JSON.stringify(body) } : {}, signal: AbortSignal.timeout(2e4) });
+    if (!r.ok) throw Error("Apify HTTP " + r.status + " \xB7 \uBE44\uBC00 \uC751\uB2F5\uC740 \uAE30\uB85D\uD558\uC9C0 \uC54A\uC74C");
+    return await r.json();
+  }
+  async function tick() {
+    const rows = await query2(sb2.from("sanji_apify_creator_trials").select("*").in("status", ["pending", "running"]).order("created").limit(1));
+    let t = rows[0];
+    if (!t) return null;
+    if (t.lease_until && Date.parse(t.lease_until) > Date.now()) return { status: "busy" };
+    const claimed = await query2(sb2.from("sanji_apify_creator_trials").update({ lease_until: new Date(Date.now() + 9e4).toISOString(), updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", t.id).eq("updated", t.updated).select("*"));
+    if (!claimed.length) return { status: "busy" };
+    t = claimed[0];
+    const save = async (p) => {
+      await query2(sb2.from("sanji_apify_creator_trials").update({ ...p, lease_until: null, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", t.id));
+      return p;
+    };
+    try {
+      let runs = t.runs || [], last = runs.at(-1);
+      if (last?.status === "submitting") return await save({ status: "submission_unknown", error: "\uC2E4\uD589 \uC694\uCCAD \uACB0\uACFC \uBBF8\uD655\uC778 \xB7 \uC911\uBCF5 \uACFC\uAE08 \uBC29\uC9C0\uB97C \uC704\uD574 \uC790\uB3D9 \uC7AC\uC2DC\uB3C4 \uC548 \uD568" });
+      if (last && !last.ingested) {
+        const run2 = (await remote2("actor-runs/" + last.id)).data;
+        if (!["SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"].includes(run2.status)) {
+          if (run2.status !== "ABORTING" && Date.now() - Date.parse(run2.startedAt) > 3e5) await remote2("actor-runs/" + last.id + "/abort", {});
+          return await save({ status: "running" });
+        }
+        if (!Number.isFinite(run2.usageTotalUsd)) throw Error("Apify \uC2E4\uC81C \uC0AC\uC6A9\uC561 \uD655\uC778 \uBD88\uAC00 \xB7 \uCD94\uAC00 \uC720\uB8CC \uC2E4\uD589 \uC911\uC9C0");
+        last = { ...last, status: run2.status, costUsd: run2.usageTotalUsd, dataset: run2.defaultDatasetId };
+        runs = [...runs.slice(0, -1), last];
+        const items = await remote2("datasets/" + encodeURIComponent(run2.defaultDatasetId) + "/items?format=json&limit=100");
+        let accepted = Number(t.accepted), excluded2 = t.excluded || [];
+        const used = new Set((await query2(sb2.from("sanji_creator_prospects").select("handle").eq("owner", t.owner))).map((r) => r.handle));
+        excluded2 = excluded2.filter((r) => !used.has(r.handle));
+        const suppressed = new Set((await query2(sb2.from("sanji_suppression").select("identity").eq("owner", t.owner))).map((r) => String(r.identity).toLowerCase()));
+        for (const raw of items) {
+          const result = apifyCreator(raw, run2.id);
+          if (!result.accepted) {
+            excluded2.push({ handle: result.handle, reason: result.reason });
+            continue;
+          }
+          if (suppressed.has("instagram:" + result.handle) || (result.record.profile_preview.businessEmails || []).some((e) => suppressed.has("email:" + e.email))) {
+            excluded2.push({ handle: result.handle, reason: "\uC218\uC2E0 \uAC70\uBD80\xB7\uC5F0\uB77D \uC81C\uC678 \uBAA9\uB85D" });
+            continue;
+          }
+          if (used.has(result.handle) || accepted >= t.target) continue;
+          const r = await sb2.from("sanji_creator_prospects").insert({ owner: t.owner, ...result.record });
+          if (r.error) throw Error("\uC120\uBCC4 \uACB0\uACFC \uC800\uC7A5 \uC2E4\uD328 \xB7 \uC720\uB8CC \uC2E4\uD589 \uCD94\uAC00 \uC911\uC9C0");
+          used.add(result.handle);
+          accepted++;
+        }
+        last.ingested = true;
+        runs[runs.length - 1] = last;
+        const cost = Math.round(runs.reduce((n, r) => n + Number(r.costUsd || 0), 0) * 1e6) / 1e6, status = accepted >= t.target ? "complete" : runs.length >= t.queries.length ? "partial" : "pending";
+        await audit2(t.owner, "apify_creator_run_ingested", { run: run2.id, costUsd: run2.usageTotalUsd, accepted, raw: items.length, noMessagesSent: true });
+        return await save({ status, runs, cost_usd: cost, accepted, reviewed: t.reviewed + items.length, excluded: excluded2 });
+      }
+      if (runs.length >= t.queries.length) return await save({ status: "partial" });
+      if (runs.some((r) => !Number.isFinite(Number(r.ingested ? r.costUsd : r.capUsd)) || Number(r.ingested ? r.costUsd : r.capUsd) < 0)) throw Error("\uD655\uC815 \uC0AC\uC6A9\uC561 \uD655\uC778 \uBD88\uAC00 \xB7 \uCD94\uAC00 \uC720\uB8CC \uC2E4\uD589 \uC911\uC9C0");
+      const reserved = runs.reduce((n, r) => n + Number(r.ingested ? r.costUsd : r.capUsd), 0), remaining = Number(t.budget_usd) - reserved, cap = Math.min(0.11, Math.floor(remaining * 1e6) / 1e6);
+      if (cap < 3e-3) return await save({ status: "budget_exhausted" });
+      if (reserved + cap > Number(t.budget_usd) + 1e-6) return await save({ status: "budget_exhausted" });
+      const keyword = t.queries[runs.length];
+      runs = [...runs, { query: keyword, capUsd: cap, status: "submitting" }];
+      await query2(sb2.from("sanji_apify_creator_trials").update({ runs, status: "running", updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", t.id));
+      const run = (await remote2("acts/apify~instagram-scraper/runs?maxTotalChargeUsd=" + cap + "&maxItems=" + Math.min(35, Math.floor(cap / 27e-4)) + "&timeout=300", { search: keyword, searchType: "profile", searchLimit: Math.min(35, Math.floor(cap / 27e-4)), resultsType: "details", resultsLimit: 1, addParentData: false })).data;
+      runs[runs.length - 1] = { ...runs.at(-1), id: run.id, status: run.status };
+      return await save({ status: "running", runs });
+    } catch (e) {
+      return await save({ status: "failed", error: String(e.message).slice(0, 160) });
+    }
+  }
+  return { tick };
+}
+
 // supabase/functions/_shared/gmail-signature-sync.ts
 function gmailSignatureSync({ sb: sb2, query: query2, getSignature, audit: audit2 }) {
   return async () => {
@@ -1003,7 +1103,7 @@ function creatorDiscoveryService({ sb: sb2, query: query2, audit: audit2, env: e
     if (path === "/creator-discovery" && method === "GET") {
       const recent = await query2(sb2.from("sanji_creator_prospects").select("checked").eq("owner", owner).gte("checked", new Date(Date.now() - 48 * 36e5).toISOString()).limit(1e3));
       const day2 = (time) => new Date(time + 9 * 36e5).toISOString().slice(0, 10), today = day2(Date.now()), yesterday = day2(Date.now() - 864e5);
-      return { apify: { configured: !!env2("APIFY_TOKEN"), trialBudgetUsd: 0.35, target: 30 }, config: safe(await get(owner)), counts: { today: recent.filter((r) => day2(Date.parse(r.checked)) === today).length, yesterday: recent.filter((r) => day2(Date.parse(r.checked)) === yesterday).length }, prospects: await query2(sb2.from("sanji_creator_prospects").select("*").eq("owner", owner).order("checked", { ascending: false }).limit(300)) };
+      return { apify: { configured: !!env2("APIFY_TOKEN"), trialBudgetUsd: 0.35, target: 30, trial: (await query2(sb2.from("sanji_apify_creator_trials").select("id,status,budget_usd,target,accepted,reviewed,cost_usd,runs,excluded,error,updated").eq("owner", owner).order("created", { ascending: false }).limit(1)))[0] || null }, config: safe(await get(owner)), counts: { today: recent.filter((r) => day2(Date.parse(r.checked)) === today).length, yesterday: recent.filter((r) => day2(Date.parse(r.checked)) === yesterday).length }, prospects: await query2(sb2.from("sanji_creator_prospects").select("*").eq("owner", owner).order("checked", { ascending: false }).limit(300)) };
     }
     const b = await input();
     if (path === "/creator-discovery/settings" && method === "POST") {
@@ -2565,6 +2665,7 @@ var syncRequestedGmailSignature = gmailSignatureSync({ sb, query, getSignature: 
 var emailTracking = emailTrackingService({ sb, query, env, audit, baseUrl: env("SUPABASE_URL") + "/functions/v1/" + (env("WORKSPACE_FUNCTION_NAME") || "bright-function") });
 var notifyOwner = discoveryCompletionNotifier({ sb, query, gmailToken, remote, audit, env });
 var creatorDiscovery = creatorDiscoveryService({ sb, query, audit, env });
+var apifyTrials = apifyTrialService({ sb, query, env, audit });
 var saveManualReply = manualReplyService({ sb, query, putRecord, audit });
 var creatorLocal = creatorLocalService({ sb, query, audit, encrypt, decrypt, putRecord });
 var creatorServer = creatorServerService({ sb, query, encrypt, decrypt, audit, creatorLocal, creatorDiscovery });
@@ -3036,7 +3137,8 @@ Deno.serve(async (req) => {
     }
     if (path === "/creator-discovery/tick" && req.method === "POST") {
       if (!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403, "\uBC1C\uAD74 \uC2E4\uD589\uAE30 \uC778\uC99D \uC2E4\uD328");
-      return json(await creatorDiscovery.scheduled());
+      const apify = await apifyTrials.tick();
+      return json(apify || { status: "disabled", reason: "\uAE30\uC874 \uC790\uB3D9 \uAC80\uC0C9 \uC911\uB2E8 \xB7 \uC2B9\uC778\uB41C Apify \uC2DC\uD5D8\uB9CC \uC2E4\uD589" });
     }
     if (path === "/gmail/tick" && req.method === "POST") {
       if (!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403, "\uD68C\uC2E0 \uB3D9\uAE30\uD654 \uC2E4\uD589\uAE30 \uC778\uC99D \uC2E4\uD328");

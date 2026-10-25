@@ -52,3 +52,5 @@ fs.copyFileSync("supabase/migrations/202610220007_creator_outreach.sql", "public
 
 fs.copyFileSync("supabase/migrations/202610230001_gmail_sync.sql", "public/setup/gmail-sync.sql");
 fs.copyFileSync("supabase/migrations/202610230002_mail_review.sql", "public/setup/mail-review.sql");
+
+fs.copyFileSync("supabase/migrations/202610250002_apify_creator_trials.sql", "public/setup/apify-creator-trials.sql");
