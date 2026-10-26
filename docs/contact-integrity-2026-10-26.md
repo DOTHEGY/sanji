@@ -1,6 +1,6 @@
 # Contact integrity incident review — 2026-10-26
 
-Status: local implementation and no-send validation. Not deployed. No production rows changed and no mail sent.
+Status: deployed with owner approval on 2026-10-26. `bright-function` v109 ACTIVE. Five exact DSN-confirmed addresses inserted into suppression; existing opt-outs and histories preserved. No mail sent.
 
 ## Confirmed from saved production evidence
 
@@ -27,10 +27,10 @@ Status: local implementation and no-send validation. Not deployed. No production
 - The cached evidence contains the extraction artifact, so raw historical tag layout cannot be reconstructed conclusively from the cache alone. The inline-boundary defect is reproduced by HTML fixtures.
 - No active queue needs alteration at this snapshot. Existing sent history remains unchanged. Future jobs need the updated Edge bundle deployed before these new guards apply.
 
-## Proposed production scope (requires separate approval)
+## Approved production scope and result
 
-1. Deploy the updated `bright-function` bundle only; no schema or paid service needed.
-2. Back up and insert the five exact incident DSN addresses into suppression if absent; do not modify opt-outs, other addresses or sent records.
-3. Re-run read-only stored-contact validation; move any newly queued affected jobs to review only with approved scope. No dispatch or automatic restart as part of deployment.
+1. Deployed the updated `bright-function` bundle as v109 ACTIVE; no schema or paid service needed.
+2. Backed up suppression state and inserted the five exact incident DSN addresses, derived from structured saved DSNs. Verified all five rows. Existing opt-outs, other addresses and sent records were not modified.
+3. Read-only inspection confirmed zero active jobs (58 completed). No queue mutation, dispatch or automatic restart. The stored-contact validation and no-send regressions were completed before deployment.
 
 Rollback: redeploy the previous Edge bundle. The suppression insertion is address-specific and should normally remain; if a proven erroneous insertion must be undone, remove only rows created by this approved repair after checking that their reasons have not changed. Never remove existing opt-outs. Private evidence snapshots are stored outside the repository under `/workspace/results/contact-incident/`.
