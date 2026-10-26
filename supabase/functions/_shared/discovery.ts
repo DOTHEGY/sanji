@@ -1,3 +1,4 @@
+import {unsafeContactReason} from "./contact-safety.ts";
 import {realProductName,productDetailUrl} from "./mail-integrity.ts";
 const marketHosts = ["coupang.com","naver.com","smartstore.naver.com","gmarket.co.kr","11st.co.kr","auction.co.kr","lotteon.com","ssg.com","tmon.co.kr","wemakeprice.com","danawa.com","cafe24.com"];
 export const companyIdentity = (v: string) => v.normalize("NFKC").toLowerCase().replace(/주식회사|\(주\)|㈜|[\s.,·()_-]/g, "");
@@ -25,7 +26,7 @@ function attribute(tag:string,name:string) {
   return match?decodeHtml(match[1]??match[2]??match[3]??""):"";
 }
 export function parseOfficialPage(html: string, source: string, checked: string) {
-  const visible=html.replace(/<\/?(?:span|b|strong|em|i|wbr)\b[^>]*>/gi,"").replace(/<!--[\s\S]*?-->/g," ").replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi," ");
+  const visible=html.replace(/<span\b[^>]*>(\.[a-z]{2,})<\/span>/gi,"$1").replace(/<\/?(?:span|b|strong|em|i|wbr)\b[^>]*>/gi," ").replace(/<!--[\s\S]*?-->/g," ").replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi," ");
   const text=plainHtml(visible),host=publicUrl(source).hostname.replace(/^www\./,"");
   const footerStart=visible.search(/<(?:footer\b|(?:div|section)\b[^>]*(?:id|class)\s*=\s*["'][^"']*footer)/i);
   const footerHtml=footerStart>=0?visible.slice(footerStart):"";
@@ -42,6 +43,8 @@ export function parseOfficialPage(html: string, source: string, checked: string)
     const at=text.toLowerCase().indexOf(email.toLowerCase()),context=at<0?"":text.slice(Math.max(0,at-100),at+email.length+100);
     const block=blocks.filter(v=>v.toLowerCase().includes(email.toLowerCase())).sort((a,b)=>a.length-b.length)[0]||email;
     const domain=email.split("@")[1]?.toLowerCase(),ownerMatch=domain===host||host.endsWith("."+domain)||domain.endsWith("."+host);
+    const unsafe=unsafeContactReason(email,block.length<500?block:context);
+    if(unsafe){rejected.push({email,reason:unsafe,source});continue;}
     const unrelated=/[._-]it@/i.test(email)||/^(user|example|test|sample|noreply|no-reply|privacy|hr|recruit|recruitment|jobs|career|security|dpo|techsupport|webmaster|postmaster|hostmaster|abuse|it)@/i.test(email)||(/개인정보(?:보호책임|관리|담당|\s*문의)|정보보호(?:책임|담당)|채용|인사담당/.test(block)&&!/(고객센터|대표\s*(?:메일|이메일)|제휴\s*(?:문의|메일))/.test(block));
     const platformMail=/@(coupang\.com|navercorp\.com|cafe24\.com|cafe24corp\.com|gmarket\.co\.kr|godo\.co\.kr|godomall\.com|nhn-commerce\.com|nhncommerce\.com|makeshop\.co\.kr|connectwave\.co\.kr|gabia\.com)$/i.test(email)&&/호스팅|쇼핑몰 솔루션|통신판매중개|플랫폼 운영|전자결제|결제대행|에스크로|카페24|Cafe24|NHN커머스/i.test(block);
     if(unrelated||platformMail){rejected.push({email,reason:unrelated?"예시·수신불가·개인정보·채용 용도":"플랫폼 운영사 이메일이며 제안 대상 회사와 다름",source});continue;}

@@ -14,6 +14,9 @@ export function gmailMessages(remoteThread:any,account:string,old:any[],textBody
  return {id:m.id,...(old.find(o=>o.id===m.id)?.outboxId?{outboxId:old.find(o=>o.id===m.id).outboxId}:{}),messageId:h["message-id"]||"",references:h.references||"",inReplyTo:h["in-reply-to"]||"",subject:h.subject||"",from:h.from||"",replyToHeader:h["reply-to"]||"",replyAddress:mailbox(h["reply-to"]||h.from||""),out:(m.labelIds||[]).includes("SENT")||mailbox(h.from||"").toLowerCase()===account.toLowerCase(),recordOrigin:"gmail_sync",to:h.to||"",cc:h.cc||"",text:textBody(m.payload)||m.snippet||"[본문 미지원]",hasAttachments:hasAttachments(m.payload),at:new Date(Number(m.internalDate)).toISOString(),automatic,bounceFailures:failures};
  }).sort((a:any,b:any)=>a.at.localeCompare(b.at));}
 export function gmailSyncService({sb,query,records,putRecord,gmailToken,remote,textBody,gmailHasAttachments}:any){
+ async function rememberFailures(owner:string,messages:any[]){
+  for(const f of messages.flatMap(m=>m.bounceFailures||[]))if(f.kind==="permanent"&&f.source==="delivery_status"&&/^5\./.test(f.status||""))await query(sb.from("sanji_suppression").upsert({owner,identity:"email:"+f.email.toLowerCase(),reason:"영구 반송 DSN "+f.status},{onConflict:"owner,identity",ignoreDuplicates:true}));
+ }
  async function sync(owner:string){
   const claimed=await query(sb.rpc("sanji_claim_gmail_sync",{p_owner:owner})),state=Array.isArray(claimed)?claimed[0]:claimed;
   if(!state?.owner)return {status:"busy",imported:0};
@@ -24,6 +27,7 @@ export function gmailSyncService({sb,query,records,putRecord,gmailToken,remote,t
    const start=Number(state?.cursor||0)%Math.max(1,threads.length),batch=threads.slice(start,start+25),errors:any[]=[];let imported=0,humanReplies=0;
    for(let offset=0;offset<batch.length;offset+=4)await Promise.all(batch.slice(offset,offset+4).map(async(t:any)=>{
     try{const rt=await remote("https://gmail.googleapis.com/gmail/v1/users/me/threads/"+encodeURIComponent(t.providerId)+"?format=full",{headers:{Authorization:"Bearer "+g.access_token}}),messages=gmailMessages(rt,g.email,t.messages||[],textBody,gmailHasAttachments),inbound=messages.filter((m:any)=>!m.out&&!m.automatic);
+     await rememberFailures(owner,messages);
      const opted=inbound.some((m:any)=>/수신\s*거부(합니다|할게|해\s*주세요|요청합니다)|^\s*수신\s*거부[.!]?\s*$|unsubscribe\s+me|please\s+(unsubscribe|stop)|연락.{0,8}(중단해|그만해|하지\s*마)/im.test(m.text));
      if(JSON.stringify(t.messages||[])!==JSON.stringify(messages)||(opted&&t.classification!=="수신 거부"))await putRecord(owner,"thread",{...t,messages,classification:opted?"수신 거부":t.classification,synced:now},t.id);
      if(opted){const c=candidates.find((c:any)=>c.id===t.target);if(c){for(const email of c.recipientEmails?.length?c.recipientEmails:[c.contact?.email])if(email)await query(sb.from("sanji_suppression").upsert({owner,identity:"email:"+email.toLowerCase(),reason:"수신 메일의 수신 거부 요청"},{onConflict:"owner,identity"}));await putRecord(owner,"candidate",{...c,status:"수신 거부"},c.id);}}
@@ -34,6 +38,7 @@ if(inbound.length){humanReplies++;const c=candidates.find((c:any)=>c.id===t.targ
    if(start===0){
     try{const listing=await remote("https://gmail.googleapis.com/gmail/v1/users/me/messages?"+new URLSearchParams({q:"{from:mailer-daemon from:postmaster} newer_than:90d",maxResults:"30"}),{headers:{Authorization:"Bearer "+g.access_token}});
      for(const entry of listing.messages||[]){const rm=await remote("https://gmail.googleapis.com/gmail/v1/users/me/messages/"+encodeURIComponent(entry.id)+"?format=full",{headers:{Authorization:"Bearer "+g.access_token}}),failures=deliveryFailures(rm.payload);if(!failures.length)continue;
+      await rememberFailures(owner,[{bounceFailures:failures}]);
       const c=candidates.find((c:any)=>failures.some((f:any)=>(c.recipientEmails||[c.contact?.email]).some((e:string)=>String(e).toLowerCase()===f.email)));if(!c)continue;
       const old=(await records(owner,"thread")).find((t:any)=>t.channel==="email"&&t.providerId===rm.threadId),messages=gmailMessages({messages:[rm]},g.email,old?.messages||[],textBody,gmailHasAttachments);
       const merged=[...(old?.messages||[]).filter((m:any)=>m.id!==rm.id),...messages].sort((a:any,b:any)=>a.at.localeCompare(b.at));

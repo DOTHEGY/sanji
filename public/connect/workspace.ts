@@ -576,6 +576,9 @@ function gmailMessages(remoteThread, account, old, textBody2, hasAttachments) {
   }).sort((a, b) => a.at.localeCompare(b.at));
 }
 function gmailSyncService({ sb: sb2, query: query2, records: records2, putRecord: putRecord2, gmailToken: gmailToken2, remote: remote2, textBody: textBody2, gmailHasAttachments: gmailHasAttachments2 }) {
+  async function rememberFailures(owner, messages) {
+    for (const f of messages.flatMap((m) => m.bounceFailures || [])) if (f.kind === "permanent" && f.source === "delivery_status" && /^5\./.test(f.status || "")) await query2(sb2.from("sanji_suppression").upsert({ owner, identity: "email:" + f.email.toLowerCase(), reason: "\uC601\uAD6C \uBC18\uC1A1 DSN " + f.status }, { onConflict: "owner,identity", ignoreDuplicates: true }));
+  }
   async function sync(owner) {
     const claimed = await query2(sb2.rpc("sanji_claim_gmail_sync", { p_owner: owner })), state = Array.isArray(claimed) ? claimed[0] : claimed;
     if (!state?.owner) return { status: "busy", imported: 0 };
@@ -588,6 +591,7 @@ function gmailSyncService({ sb: sb2, query: query2, records: records2, putRecord
       for (let offset = 0; offset < batch.length; offset += 4) await Promise.all(batch.slice(offset, offset + 4).map(async (t) => {
         try {
           const rt = await remote2("https://gmail.googleapis.com/gmail/v1/users/me/threads/" + encodeURIComponent(t.providerId) + "?format=full", { headers: { Authorization: "Bearer " + g.access_token } }), messages = gmailMessages(rt, g.email, t.messages || [], textBody2, gmailHasAttachments2), inbound = messages.filter((m) => !m.out && !m.automatic);
+          await rememberFailures(owner, messages);
           const opted = inbound.some((m) => /수신\s*거부(합니다|할게|해\s*주세요|요청합니다)|^\s*수신\s*거부[.!]?\s*$|unsubscribe\s+me|please\s+(unsubscribe|stop)|연락.{0,8}(중단해|그만해|하지\s*마)/im.test(m.text));
           if (JSON.stringify(t.messages || []) !== JSON.stringify(messages) || opted && t.classification !== "\uC218\uC2E0 \uAC70\uBD80") await putRecord2(owner, "thread", { ...t, messages, classification: opted ? "\uC218\uC2E0 \uAC70\uBD80" : t.classification, synced: now2 }, t.id);
           if (opted) {
@@ -614,6 +618,7 @@ function gmailSyncService({ sb: sb2, query: query2, records: records2, putRecord
           for (const entry of listing.messages || []) {
             const rm = await remote2("https://gmail.googleapis.com/gmail/v1/users/me/messages/" + encodeURIComponent(entry.id) + "?format=full", { headers: { Authorization: "Bearer " + g.access_token } }), failures = deliveryFailures(rm.payload);
             if (!failures.length) continue;
+            await rememberFailures(owner, [{ bounceFailures: failures }]);
             const c = candidates.find((c2) => failures.some((f) => (c2.recipientEmails || [c2.contact?.email]).some((e) => String(e).toLowerCase() === f.email)));
             if (!c) continue;
             const old = (await records2(owner, "thread")).find((t) => t.channel === "email" && t.providerId === rm.threadId), messages = gmailMessages({ messages: [rm] }, g.email, old?.messages || [], textBody2, gmailHasAttachments2);
@@ -634,6 +639,28 @@ function gmailSyncService({ sb: sb2, query: query2, records: records2, putRecord
     }
   }
   return { sync };
+}
+
+// supabase/functions/_shared/contact-safety.ts
+function unsafeContactReason(email, context = "") {
+  const value = String(email || "").trim().toLowerCase(), local = value.split("@")[0];
+  if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(value)) return "\uC774\uBA54\uC77C \uD615\uC2DD \uC624\uB958";
+  if (/^(?:user(?:name)?|your[._-]?email|example|sample|test|email|name)(?:[._-]?\d+)?$/.test(local) || /^(?:jumpit|saramin)[._-]id\d+$/i.test(local) || /@(?:example\.(?:com|org|net)|domain\.(?:com|co\.kr))$/.test(value)) return "\uC785\uB825 \uC608\uC2DC\xB7\uC0D8\uD50C \uC8FC\uC18C";
+  if (/^(?:enquiries|line|directly)sales@/i.test(value) && /coherentmarketinsights\.com$/.test(value)) return "\uC8FC\uBCC0 \uC548\uB0B4 \uBB38\uAD6C\uC640 \uC774\uBA54\uC77C\uC774 \uACB0\uD569\uB41C \uCD94\uCD9C \uC624\uB958";
+  const at = context.toLowerCase().indexOf(value), near = at < 0 ? context : context.slice(Math.max(0, at - 65), at + value.length + 85);
+  const after = at < 0 ? "" : context.slice(at + value.length, at + value.length + 65), before = at < 0 ? "" : context.slice(Math.max(0, at - 60), at);
+  if (/^(?:\s*(?:은|는|을|를))?\s*(?:형식|형태).{0,20}(?:입력|따라)/i.test(after) || /(?:예시|입력\s*예|샘플|example|e\.g\.|placeholder)\s*[:：]?\s*[^@\n]{0,40}$/i.test(before) || /(?:saramin_id\d+).{0,30}jumpit_id\d+/i.test(near)) return "\uC5F0\uB77D\uCC98\uAC00 \uC544\uB2CC \uC785\uB825 \uD615\uC2DD\xB7\uACC4\uC815 \uC608\uC2DC";
+  return "";
+}
+function excludedBusinessSource(website, pages = []) {
+  let host = "";
+  try {
+    host = new URL(website).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+  if (["saramin.co.kr", "jobkorea.co.kr", "coherentmarketinsights.com"].some((h) => host === h || host.endsWith("." + h))) return "\uCC44\uC6A9\xB7\uC2DC\uC7A5\uC870\uC0AC \uC11C\uBE44\uC2A4 \uC6B4\uC601\uC0AC \xB7 \uC2DD\uD488 \uBE0C\uB79C\uB4DC \uC81C\uC548 \uB300\uC0C1 \uC544\uB2D8";
+  return "";
 }
 
 // supabase/functions/_shared/discovery.ts
@@ -673,7 +700,7 @@ function attribute(tag, name) {
   return match ? decodeHtml(match[1] ?? match[2] ?? match[3] ?? "") : "";
 }
 function parseOfficialPage(html, source, checked) {
-  const visible = html.replace(/<\/?(?:span|b|strong|em|i|wbr)\b[^>]*>/gi, "").replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi, " ");
+  const visible = html.replace(/<span\b[^>]*>(\.[a-z]{2,})<\/span>/gi, "$1").replace(/<\/?(?:span|b|strong|em|i|wbr)\b[^>]*>/gi, " ").replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi, " ");
   const text2 = plainHtml(visible), host = publicUrl(source).hostname.replace(/^www\./, "");
   const footerStart = visible.search(/<(?:footer\b|(?:div|section)\b[^>]*(?:id|class)\s*=\s*["'][^"']*footer)/i);
   const footerHtml = footerStart >= 0 ? visible.slice(footerStart) : "";
@@ -698,6 +725,11 @@ function parseOfficialPage(html, source, checked) {
     const at = text2.toLowerCase().indexOf(email.toLowerCase()), context = at < 0 ? "" : text2.slice(Math.max(0, at - 100), at + email.length + 100);
     const block = blocks.filter((v) => v.toLowerCase().includes(email.toLowerCase())).sort((a, b) => a.length - b.length)[0] || email;
     const domain = email.split("@")[1]?.toLowerCase(), ownerMatch = domain === host || host.endsWith("." + domain) || domain.endsWith("." + host);
+    const unsafe2 = unsafeContactReason(email, block.length < 500 ? block : context);
+    if (unsafe2) {
+      rejected.push({ email, reason: unsafe2, source });
+      continue;
+    }
     const unrelated = /[._-]it@/i.test(email) || /^(user|example|test|sample|noreply|no-reply|privacy|hr|recruit|recruitment|jobs|career|security|dpo|techsupport|webmaster|postmaster|hostmaster|abuse|it)@/i.test(email) || /개인정보(?:보호책임|관리|담당|\s*문의)|정보보호(?:책임|담당)|채용|인사담당/.test(block) && !/(고객센터|대표\s*(?:메일|이메일)|제휴\s*(?:문의|메일))/.test(block);
     const platformMail = /@(coupang\.com|navercorp\.com|cafe24\.com|cafe24corp\.com|gmarket\.co\.kr|godo\.co\.kr|godomall\.com|nhn-commerce\.com|nhncommerce\.com|makeshop\.co\.kr|connectwave\.co\.kr|gabia\.com)$/i.test(email) && /호스팅|쇼핑몰 솔루션|통신판매중개|플랫폼 운영|전자결제|결제대행|에스크로|카페24|Cafe24|NHN커머스/i.test(block);
     if (unrelated || platformMail) {
@@ -892,6 +924,8 @@ function assessMailLead(lead, permanentFailures = []) {
   const d = lead?.data || lead || {}, o = d.outreach || {}, pages = d.publicEvidence || [], brand = o.brandName || d.name || d.company || "", reasons = [], contacts = [], excluded2 = [];
   if (!validBrandName(brand)) reasons.push("\uAC80\uC99D\uB41C \uBE0C\uB79C\uB4DC\xB7\uD68C\uC0AC\uBA85 \uB300\uC2E0 \uAE30\uC0AC \uC81C\uBAA9\xB7\uB9E4\uCCB4\uBA85\xB7\uBA54\uB274\uAC00 \uC800\uC7A5\uB428");
   if (editorialSource(d.website, pages)) reasons.push("\uAE30\uC0AC\xB7\uC5B8\uB860\uC0AC\xB7\uC911\uAC04 \uC0AC\uC774\uD2B8\uB294 \uBC1C\uACAC \uCD9C\uCC98\uC774\uBA70 \uBE0C\uB79C\uB4DC \uC5F0\uB77D\uCC98 \uCD9C\uCC98\uAC00 \uC544\uB2D8");
+  const scopeReason = excludedBusinessSource(d.website, pages);
+  if (scopeReason) reasons.push(scopeReason);
   const trusted = officialOrigins(d), trustedPages = pages.filter((p) => {
     try {
       return trusted.has(new URL(p.url).hostname.replace(/^www\./, "")) && !editorialSource(p.url, pages);
@@ -908,11 +942,13 @@ function assessMailLead(lead, permanentFailures = []) {
       sameHost = source.protocol === "https:" && (trusted.has(sh) || sh === h || sh.endsWith("." + h) && c.linkedFrom && new URL(c.linkedFrom).hostname.replace(/^www\./, "") === h);
     } catch {
     }
+    const unsafe2 = unsafeContactReason(email, c.context || "");
+    if (unsafe2) why.push(unsafe2);
     if (c.excluded || c.excludeFromOutreach) why.push("\uC774\uBBF8 \uC81C\uC678\uB41C \uC8FC\uC18C");
     if (permanentFailures.includes(email)) why.push("\uC0AC\uC6A9\uC790 \uD655\uC778 \uC601\uAD6C \uBC18\uC1A1 \uC8FC\uC18C \xB7 \uC8FC\uC18C \uB2E8\uC704 \uC81C\uC678");
     if (editorialSource(c.source, pages)) why.push("\uC5B8\uB860\uC0AC\xB7\uAE30\uC790\xB7\uC911\uAC04 \uC0AC\uC774\uD2B8 \uC5F0\uB77D\uCC98");
     if (/^(?:privacy|recruit|career|jobs|dpo|postmaster|noreply)(?:[._-]|$)/i.test(email.split("@")[0]) || /개인정보.{0,10}(?:담당|책임|관리)|고충처리|기자\s*(?:메일|이메일)|취재\s*문의|보도자료\s*(?:문의|접수)/.test(c.context || "") && !/고객센터|대표\s*(?:메일|이메일)|제휴\s*(?:메일|문의)/.test(c.context || "")) why.push("\uAC1C\uC778\uC815\uBCF4\xB7\uC5B8\uB860 \uC804\uC6A9 \uB4F1 \uC601\uC5C5\uACFC \uBB34\uAD00\uD55C \uC6A9\uB3C4");
-    const page = pages.find((p) => p.url === c.source), posted = exactEmailIn([c.context, page?.excerpt, home?.excerpt].filter(Boolean).join(" "), email);
+    const page = pages.find((p) => p.url === c.source), posted = !!page && exactEmailIn([c.context, page.excerpt].filter(Boolean).join(" "), email);
     if (!Number.isFinite(Date.parse(c.checked || "")) || Date.parse(c.checked) < Date.now() - 30 * 864e5) why.push("\uC5F0\uB77D\uCC98 \uC6D0\uBB38 \uD655\uC778\uC77C \uBBF8\uAE30\uB85D\xB730\uC77C \uACBD\uACFC \xB7 \uCE90\uC2DC \uC7AC\uD655\uC778 \uD544\uC694");
     if (!sameHost || !homeMatches || !posted) why.push("\uACF5\uC2DD \uBE0C\uB79C\uB4DC \uC0AC\uC774\uD2B8\uC758 \uD68C\uC0AC\u2013\uC774\uBA54\uC77C \uAC8C\uC2DC \uAD00\uACC4 \uD655\uC778 \uD544\uC694");
     if (why.length) excluded2.push({ ...c, email, reasons: why });
@@ -926,7 +962,7 @@ function assessMailLead(lead, permanentFailures = []) {
 function assessDispatch(d, c, lead, failures = [], replyAddresses = []) {
   const check = assessMailLead(lead || { ...c, website: c.website, contacts: [{ ...c.contact, email: c.contact?.email, context: c.contact?.context || "" }], publicEvidence: c.officialEvidence || [] }, failures), reasons = [...check.reasons];
   const recipients = (d.emails?.length ? d.emails : [d.email]).map((e) => String(e).toLowerCase()), allowed = /* @__PURE__ */ new Set([...check.contacts.map((c2) => c2.email), ...check.allowed ? replyAddresses : []]);
-  if (recipients.some((e) => !allowed.has(e))) reasons.push("\uC2B9\uC778 \uCD08\uC548 \uC218\uC2E0\uC790\uC5D0 \uD68C\uC0AC \uAD00\uACC4 \uBBF8\uAC80\uC99D\xB7\uBC18\uC1A1\xB7\uC81C\uC678 \uC8FC\uC18C \uD3EC\uD568");
+  if (recipients.some((e) => !allowed.has(e) || failures.includes(e) || !!unsafeContactReason(e))) reasons.push("\uC2B9\uC778 \uCD08\uC548 \uC218\uC2E0\uC790\uC5D0 \uD68C\uC0AC \uAD00\uACC4 \uBBF8\uAC80\uC99D\xB7\uBC18\uC1A1\xB7\uC81C\uC678 \uC8FC\uC18C \uD3EC\uD568");
   if (!validBrandName(d.targetName || c.name)) reasons.push("\uC778\uC0AC\uB9D0 \uB300\uC0C1 \uBE0C\uB79C\uB4DC\xB7\uD68C\uC0AC\uBA85 \uBBF8\uAC80\uC99D");
   if (duplicateParagraphs(d.body).length) reasons.push("\uBCF8\uBB38 \uBB38\uB2E8\xB7\uD06C\uB9AC\uC5D0\uC774\uD130 \uC790\uB8CC \uC81C\uACF5 \uC548\uB0B4 \uC911\uBCF5");
   const productNames = [...String(d.body || "").matchAll(/[‘']([^’'\n]+)[’']\s*제품/g)].map((m) => m[1]);

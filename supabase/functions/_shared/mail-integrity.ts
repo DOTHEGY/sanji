@@ -1,3 +1,4 @@
+import {unsafeContactReason,excludedBusinessSource} from "./contact-safety.ts";
 import {companyIdentity} from "./discovery.ts";
 
 const discoveryOnlyHosts=["blog.naver.com","post.naver.com","tistory.com","medium.com","brunch.co.kr"];
@@ -39,14 +40,16 @@ export function assessMailLead(lead:any,permanentFailures:string[]=[]){
  const d=lead?.data||lead||{},o=d.outreach||{},pages=d.publicEvidence||[],brand=o.brandName||d.name||d.company||"",reasons:string[]=[],contacts:any[]=[],excluded:any[]=[];
  if(!validBrandName(brand))reasons.push("검증된 브랜드·회사명 대신 기사 제목·매체명·메뉴가 저장됨");
  if(editorialSource(d.website,pages))reasons.push("기사·언론사·중간 사이트는 발견 출처이며 브랜드 연락처 출처가 아님");
+ const scopeReason=excludedBusinessSource(d.website,pages);if(scopeReason)reasons.push(scopeReason);
  const trusted=officialOrigins(d),trustedPages=pages.filter((p:any)=>{try{return trusted.has(new URL(p.url).hostname.replace(/^www\./,""))&&!editorialSource(p.url,pages);}catch{return false;}});
  const identity=companyIdentity(brand),home=trustedPages[0],homeMatches=!!identity&&trustedPages.some((p:any)=>[p.title,p.description].some(v=>companyIdentity(String(v||"")).includes(identity)));
  for(const c of d.contacts||[]){const email=String(c.email||"").toLowerCase(),why:string[]=[];let sameHost=false;try{const source=new URL(c.source),site=new URL(d.website),sh=source.hostname.replace(/^www\./,""),h=site.hostname.replace(/^www\./,"");sameHost=source.protocol==="https:"&&(trusted.has(sh)||sh===h||(sh.endsWith("."+h)&&c.linkedFrom&&new URL(c.linkedFrom).hostname.replace(/^www\./,"")===h));}catch{}
+ const unsafe=unsafeContactReason(email,c.context||"");if(unsafe)why.push(unsafe);
  if(c.excluded||c.excludeFromOutreach)why.push("이미 제외된 주소");
  if(permanentFailures.includes(email))why.push("사용자 확인 영구 반송 주소 · 주소 단위 제외");
  if(editorialSource(c.source,pages))why.push("언론사·기자·중간 사이트 연락처");
  if(/^(?:privacy|recruit|career|jobs|dpo|postmaster|noreply)(?:[._-]|$)/i.test(email.split('@')[0])||(/개인정보.{0,10}(?:담당|책임|관리)|고충처리|기자\s*(?:메일|이메일)|취재\s*문의|보도자료\s*(?:문의|접수)/.test(c.context||"")&&!/고객센터|대표\s*(?:메일|이메일)|제휴\s*(?:메일|문의)/.test(c.context||"")))why.push("개인정보·언론 전용 등 영업과 무관한 용도");
- const page=pages.find((p:any)=>p.url===c.source),posted=exactEmailIn([c.context,page?.excerpt,home?.excerpt].filter(Boolean).join(" "),email);
+ const page=pages.find((p:any)=>p.url===c.source),posted=!!page&&exactEmailIn([c.context,page.excerpt].filter(Boolean).join(" "),email);
  if(!Number.isFinite(Date.parse(c.checked||""))||Date.parse(c.checked)<Date.now()-30*86400000)why.push("연락처 원문 확인일 미기록·30일 경과 · 캐시 재확인 필요");
  if(!sameHost||!homeMatches||!posted)why.push("공식 브랜드 사이트의 회사–이메일 게시 관계 확인 필요");
  if(why.length)excluded.push({...c,email,reasons:why});else contacts.push({...c,email,verification:{brand,officialSite:d.website,source:c.source,checked:c.checked,method:"official_cached_publication",domainOnly:false}});
@@ -58,7 +61,7 @@ export function assessMailLead(lead:any,permanentFailures:string[]=[]){
 }
 export function assessDispatch(d:any,c:any,lead:any,failures:string[]=[],replyAddresses:string[]=[]){const check=assessMailLead(lead||{...c,website:c.website,contacts:[{...c.contact,email:c.contact?.email,context:c.contact?.context||""}],publicEvidence:c.officialEvidence||[]},failures),reasons=[...check.reasons];
  const recipients=(d.emails?.length?d.emails:[d.email]).map((e:string)=>String(e).toLowerCase()),allowed=new Set([...check.contacts.map((c:any)=>c.email),...(check.allowed?replyAddresses:[])]);
- if(recipients.some((e:string)=>!allowed.has(e)))reasons.push("승인 초안 수신자에 회사 관계 미검증·반송·제외 주소 포함");
+ if(recipients.some((e:string)=>!allowed.has(e)||failures.includes(e)||!!unsafeContactReason(e)))reasons.push("승인 초안 수신자에 회사 관계 미검증·반송·제외 주소 포함");
  if(!validBrandName(d.targetName||c.name))reasons.push("인사말 대상 브랜드·회사명 미검증");
  if(duplicateParagraphs(d.body).length)reasons.push("본문 문단·크리에이터 자료 제공 안내 중복");
  const productNames=[...String(d.body||"").matchAll(/[‘']([^’'\n]+)[’']\s*제품/g)].map(m=>m[1]);if(productNames.some(p=>!realProductName(p)||!check.product.valid||companyIdentity(p)!==companyIdentity(check.product.name)))reasons.push("본문에 메뉴·게시판명이 상품명으로 포함됨");

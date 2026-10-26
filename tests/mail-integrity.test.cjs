@@ -56,3 +56,16 @@ test('unvisited, connection failures and checked pages without email have distin
  l.sourceAttempts=[{status:'checked'}];assert.equal(api.contactResearchState(l,api.assessMailLead(l)).status,'not_found_in_checked_pages');
 });
 test('publisher homepages remain discovery-only even when the title looks like a health company',()=>{assert.equal(api.validBrandName('메디칼트리뷴 .'),false);assert.equal(api.validBrandName('헬스경향 .'),false);assert.equal(api.editorialSource('https://www.k-health.com/'),true);assert.equal(api.editorialSource('https://publication.example.kr/',[{url:'https://publication.example.kr/',sourceType:'NewsMediaOrganization'}]),true);});
+
+test('reported form examples and concatenated contact labels fail even on official cached pages and saved drafts',()=>{
+ for(const [email,context] of [['username@network.co.kr','이메일 주소는 username@network.co.kr 형식을 따라 입력해 주세요.'],['jumpit_id01@email.com','saramin_id01(사람인) + jumpit_id01@email.com(점핏)'],['jumpit_id02@email.com','saramin_id02(사람인) + jumpit_id02@email.com(점핏)'],['enquiriessales@coherentmarketinsights.com','Contact Us Sales Enquiriessales@coherentmarketinsights.com'],['linesales@coherentmarketinsights.com','Direct linesales@coherentmarketinsights.com'],['directlysales@coherentmarketinsights.com','Write to us directlysales@coherentmarketinsights.com']]){
+  const l=official(email);l.contacts[0].context=context;assert.equal(api.assessMailLead(l).allowed,false,email);assert.equal(api.assessDispatch({targetName:l.name,emails:[email],body:'안녕하세요, 검증브랜드 담당자님.'},{name:l.name},l).allowed,false,email);
+ }
+});
+test('inline HTML labels do not fuse with email addresses; extraction never guesses a replacement',()=>{
+ const built=esbuild.buildSync({entryPoints:['supabase/functions/_shared/discovery.ts'],bundle:true,platform:'node',format:'cjs',write:false}),m={exports:{}};new Function('module','exports',built.outputFiles[0].text)(m,m.exports);
+ const parsed=m.exports.parseOfficialPage('<title>검증브랜드</title><footer><span>Sales Enquiries</span><span>sales@brand.co.kr</span><p>이메일 주소는 username@network.co.kr 형식을 따라 입력해 주세요.</p><p>saramin_id01(사람인) + jumpit_id01@email.com(점핏)</p></footer>','https://brand.co.kr/',new Date().toISOString());
+ assert.deepEqual(parsed.contacts.map(c=>c.email),['sales@brand.co.kr']);assert.equal(parsed.rejected.length,2);
+});
+test('contact publication requires the exact source page, not a different homepage excerpt',()=>{const l=official();l.contacts[0].source='https://brand.co.kr/unfetched';assert.equal(api.assessMailLead(l).allowed,false);});
+test('known recruiting and market-report vendors are not food-brand recipients even with valid support contacts',()=>{for(const host of ['saramin.co.kr','coherentmarketinsights.com']){const l=official('help@'+host);l.website='https://'+host+'/';l.contacts[0].source=l.website;l.publicEvidence[0].url=l.website;assert.equal(api.assessMailLead(l).allowed,false);}});
