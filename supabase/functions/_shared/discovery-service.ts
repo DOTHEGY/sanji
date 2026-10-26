@@ -9,20 +9,27 @@ import { mailRecipients } from "./mail-recipients.ts";
 import { publicUrl, publicIp, marketplace, companyIdentity, parseOfficialPage, robotsAllowed, publicHtmlRedirect } from "./discovery.ts";
 const defaults={enabled:false,target:40,keywords:["건강기능식품 유산균","건강식품 효소","건강식품 단백질","건강식품 견과","건강식품 올리브오일"]};
 const day=()=>new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Seoul"});
+export async function discoveryDeadline<T>(work:Promise<T>,ms:number,message:string):Promise<T>{
+ let timer:any;
+ try{return await Promise.race([work,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Error(message)),Math.max(1,ms));})]);}
+ finally{clearTimeout(timer);}
+}
 export function discoveryService(deps:any){
  const {sb,query,audit,putRecord}=deps;
- async function publicFetch(value:string,cap=700000,productOnly=false){
+ async function publicFetch(value:string,cap=700000,productOnly=false,deadline=Date.now()+18000,policyDepth=0){
+  if(Date.now()>=deadline)throw Error("사이트 확인 시간 초과 · 다음 업체 진행");
   let url=publicUrl(value);const redirects:string[]=[];
   for(let redirect=0;redirect<3;redirect++){
    // Resolve before every request, including redirects. Fail closed if DNS checks are unavailable.
-   const addresses=(await Promise.allSettled([Deno.resolveDns(url.hostname,"A"),Deno.resolveDns(url.hostname,"AAAA")])).flatMap((r:any)=>r.status==="fulfilled"?r.value:[]);
+   const addresses=(await discoveryDeadline(Promise.allSettled([Deno.resolveDns(url.hostname,"A"),Deno.resolveDns(url.hostname,"AAAA")]),Math.min(3500,deadline-Date.now()),"DNS 확인 시간 초과")).flatMap((r:any)=>r.status==="fulfilled"?r.value:[]);
    if(!addresses.length||addresses.some((ip:string)=>!publicIp(ip)))throw Error("공개 IP 확인이 안 되는 주소는 수집하지 않습니다.");
-   const r=await fetch(url,{redirect:"manual",headers:{"User-Agent":"SanjiResearch/1.0 (business-contact-research; no form submissions)",Accept:"text/html,text/plain"},signal:AbortSignal.timeout(8000)});
+   const r=await fetch(url,{redirect:"manual",headers:{"User-Agent":"SanjiResearch/1.0 (business-contact-research; no form submissions)",Accept:"text/html,text/plain"},signal:AbortSignal.timeout(Math.max(1,Math.min(8000,deadline-Date.now())))});
    if([301,302,303,307,308].includes(r.status)){
     const next=publicUrl(new URL(r.headers.get("location")||"",url).toString());
     if(!productOnly&&marketplace(next.toString()))throw Error("플랫폼으로 이동한 주소는 회사 이메일 출처로 자동 수집하지 않습니다: "+next.hostname);
     if(next.origin!==url.origin&&url.pathname!=="/robots.txt"){
-     const policy=await publicFetch(next.origin+"/robots.txt",100000,productOnly);
+     if(policyDepth>=2)throw Error("robots.txt 이동 확인 횟수 제한");
+     const policy=await publicFetch(next.origin+"/robots.txt",100000,productOnly,deadline,policyDepth+1);
      if(!robotsAllowed(policy.text,next.pathname))throw Error("이동한 사이트의 robots.txt에서 수집이 제한됩니다.");
     }
     redirects.push(url.toString());
@@ -45,13 +52,13 @@ export function discoveryService(deps:any){
   const base=publicUrl(website);
   if(marketplace(base.toString()))throw Error("플랫폼 운영사 메일을 브랜드 메일로 수집하지 않습니다. 회사·자사몰 URL을 확인하세요.");
   const robotCache=new Map<string,string>(),attempts:any[]=[],results:any[]=[],visited=new Set<string>();
-  const checked=new Date().toISOString();let htmlBudget=3*1024*1024;
+  const checked=new Date().toISOString(),deadline=Date.now()+35000;let htmlBudget=3*1024*1024;
   async function read(value:string,linkedFrom="",redirectDepth=0){
    const url=publicUrl(value);visited.add(url.toString());
    try{
-    if(!robotCache.has(url.origin)){const r=await publicFetch(url.origin+"/robots.txt",100000);robotCache.set(url.origin,r.text);}
+    if(!robotCache.has(url.origin)){const r=await publicFetch(url.origin+"/robots.txt",100000,false,deadline);robotCache.set(url.origin,r.text);}
     if(!robotsAllowed(robotCache.get(url.origin)||"",url.pathname))throw Error("robots.txt에서 수집이 제한된 경로입니다.");
-    const page=await publicFetch(url.toString(),Math.min(2*1024*1024,htmlBudget));htmlBudget-=page.bytes||0;
+    const page=await publicFetch(url.toString(),Math.min(2*1024*1024,htmlBudget),false,deadline);htmlBudget-=page.bytes||0;
     const shellRedirect=publicHtmlRedirect(page.text,page.url);
     if(shellRedirect&&redirectDepth<2&&!visited.has(shellRedirect)){attempts.push({url:page.url,redirect:shellRedirect,checked,status:"public_redirect"});return await read(shellRedirect,linkedFrom,redirectDepth+1);}
     const parsed={...parseOfficialPage(page.text,page.url,checked),source:page.url};
@@ -66,7 +73,7 @@ export function discoveryService(deps:any){
   // A link is evidence of a relationship, never proof of legal ownership or permission to contact.
   const homeOrigin=new URL(first.source).origin,extraOrigins=new Set<string>();
   const queue=[...first.links.filter((l:any)=>["shop","company"].includes(l.type)),...first.links.filter((l:any)=>l.type==="product").slice(0,1),...first.links.filter((l:any)=>!["shop","company","product"].includes(l.type))];
-  while(queue.length&&attempts.length<maxPages&&htmlBudget>0){
+  while(queue.length&&attempts.length<maxPages&&htmlBudget>0&&Date.now()<deadline){
    const link:any=queue.shift();let next;try{next=publicUrl(link.url);}catch{continue;}
    if(visited.has(next.toString())||marketplace(next.toString())||/login|logout|signup|cart|order|privacy|recruit|terms/i.test(next.pathname))continue;
    if(next.origin!==homeOrigin){

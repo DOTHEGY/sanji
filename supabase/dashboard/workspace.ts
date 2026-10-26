@@ -1743,20 +1743,32 @@ var publicCompanyQuery = `SELECT DISTINCT ?company ?companyLabel ?site ?industry
 // supabase/functions/_shared/discovery-service.ts
 var defaults = { enabled: false, target: 40, keywords: ["\uAC74\uAC15\uAE30\uB2A5\uC2DD\uD488 \uC720\uC0B0\uADE0", "\uAC74\uAC15\uC2DD\uD488 \uD6A8\uC18C", "\uAC74\uAC15\uC2DD\uD488 \uB2E8\uBC31\uC9C8", "\uAC74\uAC15\uC2DD\uD488 \uACAC\uACFC", "\uAC74\uAC15\uC2DD\uD488 \uC62C\uB9AC\uBE0C\uC624\uC77C"] };
 var day = () => (/* @__PURE__ */ new Date()).toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
+async function discoveryDeadline(work, ms, message) {
+  let timer;
+  try {
+    return await Promise.race([work, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(Error(message)), Math.max(1, ms));
+    })]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 function discoveryService(deps) {
   const { sb: sb2, query: query2, audit: audit2, putRecord: putRecord2 } = deps;
-  async function publicFetch(value, cap = 7e5, productOnly = false) {
+  async function publicFetch(value, cap = 7e5, productOnly = false, deadline = Date.now() + 18e3, policyDepth = 0) {
+    if (Date.now() >= deadline) throw Error("\uC0AC\uC774\uD2B8 \uD655\uC778 \uC2DC\uAC04 \uCD08\uACFC \xB7 \uB2E4\uC74C \uC5C5\uCCB4 \uC9C4\uD589");
     let url2 = publicUrl(value);
     const redirects = [];
     for (let redirect = 0; redirect < 3; redirect++) {
-      const addresses = (await Promise.allSettled([Deno.resolveDns(url2.hostname, "A"), Deno.resolveDns(url2.hostname, "AAAA")])).flatMap((r2) => r2.status === "fulfilled" ? r2.value : []);
+      const addresses = (await discoveryDeadline(Promise.allSettled([Deno.resolveDns(url2.hostname, "A"), Deno.resolveDns(url2.hostname, "AAAA")]), Math.min(3500, deadline - Date.now()), "DNS \uD655\uC778 \uC2DC\uAC04 \uCD08\uACFC")).flatMap((r2) => r2.status === "fulfilled" ? r2.value : []);
       if (!addresses.length || addresses.some((ip) => !publicIp(ip))) throw Error("\uACF5\uAC1C IP \uD655\uC778\uC774 \uC548 \uB418\uB294 \uC8FC\uC18C\uB294 \uC218\uC9D1\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
-      const r = await fetch(url2, { redirect: "manual", headers: { "User-Agent": "SanjiResearch/1.0 (business-contact-research; no form submissions)", Accept: "text/html,text/plain" }, signal: AbortSignal.timeout(8e3) });
+      const r = await fetch(url2, { redirect: "manual", headers: { "User-Agent": "SanjiResearch/1.0 (business-contact-research; no form submissions)", Accept: "text/html,text/plain" }, signal: AbortSignal.timeout(Math.max(1, Math.min(8e3, deadline - Date.now()))) });
       if ([301, 302, 303, 307, 308].includes(r.status)) {
         const next = publicUrl(new URL(r.headers.get("location") || "", url2).toString());
         if (!productOnly && marketplace(next.toString())) throw Error("\uD50C\uB7AB\uD3FC\uC73C\uB85C \uC774\uB3D9\uD55C \uC8FC\uC18C\uB294 \uD68C\uC0AC \uC774\uBA54\uC77C \uCD9C\uCC98\uB85C \uC790\uB3D9 \uC218\uC9D1\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4: " + next.hostname);
         if (next.origin !== url2.origin && url2.pathname !== "/robots.txt") {
-          const policy = await publicFetch(next.origin + "/robots.txt", 1e5, productOnly);
+          if (policyDepth >= 2) throw Error("robots.txt \uC774\uB3D9 \uD655\uC778 \uD69F\uC218 \uC81C\uD55C");
+          const policy = await publicFetch(next.origin + "/robots.txt", 1e5, productOnly, deadline, policyDepth + 1);
           if (!robotsAllowed(policy.text, next.pathname)) throw Error("\uC774\uB3D9\uD55C \uC0AC\uC774\uD2B8\uC758 robots.txt\uC5D0\uC11C \uC218\uC9D1\uC774 \uC81C\uD55C\uB429\uB2C8\uB2E4.");
         }
         redirects.push(url2.toString());
@@ -1803,18 +1815,18 @@ function discoveryService(deps) {
     const base = publicUrl(website);
     if (marketplace(base.toString())) throw Error("\uD50C\uB7AB\uD3FC \uC6B4\uC601\uC0AC \uBA54\uC77C\uC744 \uBE0C\uB79C\uB4DC \uBA54\uC77C\uB85C \uC218\uC9D1\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. \uD68C\uC0AC\xB7\uC790\uC0AC\uBAB0 URL\uC744 \uD655\uC778\uD558\uC138\uC694.");
     const robotCache = /* @__PURE__ */ new Map(), attempts = [], results = [], visited = /* @__PURE__ */ new Set();
-    const checked = (/* @__PURE__ */ new Date()).toISOString();
+    const checked = (/* @__PURE__ */ new Date()).toISOString(), deadline = Date.now() + 35e3;
     let htmlBudget = 3 * 1024 * 1024;
     async function read(value, linkedFrom = "", redirectDepth = 0) {
       const url2 = publicUrl(value);
       visited.add(url2.toString());
       try {
         if (!robotCache.has(url2.origin)) {
-          const r = await publicFetch(url2.origin + "/robots.txt", 1e5);
+          const r = await publicFetch(url2.origin + "/robots.txt", 1e5, false, deadline);
           robotCache.set(url2.origin, r.text);
         }
         if (!robotsAllowed(robotCache.get(url2.origin) || "", url2.pathname)) throw Error("robots.txt\uC5D0\uC11C \uC218\uC9D1\uC774 \uC81C\uD55C\uB41C \uACBD\uB85C\uC785\uB2C8\uB2E4.");
-        const page = await publicFetch(url2.toString(), Math.min(2 * 1024 * 1024, htmlBudget));
+        const page = await publicFetch(url2.toString(), Math.min(2 * 1024 * 1024, htmlBudget), false, deadline);
         htmlBudget -= page.bytes || 0;
         const shellRedirect = publicHtmlRedirect(page.text, page.url);
         if (shellRedirect && redirectDepth < 2 && !visited.has(shellRedirect)) {
@@ -1836,7 +1848,7 @@ function discoveryService(deps) {
     if (!first) return { contacts: [], excludedCount: 0, inquiryLinks: [], checked, pages: 0, sourceAttempts: attempts, error: attempts[0]?.error || "\uD648\uD398\uC774\uC9C0 \uD655\uC778 \uC2E4\uD328", officialVerified: false };
     const homeOrigin = new URL(first.source).origin, extraOrigins = /* @__PURE__ */ new Set();
     const queue = [...first.links.filter((l) => ["shop", "company"].includes(l.type)), ...first.links.filter((l) => l.type === "product").slice(0, 1), ...first.links.filter((l) => !["shop", "company", "product"].includes(l.type))];
-    while (queue.length && attempts.length < maxPages && htmlBudget > 0) {
+    while (queue.length && attempts.length < maxPages && htmlBudget > 0 && Date.now() < deadline) {
       const link = queue.shift();
       let next;
       try {

@@ -312,15 +312,34 @@ function candidateForm(id = "", creator = false) {
     `<h2>${id ? "후보 상세·수정" : "실제 후보 추가"}</h2><p class="notice">실제로 확인한 사실과 공식 URL만 입력하세요. 모르는 분류·권한·수치는 미확인으로 남기세요. 공식 문의 폼은 대체 경로로 기록하며 자동 제출하지 않습니다.</p><form id="candidate-form" data-id="${esc(id)}" class="form-grid">${field("name", "브랜드 / 크리에이터명", c.name)}${field("kind", "관계", c.kind, "text", ["브랜드", "제조사", "공식 유통사", "크리에이터"])}${field("company", "소유 회사 / 소속 법인", c.company)}${field("companyKey", "법인 식별자|사업자번호 또는 동일 회사의 공통 식별자. 미입력 시 회사명으로 중복 확인.", c.companyKey)}${field("product", "제품명", c.product)}${field("category", "제품 분류", c.category, "text", ["건강기능식품", "일반 건강식품", "미확인"])}${field("classification", "법적 분류 확인 근거", c.classification || "미확인", "textarea")}${field("authority", "제조·판매·공식 유통 권한 근거", c.authority || "미확인", "textarea")}${field("website", "공식 홈페이지 / 문의 폼 URL", c.website, "url")}${field("channels", "판매 채널", c.channels)}<h3 class="form-section">공식 사업용 연락처</h3>${field("email", "공개 사업용 이메일|이메일을 추측하지 마세요. 플랫폼 고객센터를 입점 브랜드 연락처로 사용하지 마세요.", contact.email, "email")}${field("contactOwner", "이메일 소유 회사|위 소유 회사와 정확히 일치해야 검증 표시 가능", contact.owner)}${field("contactSource", "공식 연락처 출처 URL", contact.source, "url")}${field("contactChecked", "확인일", contact.checked, "date")}${field("contactPurpose", "공식 사용 목적", contact.purpose || "미확인", "text", ["미확인", "사업 제휴", "도매·유통", "비즈니스"])}${field("verified", "소유 회사·공식 출처·사업용 용도를 직접 확인함", contact.verified, "checkbox")}<h3 class="form-section">크리에이터 공개 콘텐츠 / 매칭 근거</h3>${field("handle", "Instagram 아이디", c.handle)}${field("profile", "공개 프로필 URL", c.profile, "url")}${field("agency", "크리에이터·소속사 관계", c.agency)}${field("topics", "공개 콘텐츠 주제|쉼표로 구분. 개인 건강·질병을 추정해 입력하지 마세요.", c.topics.join(", "))}${field("followers", "팔로워 (미확인은 빈칸)", c.followers ?? "", "number")}${field("metricsSource", "수치 출처 URL", c.metricsSource, "url")}${field("metricsChecked", "수치 확인일", c.metricsChecked, "date")}${field("reaction", "실제 공개 반응 / 조회수 근거", c.reaction || "미확인", "textarea")}${field("experience", "확인한 공동구매 경험", c.experience || "미확인", "textarea")}${field("active", "활동 상태", c.active || "미확인")}${field("schedule", "제안 가능 일정", c.schedule || "미확인")}${field("evidence", "확인한 콘텐츠 URL|한 줄에 URL 하나씩. 설명은 선정 이유에 기록.", c.evidence.map((e) => e.url).join("\n"), "textarea")}${field("reason", "선정 이유 / 공개 근거", c.reason, "textarea")}<h3 class="form-section">영업 관리</h3>${field("status", "상태", c.status, "text", statuses)}${field("owner", "담당자", c.owner)}${field("next", "다음 행동", c.next)}${field("due", "후속 연락일", c.due, "date")}${field("note", "내부 메모", c.note, "textarea")}<div class="full actions"><button class="primary" type="submit">서버에 저장</button>${id ? button("제안 작성", "compose", id)+button("이메일 성과·추적","tracking-company",id) : ""}</div></form>`,
   );
 }
-function dealsPage() {
-  $("#app").innerHTML =
-    head(
-      "확보한 상품 딜",
-      "상품 가격·조건·자료와 이전 제안 버전을 기록합니다.",
-      button("＋ 딜 추가", "add-deal", "", true),
-    ) +
-    `<div class="cards">${data.deals.map((d) => `<article class="panel">${tag(d.category)} ${tag(d.state, d.state === "확정" ? "" : "orange")}<h3>${esc(d.name)}</h3><p class="sub">${esc(targetName(d.brand))}</p><div class="price">${money(d.price)} <small>공동구매가</small></div><p class="fine">${esc(d.schedule)}<br>v${d.version} · ${esc(d.checked || "확인일 미입력")}<br>${esc(d.sourceNote || "조건 출처 미입력")}</p><div class="card-footer">${button("조건·버전 상세", "edit-deal", d.id)}<a href="#matching">매칭 ↗</a></div></article>`).join("") || '<div class="panel empty">실제 협의한 상품을 추가하세요. 미협의 가격은 빈칸으로 남깁니다.</div>'}</div>`;
+function dealProductKey(d) {
+  return d.productName || (d.sourceRowKey ? d.sourceRowKey.split(":")[1] : "") || d.name;
 }
+function dealVariantLabel(d) {
+  if (!d.sourceRowKey) return d.name;
+  return d.sourceRowKey.split(":")[0] + " · " + (d.discountPercent ? d.discountPercent + "% 할인" : "할인 없음");
+}
+function dealProductRow(items, selected) {
+  const d = items.find(d => d.id === selected) || items.find(d => d.discountPercent === 10 && d.sourceRowKey?.startsWith("BOX:")) || items[0];
+  const percent = Number.isFinite(d.commissionPercent) ? d.commissionPercent + "%" : (d.commission || "미협의");
+  const note = [d.benefits || d.shipping, ...(d.options || []).map(o => o.name + " 시 " + o.commissionPercent + "% · 세부 조건 확인 필요")].filter(Boolean).join(" / ");
+  return `<tr class="deal-product-row"><td><strong>${esc(dealProductKey(d))}</strong></td><td><select aria-label="${esc(dealProductKey(d))} 구성" data-deal-option>${items.map(o => `<option value="${esc(o.id)}" ${o.id === d.id ? "selected" : ""}>${esc(dealVariantLabel(o))}</option>`).join("")}</select></td><td>${money(d.retail)}</td><td><strong>${money(d.price)}</strong></td><td>${esc(percent)}</td><td>${money(d.commissionAmount)}</td><td style="max-width:320px;white-space:normal">${esc(note || "미확인")}<div class="fine">${esc(d.state)} · ${esc(d.checked || "확인일 미입력")}</div></td><td>${button("상세", "edit-deal", d.id)}</td></tr>`;
+}
+function dealsPage() {
+  const groups = new Map();
+  for (const d of data.deals) {
+    const key = d.brand || "unassigned:" + d.id;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(d);
+  }
+  $("#app").innerHTML = head("상품 딜", "업체별 상품과 구성별 공동구매 조건을 비교하세요.", button("＋ 딜 추가", "add-deal", "", true)) +
+    `<div class="cards deal-company-list" style="grid-template-columns:1fr">${[...groups.values()].map(items => {
+      const products = new Map();
+      for (const d of items) { const key = dealProductKey(d); if (!products.has(key)) products.set(key, []); products.get(key).push(d); }
+      return `<details class="panel deal-company"><summary><strong>${esc(targetName(items[0].brand))}</strong> <span class="sub">상품 ${products.size}개</span></summary><p class="fine">용량·할인 조건을 선택하면 가격과 수수료가 바뀝니다. 수수료액은 크리에이터 배분 전이며 회사 순이익이 아닙니다. 소비자가는 가격표의 할인 전 기준입니다.</p><div class="table-wrap"><table><thead><tr><th>상품</th><th>구성·판매 조건</th><th>소비자가</th><th>공동구매가</th><th>수수료율</th><th>수수료액</th><th>비고</th><th></th></tr></thead><tbody>${[...products.values()].map(items => dealProductRow(items)).join("")}</tbody></table></div><div class="card-footer"><a href="#matching">크리에이터 매칭 ↗</a></div></details>`;
+    }).join("") || '<div class="panel empty">실제 협의한 상품을 추가하세요. 미협의 가격은 빈칸으로 남깁니다.</div>'}</div>`;
+}
+
 function dealForm(id = "") {
   const d = deal(id) || {
     state: "협의 중",
@@ -1272,6 +1291,12 @@ document.addEventListener("input", (e) => {
   if (e.target.id === "mail-filter" && discoveryView) $("#discovery-results").innerHTML=discoveryCards(discoveryView);
 });
 document.addEventListener("change", (e) => {
+  if (e.target.matches("[data-deal-option]")) {
+    const selected = data.deals.find(d => d.id === e.target.value);
+    if (selected) e.target.closest("tr").outerHTML = dealProductRow(data.deals.filter(d => d.brand === selected.brand && dealProductKey(d) === dealProductKey(selected)), selected.id);
+    return;
+  }
+
   if(e.target.id==="mail-approve-all") $$("#mail-final [name=bulk-approve]:not(:disabled)").forEach(c=>c.checked=e.target.checked);
   if(e.target.name==="bulk-approve"&&$("#mail-approve-all")){const all=$$("#mail-final [name=bulk-approve]:not(:disabled)");$("#mail-approve-all").checked=!!all.length&&all.every(c=>c.checked);}
 
