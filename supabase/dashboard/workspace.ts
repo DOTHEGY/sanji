@@ -1196,9 +1196,24 @@ function creatorMetaService({ sb: sb2, query: query2, env: env2, connection: con
       const c = await get(owner), tag = String(b.tag || "").trim().replace(/^#/, "").toLowerCase();
       if (!c.selectedId || !/^[a-z0-9_가-힣]{1,30}$/.test(tag)) throw Error("\uD504\uB85C\uD398\uC154\uB110 \uACC4\uC815\uACFC \uD574\uC2DC\uD0DC\uADF8\uB97C \uD655\uC778\uD558\uC138\uC694.");
       await query2(sb2.rpc("sanji_creator_meta_claim", { p_owner: owner, p_tag: tag }));
-      const h = await graph("ig_hashtag_search", { user_id: c.selectedId, q: tag }, c.access_token), hashtag = h.data?.[0]?.id;
+      let h, media;
+      try {
+        h = await graph("ig_hashtag_search", { user_id: c.selectedId, q: tag }, c.access_token);
+      } catch (e) {
+        const code = Number.isInteger(e.metaCode) ? e.metaCode : null;
+        await audit2(owner, "creator_meta_search_failed", { stage: "hashtag_search", code });
+        throw Error("Meta \uD574\uC2DC\uD0DC\uADF8 \uAC80\uC0C9 \uC2E4\uD328" + (code !== null ? " \xB7 \uCF54\uB4DC " + code : " \xB7 \uC5F0\uACB0 \uD655\uC778 \uD544\uC694"));
+      }
+      const hashtag = h.data?.[0]?.id;
       if (!/^\d+$/.test(String(hashtag || ""))) return { status: "no_results", added: 0 };
-      const media = await graph(String(hashtag) + "/recent_media", { user_id: c.selectedId, fields: "id,username,caption,permalink,timestamp", limit: "20" }, c.access_token), today = (/* @__PURE__ */ new Date()).toISOString();
+      try {
+        media = await graph(String(hashtag) + "/recent_media", { user_id: c.selectedId, fields: "id,username,caption,permalink,timestamp", limit: "20" }, c.access_token);
+      } catch (e) {
+        const code = Number.isInteger(e.metaCode) ? e.metaCode : null;
+        await audit2(owner, "creator_meta_search_failed", { stage: "recent_media", code });
+        throw Error("Meta \uCD5C\uADFC \uAC8C\uC2DC\uBB3C \uC870\uD68C \uC2E4\uD328" + (code !== null ? " \xB7 \uCF54\uB4DC " + code : " \xB7 \uC5F0\uACB0 \uD655\uC778 \uD544\uC694"));
+      }
+      const today = (/* @__PURE__ */ new Date()).toISOString();
       let added = 0, reviewed = 0;
       for (const m of (media.data || []).slice(0, 20)) {
         const handle3 = String(m.username || "").toLowerCase(), caption = String(m.caption || "").slice(0, 600), link = String(m.permalink || "");
