@@ -995,6 +995,16 @@ function sanitizeVisibleRows(raw) {
       if (u.protocol !== "https:" || !["instagram.com", "www.instagram.com"].includes(u.hostname) || u.pathname.replace(/\/$/, "").toLowerCase() !== "/" + handle2) throw Error("\uD504\uB85C\uD544 URL\uACFC \uC544\uC774\uB514\uAC00 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
       profile = u.origin + u.pathname.replace(/\/$/, "") + "/";
     }
+    const resultUrl = String(x.source_result_url || "").trim();
+    if (resultUrl) {
+      let u;
+      try {
+        u = new URL(resultUrl);
+      } catch {
+        throw Error("\uACB0\uACFC \uCD9C\uCC98 URL\uC744 \uD655\uC778\uD558\uC138\uC694.");
+      }
+      if (u.protocol !== "https:" || !["tagby.io", "www.tagby.io"].includes(u.hostname) || u.username || u.password || u.search || u.hash) throw Error("\uACB0\uACFC \uCD9C\uCC98 URL\uC744 \uD655\uC778\uD558\uC138\uC694.");
+    }
     const bio = String(x.bio || "").slice(0, 4e3), matches = [...bio.matchAll(EMAIL)].map((m) => m[0].replace(/\.+$/, "")), emails = [...new Set(matches.map((e) => e.toLowerCase()))];
     const requested = String(x.bio_status || ""), bioStatus = requested || (bio ? emails.length ? "email_present" : "email_not_in_bio" : "not_checked");
     if (!["email_present", "email_not_in_bio", "bio_unreadable", "not_checked"].includes(bioStatus)) throw Error("\uC18C\uAC1C\uB780 \uD655\uC778 \uC0C1\uD0DC\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
@@ -1010,7 +1020,7 @@ function sanitizeVisibleRows(raw) {
     }
     const bioChecked = typeof x.bio_checked_at === "string" && Number.isFinite(Date.parse(x.bio_checked_at)) ? new Date(x.bio_checked_at).toISOString() : null;
     const count = (v) => Number.isSafeInteger(v) && v >= 0 ? v : null;
-    rows.push({ handle: handle2, profile_url: profile, nickname: String(x.nickname || "").slice(0, 200), followers: count(x.followers), category: String(x.category || "").slice(0, 200), bio, bio_source_url: bioStatus !== "not_checked" ? profile : "", bio_status: bioStatus, bio_checked_at: bioChecked, bio_content_available: !!bio, emails, email_status: bioStatus === "email_present" ? "\uC18C\uAC1C\uB780 \uACF5\uAC1C \xB7 \uC720\uD6A8\uC131 \uBBF8\uAC80\uC99D" : bioStatus === "email_not_in_bio" ? "\uD574\uB2F9 \uC2DC\uC810 \uC18C\uAC1C\uB780\uC5D0 \uC774\uBA54\uC77C \uC5C6\uC74C" : bioStatus === "bio_unreadable" ? "\uC18C\uAC1C\uB780 \uC870\uD68C \uC2E4\uD328 \xB7 \uC774\uBA54\uC77C \uBBF8\uD655\uC778" : "\uC544\uC9C1 \uC870\uD68C\uD558\uC9C0 \uC54A\uC74C", source_url: source, source_ref: reference, checked: typeof x.checked === "string" && Number.isFinite(Date.parse(x.checked)) ? new Date(x.checked).toISOString() : null, observation_kind: ["file_observed", "page_observed"].includes(x.observation_kind) ? x.observation_kind : "unknown", source_position: Number.isInteger(x.source_position) && x.source_position > 0 && x.source_position <= 30 ? x.source_position : index + 1, similarity: String(x.similarity || "").slice(0, 100), average_likes: count(x.average_likes), average_comments: count(x.average_comments) });
+    rows.push({ handle: handle2, profile_url: profile, nickname: String(x.nickname || "").slice(0, 200), followers: count(x.followers), category: String(x.category || "").slice(0, 200), bio, bio_source_url: bioStatus !== "not_checked" ? profile : "", bio_status: bioStatus, bio_checked_at: bioChecked, bio_content_available: !!bio, emails, email_status: bioStatus === "email_present" ? "\uC18C\uAC1C\uB780 \uACF5\uAC1C \xB7 \uC720\uD6A8\uC131 \uBBF8\uAC80\uC99D" : bioStatus === "email_not_in_bio" ? "\uD574\uB2F9 \uC2DC\uC810 \uC18C\uAC1C\uB780\uC5D0 \uC774\uBA54\uC77C \uC5C6\uC74C" : bioStatus === "bio_unreadable" ? "\uC18C\uAC1C\uB780 \uC870\uD68C \uC2E4\uD328 \xB7 \uC774\uBA54\uC77C \uBBF8\uD655\uC778" : "\uC544\uC9C1 \uC870\uD68C\uD558\uC9C0 \uC54A\uC74C", source_url: source, source_ref: reference, source_result_url: resultUrl, checked: typeof x.checked === "string" && Number.isFinite(Date.parse(x.checked)) ? new Date(x.checked).toISOString() : null, observation_kind: ["file_observed", "page_observed"].includes(x.observation_kind) ? x.observation_kind : "unknown", source_position: Number.isInteger(x.source_position) && x.source_position > 0 && x.source_position <= 30 ? x.source_position : index + 1, similarity: String(x.similarity || "").slice(0, 100), average_likes: count(x.average_likes), average_comments: count(x.average_comments) });
   }
   return rows;
 }
