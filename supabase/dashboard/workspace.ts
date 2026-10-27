@@ -1133,7 +1133,7 @@ function creatorMetaService({ sb: sb2, query: query2, env: env2, connection: con
     if (!c.access_token || !c.expires || Date.now() >= c.expires) throw Error("\uACF5\uC2DD \uC778\uC99D\uC774 \uB9CC\uB8CC\uB410\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uC5F0\uACB0\uD574 \uC8FC\uC138\uC694.");
     return c;
   }
-  async function handle2(path, method, owner, input, base) {
+  async function handle2(path, method, owner, input, base, params = new URLSearchParams()) {
     if (path === "/creator-meta/status" && method === "GET") {
       const c = await connection2(owner, "creator_meta");
       return { configured: !!env2("META_FB_APP_ID") && !!env2("META_FB_APP_SECRET") && !!env2("TOKEN_ENCRYPTION_KEY"), connected: !!c?.access_token && Number(c.expires) > Date.now(), accounts: c?.accounts || [], selectedId: c?.selectedId || "", expires: c?.expires || null, redirectUri: base + "/creator-meta/callback", scope: "Facebook \uB85C\uADF8\uC778 \xB7 \uBE44\uC988\uB2C8\uC2A4 \uAC80\uC0C9\uACFC \uD574\uC2DC\uD0DC\uADF8 \uAC80\uC0C9 \xB7 Meta \uAD8C\uD55C\xB7App Review \uBCC4\uB3C4" };
@@ -1155,7 +1155,18 @@ function creatorMetaService({ sb: sb2, query: query2, env: env2, connection: con
       } catch (e) {
         errors.push({ operation: "pages", code: e.metaCode ?? null });
       }
-      return { permissions, pages: pageItems, truncated, errors };
+      let directPage = null;
+      const pageId = String(params.get("page_id") || "");
+      if (pageId) {
+        if (!/^[0-9]{5,30}$/.test(pageId)) throw Error("\uD398\uC774\uC9C0 ID\uB294 \uC22B\uC790\uB85C \uC785\uB825\uD558\uC138\uC694.");
+        try {
+          const p = await graph(pageId, { fields: "id,name,instagram_business_account{id,username}" }, c.access_token);
+          directPage = { id: String(p.id || ""), name: String(p.name || ""), instagram: p.instagram_business_account?.id ? { id: String(p.instagram_business_account.id), username: String(p.instagram_business_account.username || "") } : null };
+        } catch (e) {
+          errors.push({ operation: "direct_page", code: e.metaCode ?? null });
+        }
+      }
+      return { permissions, pages: pageItems, truncated, directPage, errors };
     }
     const b = await input();
     if (path === "/creator-meta/start" && method === "POST") return start(owner, base);
@@ -3567,7 +3578,7 @@ Deno.serve(async (req) => {
     }
     if (path.startsWith("/creator-meta/")) {
       try {
-        return json(await creatorMeta.handle(path, req.method, u, input, base));
+        return json(await creatorMeta.handle(path, req.method, u, input, base, url2.searchParams));
       } catch (e) {
         fail(400, String(e.message || "\uACF5\uC2DD API \uC5F0\uACB0 \uC2E4\uD328"));
       }

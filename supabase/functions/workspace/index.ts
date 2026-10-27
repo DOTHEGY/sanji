@@ -847,7 +847,7 @@ Deno.serve(async (req: Request) => {
     }
     if(path==="/email-tracking"||path.startsWith("/email-tracking/"))return json(await emailTracking.handle(path,req.method,u,input,url.searchParams));
     if(path==='/creator-recovery/import-visible'&&req.method==='POST'){try{return json(await creatorVisibleImport(u,await input()));}catch(e){fail(400,String(e.message||'후보 가져오기 실패'));}}
-    if(path.startsWith('/creator-meta/')){try{return json(await creatorMeta.handle(path,req.method,u,input,base));}catch(e){fail(400,String(e.message||'공식 API 연결 실패'));}}
+    if(path.startsWith('/creator-meta/')){try{return json(await creatorMeta.handle(path,req.method,u,input,base,url.searchParams));}catch(e){fail(400,String(e.message||'공식 API 연결 실패'));}}
     if(path === "/creator-recovery" || path.startsWith("/creator-recovery/")){
       try{return json(await creatorRecovery.handle(path,req.method,u,input,url.searchParams));}catch(e){fail(400,String(e.message||"크리에이터 추천 실패"));}
     }
