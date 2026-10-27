@@ -1047,14 +1047,14 @@ function providerError(status, code) {
 async function instagramBusinessDiscovery({ accountId, token, handle: handle2, request = fetch, version = "v24.0" }) {
   if (!/^\d+$/.test(String(accountId)) || !/^v\d+\.\d+$/.test(version) || !/^[a-z0-9._]{1,30}$/i.test(handle2) || !token) throw Error("\uACF5\uC2DD \uACC4\uC815\xB7\uAD8C\uD55C \uC5F0\uACB0 \uD544\uC694");
   const url2 = new URL(`https://graph.facebook.com/${version}/${accountId}`);
-  url2.searchParams.set("fields", `business_discovery.username(${handle2}){username,followers_count,media_count}`);
+  url2.searchParams.set("fields", `business_discovery.username(${handle2}){username,followers_count,media_count,biography,website}`);
   try {
     const response = await request(url2.toString(), { headers: { Authorization: "Bearer " + token }, signal: AbortSignal.timeout(8e3) });
     const data = await response.json();
     if (!response.ok || data.error) return { ...providerError(response.status, data.error?.code), checkedAt: (/* @__PURE__ */ new Date()).toISOString() };
     const p = data.business_discovery;
     if (!p || String(p.username || "").toLowerCase() !== handle2.toLowerCase()) return { ...providerError(404), checkedAt: (/* @__PURE__ */ new Date()).toISOString() };
-    return { state: "verified", handle: p.username, followers: Number.isInteger(p.followers_count) && p.followers_count >= 0 ? p.followers_count : null, mediaCount: Number.isInteger(p.media_count) && p.media_count >= 0 ? p.media_count : null, source: "Meta Business Discovery", checkedAt: (/* @__PURE__ */ new Date()).toISOString(), emailStatus: "\uAE30\uC874 \uC18C\uAC1C\uB780 \uC720\uC9C0 \xB7 \uC774 API\uC5D0\uC11C \uC774\uBA54\uC77C \uBBF8\uD655\uC778" };
+    return { state: "verified", handle: p.username, followers: Number.isInteger(p.followers_count) && p.followers_count >= 0 ? p.followers_count : null, mediaCount: Number.isInteger(p.media_count) && p.media_count >= 0 ? p.media_count : null, biography: typeof p.biography === "string" ? p.biography.slice(0, 4e3) : null, website: typeof p.website === "string" ? p.website.slice(0, 2e3) : null, source: "Meta Business Discovery", checkedAt: (/* @__PURE__ */ new Date()).toISOString(), emailStatus: "\uAE30\uC874 \uC18C\uAC1C\uB780 \uC720\uC9C0 \xB7 \uC774 API\uC5D0\uC11C \uC774\uBA54\uC77C \uBBF8\uD655\uC778" };
   } catch {
     return { ...providerError(0), checkedAt: (/* @__PURE__ */ new Date()).toISOString() };
   }
@@ -1207,40 +1207,33 @@ function creatorMetaService({ sb: sb2, query: query2, env: env2, connection: con
       const hashtag = h.data?.[0]?.id;
       if (!/^\d+$/.test(String(hashtag || ""))) return { status: "no_results", added: 0 };
       try {
-        media = await graph(String(hashtag) + "/recent_media", { user_id: c.selectedId, fields: "id,username,caption,permalink,timestamp", limit: "20" }, c.access_token);
+        media = await graph(String(hashtag) + "/recent_media", { user_id: c.selectedId, fields: "id,caption,permalink,timestamp", limit: "20" }, c.access_token);
       } catch (e) {
         const code = Number.isInteger(e.metaCode) ? e.metaCode : null;
         await audit2(owner, "creator_meta_search_failed", { stage: "recent_media", code });
         throw Error("Meta \uCD5C\uADFC \uAC8C\uC2DC\uBB3C \uC870\uD68C \uC2E4\uD328" + (code !== null ? " \xB7 \uCF54\uB4DC " + code : " \xB7 \uC5F0\uACB0 \uD655\uC778 \uD544\uC694"));
       }
       const today = (/* @__PURE__ */ new Date()).toISOString();
-      let added = 0, reviewed = 0;
-      for (const m of (media.data || []).slice(0, 20)) {
-        const handle3 = String(m.username || "").toLowerCase(), caption = String(m.caption || "").slice(0, 600), link = String(m.permalink || "");
-        if (!/^[a-z0-9._]{1,30}$/.test(handle3) || !/^https:\/\/(?:www\.)?instagram\.com\/(?:p|reel)\//i.test(link)) continue;
-        reviewed++;
-        const noncreator = /(?:팬계정|팬 페이지|fan\s*(?:account|page)|공식몰|공식\s*스토어|주식회사|기관 공식)/i.test(caption);
-        const indicators = [/(?:공동구매|공구)/i.test(caption) ? "\uACF5\uAC1C \uAC8C\uC2DC\uBB3C\uC5D0 \uACF5\uB3D9\uAD6C\uB9E4 \uAD00\uB828 \uD45C\uD604" : "", /(?:요리|레시피|식단|푸드|웰니스|운동|일상|육아)/i.test(caption) ? "\uACF5\uAC1C \uAC8C\uC2DC\uBB3C\uC5D0 \uC2DD\uD488\xB7\uC0DD\uD65C \uAD00\uB828 \uC8FC\uC81C" : ""].filter(Boolean);
-        const score = Math.min(100, 10 + indicators.length * 15 + (/[가-힣]/.test(caption) ? 10 : 0));
-        const saved = await sb2.from("sanji_creator_recovery").upsert({ owner, handle: handle3, source_id: "meta:" + handle3, profile_url: "https://www.instagram.com/" + handle3 + "/", nickname: "", followers: null, category: "\uD574\uC2DC\uD0DC\uADF8 #" + tag, bio: "", emails: [], email_status: "\uC544\uC9C1 \uC870\uD68C\uD558\uC9C0 \uC54A\uC74C", source_provider: "instagram_official", source_kind: "meta_hashtag", source_file: "Meta \uD574\uC2DC\uD0DC\uADF8 \uAC80\uC0C9", source_url: link, last_verified: null, link_status: "source_confirmed", entity_type: noncreator ? "noncreator_suspected" : "unknown", priority_score: score, assessment: noncreator ? "review" : "explore", reasons: ["\uACF5\uC2DD \uD574\uC2DC\uD0DC\uADF8 \uCD5C\uADFC \uAC8C\uC2DC\uBB3C\uC758 \uC0AC\uC6A9\uC790\uBA85 \xB7 \uD55C\uAD6D \uD06C\uB9AC\uC5D0\uC774\uD130\uC640 \uACC4\uC815 \uC720\uD615 \uD655\uC778 \uD544\uC694", ...indicators], status: "new" }, { onConflict: "owner,handle", ignoreDuplicates: true }).select("id");
-        if (saved.error) throw Error("\uD6C4\uBCF4 \uC800\uC7A5 \uC2E4\uD328 \xB7 \uAE30\uC874 \uACC4\uC815\uC740 \uC720\uC9C0\uB429\uB2C8\uB2E4.");
-        added += (saved.data || []).length;
-        const target = (saved.data || [])[0] || await query2(sb2.from("sanji_creator_recovery").select("id").eq("owner", owner).eq("handle", handle3).maybeSingle());
-        if (target?.id) await query2(sb2.from("sanji_creator_evidence").upsert({ owner, creator_id: target.id, source_provider: "instagram_official", source_kind: "meta_hashtag", source_url: link, source_ref: tag, detail: { checked: today } }, { onConflict: "owner,creator_id,source_kind,source_url,source_ref,observation_key", ignoreDuplicates: true }));
-      }
-      await audit2(owner, "creator_meta_hashtag_discovery", { tag, reviewed, added, checked: today });
-      return { status: "complete", reviewed, added, checked: today, limitation: "\uCD5C\uADFC 24\uC2DC\uAC04 \uACF5\uAC1C \uAC8C\uC2DC\uBB3C\xB7\uCD5C\uB300 20\uAC74, \uC0AC\uC6A9\uC790\uBA85 \uC81C\uACF5 \uD56D\uBAA9\uB9CC \uD0D0\uC0C9 \uD6C4\uBCF4\uB85C \uC800\uC7A5" };
+      const posts = (media.data || []).slice(0, 20).map((m) => ({ id: String(m.id || ""), caption: String(m.caption || "").slice(0, 600), permalink: /^https:\/\/(?:www\.)?instagram\.com\/(?:p|reel)\//i.test(String(m.permalink || "")) ? String(m.permalink) : "", timestamp: String(m.timestamp || "") }));
+      return { status: "complete", posts, limitation: "Meta \uD574\uC2DC\uD0DC\uADF8 API\uB294 \uC791\uC131\uC790 \uC544\uC774\uB514\uB97C \uC81C\uACF5\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. \uAC8C\uC2DC\uBB3C\uB9CC \uCC38\uACE0\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4." };
     }
     if (path === "/creator-meta/profile" && method === "POST") {
       const c = await get(owner);
       if (!c.selectedId) throw Error("\uD504\uB85C\uD398\uC154\uB110 \uACC4\uC815\uC744 \uBA3C\uC800 \uC120\uD0DD\uD558\uC138\uC694.");
-      const target = await query2(sb2.from("sanji_creator_recovery").select("id,handle,profile_url").eq("owner", owner).eq("id", String(b.id || "")).maybeSingle());
+      const targetQuery = sb2.from("sanji_creator_recovery").select("id,handle,profile_url").eq("owner", owner);
+      const lookup = String(b.handle || "").replace(/^@/, "").toLowerCase();
+      if (!b.id && !/^[a-z0-9._]{1,30}$/.test(lookup)) throw Error("\uAE30\uC874 \uD6C4\uBCF4 \uC544\uC774\uB514\uB97C \uD655\uC778\uD558\uC138\uC694.");
+      const target = await query2((b.id ? targetQuery.eq("id", String(b.id)) : targetQuery.eq("handle", lookup)).maybeSingle());
       if (!target) throw Error("\uC18C\uC720\uD55C \uD6C4\uBCF4\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
       const handle3 = target.handle;
       if (!/^[a-z0-9._]{1,30}$/i.test(handle3)) throw Error("\uC544\uC774\uB514\uB97C \uD655\uC778\uD558\uC138\uC694.");
       await query2(sb2.rpc("sanji_creator_meta_claim", { p_owner: owner, p_tag: "profile_" + handle3.toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 20), p_kind: "profile" }));
       const result = await instagramBusinessDiscovery({ accountId: c.selectedId, token: c.access_token, handle: handle3, request, version: version() });
       const patch = result.state === "verified" && result.followers !== null ? { followers: result.followers, followers_checked: result.checkedAt, followers_source: "Meta Business Discovery", lookup_state: "verified" } : { lookup_state: result.state || "unavailable" };
+      if (result.state === "verified" && result.biography !== null && target.profile_url) {
+        const bio = result.biography, emails = [...new Set((bio.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || []).map((x) => x.toLowerCase()))];
+        await query2(sb2.from("sanji_creator_evidence").upsert({ owner, creator_id: target.id, source_provider: "instagram_official", source_kind: "public_bio", source_url: target.profile_url, source_ref: "business_discovery", observation_key: await hash(bio + "|" + result.checkedAt), detail: { bio, bio_source_url: target.profile_url, bio_status: emails.length ? "email_present" : "email_not_in_bio", bio_checked_at: result.checkedAt, bio_content_available: true, emails, website: result.website } }, { onConflict: "owner,creator_id,source_kind,source_url,source_ref,observation_key", ignoreDuplicates: true }));
+      }
       await query2(sb2.from("sanji_creator_recovery").update({ ...patch, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("id", target.id));
       await audit2(owner, "creator_meta_profile_checked", { id: target.id, state: result.state });
       return { ...result, linkNotice: target.profile_url ? "\uAE30\uC874 \uD504\uB85C\uD544 \uB9C1\uD06C \uC720\uC9C0" : "\uC544\uC774\uB514 \uC77C\uCE58\uB9CC\uC73C\uB85C \uBCF5\uAD6C\uB41C \uC6D0\uBCF8 \uACC4\uC815\uC758 \uC18C\uC720 \uAD00\uACC4\uB97C \uD655\uC815\uD558\uC9C0 \uC54A\uC544 \uB9C1\uD06C\uB294 \uBBF8\uD655\uC778" };
