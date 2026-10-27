@@ -91,9 +91,18 @@ create or replace function public.sanji_groupbuy_eligibility(p_bio text) returns
  select case
  when regexp_replace(coalesce(p_bio,''),'[[:space:]]+','','g') ~* '(과거|예전|이전|한때|작년|지난해|했었|않았|안했)' and regexp_replace(coalesce(p_bio,''),'[[:space:]]+','','g') ~* '(공구|공동구매|협찬|광고)' then 'review'
  when regexp_replace(coalesce(p_bio,''),'[[:space:]]+','','g') ~* '(공구|공동구매)[^.!?\n]{0,30}(협찬|광고)[^.!?\n]{0,20}(사절|거절|안합니다|받지않|불가)' then 'review'
- when regexp_replace(coalesce(p_bio,''),'[[:space:]]+','','g') ~* '(공구|공동구매)([^[:alnum:]가-힣]|은|는|제안|진행|문의|dm){0,8}(x|no([^a-z]|$)|✖|❌|❎|안함|안해|차단)' then 'deny'
+ when regexp_replace(coalesce(p_bio,''),'[[:space:]]+','','g') ~* '(공구|공동구매)([^[:alnum:]가-힣]|은|는|제안|진행|문의|dm){0,8}(x|no([^a-z]|$)|✖|❌|❎|🙅|안함|안해|차단)' then 'deny'
+ when regexp_replace(coalesce(p_bio,''),'[[:space:]]+','','g') ~* '(공구|공동구매)[^.!?\n]{0,30}마음만감사' then 'deny'
  when regexp_replace(coalesce(p_bio,''),'[[:space:]]+','','g') ~* '(공구|공동구매)[^.!?\n]{0,30}(사절|거절|안합니다|안해요|하지않|하지마|받지않|받지못|미진행|진행하지않|불가)' then 'deny'
  when regexp_replace(coalesce(p_bio,''),'[[:space:]]+','','g') ~* '(협찬|광고)[^.!?\n]{0,20}(사절|거절|안합니다|받지않|불가)' then 'review'
+ else 'allow' end;
+$$;
+-- DM restrictions are separate from group-buy eligibility; private-DM exclusions do not imply business DM refusal.
+create or replace function public.sanji_dm_eligibility(p_bio text) returns text language sql immutable set search_path='' as $$
+ select case
+ when regexp_replace(coalesce(p_bio,''),'[[:space:]]+','','g') ~* '(사적인|개인적인|사적|개인)디엠(no|x|❌|❎|✖)' and regexp_replace(coalesce(p_bio,''),'[[:space:]]+','','g') ~* '(공구|협업|광고|협찬)[^.!?\n]{0,20}(문의|제안|open)' then 'review'
+ when regexp_replace(coalesce(p_bio,''),'[[:space:]]+','','g') ~* '(dm|디엠)[^.!?\n]{0,20}(문의x|x|❌|❎|✖|🚫|받지않|확인어렵|확인이어렵|확인불가|사절|거절|no)' then 'deny'
+ when regexp_replace(coalesce(p_bio,''),'[[:space:]]+','','g') ~* '(사적인|개인적인|사적|개인)디엠(no|x|❌|❎|✖)' then 'review'
  else 'allow' end;
 $$;
 create or replace function public.sanji_creator_pool_counts(p_owner uuid) returns jsonb language sql stable security definer set search_path='' as $$
