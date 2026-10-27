@@ -1075,9 +1075,28 @@ function creatorMetaService({ sb: sb2, query: query2, env: env2, connection: con
     } catch {
       throw Error("Meta \uC5F0\uACB0 \uC2E4\uD328 \xB7 \uC790\uB3D9 \uC7AC\uC2DC\uB3C4 \uC5C6\uC74C");
     }
-    if (!r.ok || d.error) throw Error(providerError(r.status, d.error?.code).message);
+    if (!r.ok || d.error) {
+      const e = Error(providerError(r.status, d.error?.code).message);
+      e.metaCode = Number.isInteger(d.error?.code) ? d.error.code : null;
+      throw e;
+    }
     return d;
   };
+  async function pages(token) {
+    const items = [], seen = /* @__PURE__ */ new Set();
+    let after = "";
+    for (let i = 0; i < 10; i++) {
+      const params = { fields: "id,name,instagram_business_account{id,username}", limit: "50" };
+      if (after) params.after = after;
+      const result = await graph("me/accounts", params, token);
+      items.push(...Array.isArray(result.data) ? result.data : []);
+      const next = String(result.paging?.cursors?.after || "");
+      if (!result.paging?.next || !next || seen.has(next)) return { items, truncated: false };
+      seen.add(next);
+      after = next;
+    }
+    return { items, truncated: true };
+  }
   async function start(owner, base) {
     if (!env2("META_FB_APP_ID") || !env2("META_FB_APP_SECRET") || !env2("TOKEN_ENCRYPTION_KEY")) throw Error("Facebook \uB85C\uADF8\uC778 \uC571 ID\xB7\uC2DC\uD06C\uB9BF\uACFC \uC11C\uBC84 \uD1A0\uD070 \uC554\uD638\uD654 \uD0A4\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.");
     const state = random();
@@ -1103,7 +1122,7 @@ function creatorMetaService({ sb: sb2, query: query2, env: env2, connection: con
       throw Error("Facebook \uD1A0\uD070 \uAD50\uD658 \uC2E4\uD328");
     }
     if (!r.ok || !t.access_token) throw Error("Facebook \uD1A0\uD070 \uAD50\uD658 \uC2E4\uD328 \xB7 \uACF5\uC2DD \uC571 \uC124\uC815 \uD655\uC778");
-    const pages = await graph("me/accounts", { fields: "id,name,instagram_business_account{id,username}", limit: "50" }, t.access_token), accounts = (pages.data || []).filter((p) => /^\d+$/.test(String(p.instagram_business_account?.id || ""))).map((p) => ({ id: String(p.instagram_business_account.id), username: String(p.instagram_business_account.username || ""), pageName: String(p.name || "") }));
+    const pageResult = await pages(t.access_token), accounts = pageResult.items.filter((p) => /^\d+$/.test(String(p.instagram_business_account?.id || ""))).map((p) => ({ id: String(p.instagram_business_account.id), username: String(p.instagram_business_account.username || ""), pageName: String(p.name || "") }));
     await saveConnection2(row.owner, "creator_meta", { access_token: t.access_token, expires: Date.now() + Math.max(0, Number(t.expires_in || 3600)) * 1e3, accounts, selectedId: "", username: "", id: "", tokenMode: "facebook_login", apiVerified: false });
     await audit2(row.owner, "creator_meta_connected", { accountCount: accounts.length });
     return { owner: row.owner, accountCount: accounts.length };
@@ -1118,6 +1137,25 @@ function creatorMetaService({ sb: sb2, query: query2, env: env2, connection: con
     if (path === "/creator-meta/status" && method === "GET") {
       const c = await connection2(owner, "creator_meta");
       return { configured: !!env2("META_FB_APP_ID") && !!env2("META_FB_APP_SECRET") && !!env2("TOKEN_ENCRYPTION_KEY"), connected: !!c?.access_token && Number(c.expires) > Date.now(), accounts: c?.accounts || [], selectedId: c?.selectedId || "", expires: c?.expires || null, redirectUri: base + "/creator-meta/callback", scope: "Facebook \uB85C\uADF8\uC778 \xB7 \uBE44\uC988\uB2C8\uC2A4 \uAC80\uC0C9\uACFC \uD574\uC2DC\uD0DC\uADF8 \uAC80\uC0C9 \xB7 Meta \uAD8C\uD55C\xB7App Review \uBCC4\uB3C4" };
+    }
+    if (path === "/creator-meta/diagnostics" && method === "GET") {
+      const c = await get(owner);
+      let permissions = [], pageItems = [], truncated = false;
+      const errors = [];
+      try {
+        const r = await graph("me/permissions", {}, c.access_token);
+        permissions = (r.data || []).filter((x) => typeof x.permission === "string").map((x) => ({ permission: x.permission, status: x.status === "granted" ? "granted" : x.status === "declined" ? "declined" : "other" }));
+      } catch (e) {
+        errors.push({ operation: "permissions", code: e.metaCode ?? null });
+      }
+      try {
+        const r = await pages(c.access_token);
+        pageItems = r.items.map((p) => ({ id: String(p.id || ""), name: String(p.name || ""), instagram: p.instagram_business_account?.id ? { id: String(p.instagram_business_account.id), username: String(p.instagram_business_account.username || "") } : null }));
+        truncated = r.truncated;
+      } catch (e) {
+        errors.push({ operation: "pages", code: e.metaCode ?? null });
+      }
+      return { permissions, pages: pageItems, truncated, errors };
     }
     const b = await input();
     if (path === "/creator-meta/start" && method === "POST") return start(owner, base);
