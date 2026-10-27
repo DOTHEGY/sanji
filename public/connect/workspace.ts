@@ -972,6 +972,57 @@ function assessDispatch(d, c, lead, failures = [], replyAddresses = []) {
   return { ...check, allowed: reasons.length === 0, reasons };
 }
 
+// supabase/functions/_shared/creator-recovery.ts
+var day = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" }).format(/* @__PURE__ */ new Date());
+function recoveryService({ sb: sb2, query: query2, audit: audit2 }) {
+  const config = async (owner) => await query2(sb2.from("sanji_creator_recovery_config").select("*").eq("owner", owner).maybeSingle()) || { enabled: false, target: 30, run_time: "09:00", daily_lookup_limit: 0, retry_limit: 0, paid_limit_usd: 0 };
+  async function recommend(owner) {
+    const c = await config(owner), today = day();
+    const added = await query2(sb2.rpc("sanji_creator_recommend", { p_owner: owner, p_day: today, p_target: c.target }));
+    await audit2(owner, "creator_recovery_recommended", { day: today, added });
+    return { day: today, added };
+  }
+  async function handle2(path, method, owner, input, params = new URLSearchParams()) {
+    if (path === "/creator-recovery" && method === "GET") {
+      const c = await config(owner), today = day(), requested = params.get("day") || today, selectedDay = /^\d{4}-\d{2}-\d{2}$/.test(requested) && requested <= today ? requested : today, preview = await query2(sb2.rpc("sanji_creator_preview", { p_owner: owner, p_target: c.target })), rec = await query2(sb2.from("sanji_creator_recommendations").select("creator_id").eq("owner", owner).eq("day", selectedDay));
+      const ids = rec.map((r) => r.creator_id), rows = [];
+      for (let i = 0; i < ids.length; i += 100) rows.push(...await query2(sb2.from("sanji_creator_recovery").select("*").eq("owner", owner).in("id", ids.slice(i, i + 100))));
+      const offset = Math.min(1e5, Math.max(0, Number.parseInt(params.get("reviewOffset") || "0", 10) || 0));
+      const review = await query2(sb2.from("sanji_creator_recovery").select("id,handle,profile_url,nickname,followers,emails,email_status,link_status,entity_type,assessment,reasons,status,source_file,source_created_at,last_verified,bio,category").eq("owner", owner).eq("assessment", "review").eq("status", "new").order("created").order("id").range(offset, offset + 99));
+      const managed = await query2(sb2.from("sanji_creator_recovery").select("id,handle,profile_url,nickname,followers,emails,email_status,link_status,entity_type,assessment,reasons,status,source_file,source_created_at,last_verified,bio,category").eq("owner", owner).in("status", ["hold", "excluded", "contacted"]).order("updated", { ascending: false }).limit(100));
+      return { config: c, day: selectedDay, today, recommendations: rows, preview, review, managed, reviewOffset: offset, shortfall: Math.max(0, c.target - rows.filter((x) => x.status === "new").length), shortfallReason: rows.filter((x) => x.status === "new").length < c.target ? "\u6761\u4EF6\u306B\u5408\u3046\u672A\u63A8\u85A6\u5019\u88DC\u304C\u4E0D\u8DB3\u3001\u307E\u305F\u306F\u4ECA\u65E5\u306E\u63A8\u85A6\u304C\u672A\u5B9F\u884C\u3067\u3059\u3002" : "", sourceNotice: "\u5FA9\u65E7\u30C7\u30FC\u30BF\u306E\u904E\u53BB\u306E\u7D39\u4ECB\u6B04\u30FB\u6570\u5024\u3002\u73FE\u5728\u306E\u6D3B\u52D5\u30FB\u56FD\u7C4D\u30FB\u30E1\u30FC\u30EB\u306E\u6709\u52B9\u6027\u306F\u672A\u78BA\u8A8D\u3002" };
+    }
+    const b = await input();
+    if (path === "/creator-recovery/recommend" && method === "POST") return await recommend(owner);
+    if (path === "/creator-recovery/settings" && method === "POST") {
+      const target = Number(b.target), lookup = Number(b.dailyLookupLimit), retry = Number(b.retryLimit), cost = Number(b.paidLimitUsd), time = String(b.runTime || "");
+      if (!Number.isInteger(target) || target < 1 || target > 500 || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time) || !Number.isInteger(lookup) || lookup < 0 || lookup > 500 || !Number.isInteger(retry) || retry < 0 || retry > 5 || !Number.isFinite(cost) || cost < 0 || cost > 100) throw Error("\uC124\uC815\uAC12\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694.");
+      await query2(sb2.from("sanji_creator_recovery_config").upsert({ owner, target, run_time: time, enabled: b.enabled === true, daily_lookup_limit: lookup, retry_limit: retry, paid_limit_usd: cost, updated: (/* @__PURE__ */ new Date()).toISOString() }, { onConflict: "owner" }));
+      return { ok: true };
+    }
+    if (path === "/creator-recovery/status" && method === "POST") {
+      if (!["new", "hold", "excluded", "contacted"].includes(b.status)) throw Error("\uC0C1\uD0DC\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+      const rows = await query2(sb2.from("sanji_creator_recovery").update({ status: b.status, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("id", b.id).select("id"));
+      if (!rows.length) throw Error("\uB300\uC0C1\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      return { ok: true };
+    }
+    throw Error("\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uC791\uC5C5");
+  }
+  async function scheduled() {
+    const rows = await query2(sb2.from("sanji_creator_recovery_config").select("*").eq("enabled", true));
+    const now2 = /* @__PURE__ */ new Date(), today = day(), clock = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(now2);
+    let completed = 0;
+    for (const c of rows) {
+      if (String(c.run_time).slice(0, 5) > clock || c.last_run_day === today) continue;
+      await recommend(c.owner);
+      await query2(sb2.from("sanji_creator_recovery_config").update({ last_run_day: today }).eq("owner", c.owner));
+      completed++;
+    }
+    return { status: "checked", completed };
+  }
+  return { handle: handle2, scheduled };
+}
+
 // supabase/functions/_shared/creator-discovery.ts
 import { Buffer as Buffer4 } from "node:buffer";
 
@@ -1138,8 +1189,8 @@ function creatorDiscoveryService({ sb: sb2, query: query2, audit: audit2, env: e
   async function handle2(path, method, owner, input) {
     if (path === "/creator-discovery" && method === "GET") {
       const recent = await query2(sb2.from("sanji_creator_prospects").select("checked").eq("owner", owner).gte("checked", new Date(Date.now() - 48 * 36e5).toISOString()).limit(1e3));
-      const day2 = (time) => new Date(time + 9 * 36e5).toISOString().slice(0, 10), today = day2(Date.now()), yesterday = day2(Date.now() - 864e5);
-      return { apify: { configured: !!env2("APIFY_TOKEN"), trialBudgetUsd: 0.35, target: 30, trial: (await query2(sb2.from("sanji_apify_creator_trials").select("id,status,budget_usd,target,accepted,reviewed,cost_usd,runs,excluded,error,updated").eq("owner", owner).order("created", { ascending: false }).limit(1)))[0] || null }, config: safe(await get(owner)), counts: { today: recent.filter((r) => day2(Date.parse(r.checked)) === today).length, yesterday: recent.filter((r) => day2(Date.parse(r.checked)) === yesterday).length }, prospects: await query2(sb2.from("sanji_creator_prospects").select("*").eq("owner", owner).order("checked", { ascending: false }).limit(300)) };
+      const day3 = (time) => new Date(time + 9 * 36e5).toISOString().slice(0, 10), today = day3(Date.now()), yesterday = day3(Date.now() - 864e5);
+      return { apify: { configured: !!env2("APIFY_TOKEN"), trialBudgetUsd: 0.35, target: 30, trial: (await query2(sb2.from("sanji_apify_creator_trials").select("id,status,budget_usd,target,accepted,reviewed,cost_usd,runs,excluded,error,updated").eq("owner", owner).order("created", { ascending: false }).limit(1)))[0] || null }, config: safe(await get(owner)), counts: { today: recent.filter((r) => day3(Date.parse(r.checked)) === today).length, yesterday: recent.filter((r) => day3(Date.parse(r.checked)) === yesterday).length }, prospects: await query2(sb2.from("sanji_creator_prospects").select("*").eq("owner", owner).order("checked", { ascending: false }).limit(300)) };
     }
     const b = await input();
     if (path === "/creator-discovery/settings" && method === "POST") {
@@ -1742,7 +1793,7 @@ var publicCompanyQuery = `SELECT DISTINCT ?company ?companyLabel ?site ?industry
 
 // supabase/functions/_shared/discovery-service.ts
 var defaults = { enabled: false, target: 40, keywords: ["\uAC74\uAC15\uAE30\uB2A5\uC2DD\uD488 \uC720\uC0B0\uADE0", "\uAC74\uAC15\uC2DD\uD488 \uD6A8\uC18C", "\uAC74\uAC15\uC2DD\uD488 \uB2E8\uBC31\uC9C8", "\uAC74\uAC15\uC2DD\uD488 \uACAC\uACFC", "\uAC74\uAC15\uC2DD\uD488 \uC62C\uB9AC\uBE0C\uC624\uC77C"] };
-var day = () => (/* @__PURE__ */ new Date()).toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
+var day2 = () => (/* @__PURE__ */ new Date()).toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
 async function discoveryDeadline(work, ms, message) {
   let timer;
   try {
@@ -1926,7 +1977,7 @@ function discoveryService(deps) {
     if (rows.length) {
       added = Number(await query2(sb2.rpc("sanji_enqueue_discovery_sources", { p_owner: u, p_rows: rows })));
     }
-    const state = { day: day(), checked, attempts: cfg.source_state?.attempts || 1, status: sources.some((s) => s.ok) ? "completed" : "limited", added, sources, error: sources.filter((s) => !s.ok).map((s) => s.source + ": " + s.error).join(" / ").slice(0, 1200) };
+    const state = { day: day2(), checked, attempts: cfg.source_state?.attempts || 1, status: sources.some((s) => s.ok) ? "completed" : "limited", added, sources, error: sources.filter((s) => !s.ok).map((s) => s.source + ": " + s.error).join(" / ").slice(0, 1200) };
     await query2(sb2.from("sanji_discovery_config").update({ source_state: state, updated: checked }).eq("owner", u));
     await audit2(u, "daily_discovery_sources_refreshed", { day: state.day, added, status: state.status });
     return { status: "sources_refreshed", added, message: added ? "\uC911\uBCF5 \uC81C\uC678 \uC2E0\uADDC \uD648\uD398\uC774\uC9C0 \uD6C4\uBCF4 " + added + "\uACF3 \uCD94\uAC00" : "\uC678\uBD80 \uBAA9\uB85D \uD655\uC778 \uC644\uB8CC \xB7 \uC2E0\uADDC \uD6C4\uBCF4 \uC5C6\uC74C", sources };
@@ -2031,7 +2082,7 @@ function discoveryService(deps) {
           }
           if (companies) {
             data.firstEmailAt = data.firstEmailAt || (/* @__PURE__ */ new Date()).toISOString();
-            data.discoveredDay = day();
+            data.discoveredDay = day2();
             const ts = await query2(sb2.from("sanji_records").select("id,data,version,updated").eq("owner", u).eq("kind", "template").order("updated", { ascending: true }).limit(20));
             const t = ts.find((t2) => t2.data.channel === "\uC774\uBA54\uC77C" && t2.data.purpose !== "brand_reply" && t2.data.purpose !== "creator_proposal");
             if (t) {
@@ -2188,7 +2239,7 @@ function discoveryService(deps) {
     if (path === "/discovery" && method === "GET") {
       const settings = await config(u);
       const leads = await query2(sb2.from("sanji_discovery_leads").select("*").eq("owner", u).order("created", { ascending: false }).limit(500));
-      const usage = await query2(sb2.from("sanji_discovery_usage").select("*").eq("owner", u).eq("day", day()).maybeSingle());
+      const usage = await query2(sb2.from("sanji_discovery_usage").select("*").eq("owner", u).eq("day", day2()).maybeSingle());
       const today = usage || { calls: 0, added: 0, processed: 0, emails: 0 };
       const history = await query2(sb2.rpc("sanji_discovery_history", { p_owner: u }));
       const pending = leads.filter((l) => l.status === "new");
@@ -2196,7 +2247,7 @@ function discoveryService(deps) {
       const status = !settings.enabled ? "paused" : (today.companies || 0) >= settings.target ? "target_reached" : today.calls >= 240 ? "daily_limit" : !pending.length ? "sources_exhausted" : active ? "running" : "queued";
       const labels = { paused: "\uC790\uB3D9 \uC218\uC9D1 \uAEBC\uC9D0", target_reached: "\uC624\uB298 \uC2E0\uADDC \uC5C5\uCCB4 \uBAA9\uD45C \uB3C4\uB2EC", daily_limit: "\uC624\uB298 \uC2E4\uD589 \uD55C\uB3C4 \uB3C4\uB2EC", sources_exhausted: settings.enabled ? "\uD6C4\uBCF4 \uB300\uAE30\uC5F4 \uC18C\uC9C4 \xB7 \uAC80\uC0C9 \uBCF4\uCDA9 \uB300\uAE30" : "\uB300\uAE30\uC5F4 \uC18C\uC9C4 \xB7 \uC2E0\uADDC \uC18C\uC2A4 \uBCF4\uAC15 \uD544\uC694", running: "\uD648\uD398\uC774\uC9C0 \uACF5\uAC1C \uC774\uBA54\uC77C \uD655\uC778 \uC911", queued: "\uD648\uD398\uC774\uC9C0 \uD6C4\uBCF4 \uC21C\uCC28 \uC218\uC9D1 \uB300\uAE30 \xB7 5\uBD84 \uAC04\uACA9" };
       const activity = leads.filter((l) => l.status !== "new").sort((a, b2) => Date.parse(b2.updated) - Date.parse(a.updated)).slice(0, 12).map((l) => ({ id: l.id, name: l.data.name, checked: l.data.checked || l.updated, emailCount: l.data.contacts?.length || 0, pages: l.data.pages || 0, error: l.data.error || "" }));
-      const notification = await query2(sb2.from("sanji_discovery_notifications").select("day,status,created,updated,error").eq("owner", u).eq("day", day()).maybeSingle());
+      const notification = await query2(sb2.from("sanji_discovery_notifications").select("day,status,created,updated,error").eq("owner", u).eq("day", day2()).maybeSingle());
       const integrityThreads = await query2(sb2.from("sanji_records").select("data").eq("owner", u).eq("kind", "thread")), failed = permanentFailureEmails(integrityThreads, await query2(sb2.from("sanji_suppression").select("identity,reason").eq("owner", u)));
       const reviewed = leads.map((l) => {
         const check = assessMailLead(l, failed), o = l.data.outreach || {}, dispatch = o.body ? assessDispatch({ targetName: check.brand, emails: check.contacts.map((c) => c.email), body: o.body }, { name: check.brand }, l, failed) : check;
@@ -2713,6 +2764,7 @@ var syncRequestedGmailSignature = gmailSignatureSync({ sb, query, getSignature: 
 var emailTracking = emailTrackingService({ sb, query, env, audit, baseUrl: env("SUPABASE_URL") + "/functions/v1/" + (env("WORKSPACE_FUNCTION_NAME") || "bright-function") });
 var notifyOwner = discoveryCompletionNotifier({ sb, query, gmailToken, remote, audit, env });
 var creatorDiscovery = creatorDiscoveryService({ sb, query, audit, env });
+var creatorRecovery = recoveryService({ sb, query, audit });
 var apifyTrials = apifyTrialService({ sb, query, env, audit });
 var saveManualReply = manualReplyService({ sb, query, putRecord, audit });
 var creatorLocal = creatorLocalService({ sb, query, audit, encrypt, decrypt, putRecord });
@@ -3185,8 +3237,9 @@ Deno.serve(async (req) => {
     }
     if (path === "/creator-discovery/tick" && req.method === "POST") {
       if (!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403, "\uBC1C\uAD74 \uC2E4\uD589\uAE30 \uC778\uC99D \uC2E4\uD328");
+      const recovery = await creatorRecovery.scheduled();
       const apify = await apifyTrials.tick();
-      return json(apify || { status: "disabled", reason: "\uAE30\uC874 \uC790\uB3D9 \uAC80\uC0C9 \uC911\uB2E8 \xB7 \uC2B9\uC778\uB41C Apify \uC2DC\uD5D8\uB9CC \uC2E4\uD589" });
+      return json({ recovery, apify: apify || { status: "disabled" } });
     }
     if (path === "/gmail/tick" && req.method === "POST") {
       if (!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403, "\uD68C\uC2E0 \uB3D9\uAE30\uD654 \uC2E4\uD589\uAE30 \uC778\uC99D \uC2E4\uD328");
@@ -3253,6 +3306,13 @@ Deno.serve(async (req) => {
       }
     }
     if (path === "/email-tracking" || path.startsWith("/email-tracking/")) return json(await emailTracking.handle(path, req.method, u, input, url2.searchParams));
+    if (path === "/creator-recovery" || path.startsWith("/creator-recovery/")) {
+      try {
+        return json(await creatorRecovery.handle(path, req.method, u, input, url2.searchParams));
+      } catch (e) {
+        fail(400, String(e.message || "\uD06C\uB9AC\uC5D0\uC774\uD130 \uCD94\uCC9C \uC2E4\uD328"));
+      }
+    }
     if (path === "/creator-discovery" || path.startsWith("/creator-discovery/")) {
       try {
         return json(await creatorDiscovery.handle(path, req.method, u, input));

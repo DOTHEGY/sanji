@@ -7,6 +7,7 @@ import {manualReplyService} from "../_shared/manual-reply.ts";
 import {creatorLocalService} from "../_shared/creator-local.ts";
 import {gmailSyncService} from "../_shared/gmail-sync.ts";
 import {assessDispatch,permanentFailureEmails} from "../_shared/mail-integrity.ts";
+import { recoveryService } from "../_shared/creator-recovery.ts";
 import { creatorDiscoveryService } from "../_shared/creator-discovery.ts";
 import {drainApprovedJobs} from "../_shared/job-batch.ts";
 import { emailTrackingService } from "../_shared/email-tracking.ts";
@@ -157,6 +158,7 @@ const syncRequestedGmailSignature=gmailSignatureSync({sb,query,getSignature:load
 const emailTracking=emailTrackingService({sb,query,env,audit,baseUrl:env("SUPABASE_URL")+"/functions/v1/"+(env("WORKSPACE_FUNCTION_NAME")||"bright-function")});
 const notifyOwner = discoveryCompletionNotifier({sb,query,gmailToken,remote,audit,env});
 const creatorDiscovery = creatorDiscoveryService({sb,query,audit,env});
+const creatorRecovery = recoveryService({sb,query,audit});
 const apifyTrials=apifyTrialService({sb,query,env,audit});
 const saveManualReply=manualReplyService({sb,query,putRecord,audit});
 const creatorLocal=creatorLocalService({sb,query,audit,encrypt,decrypt,putRecord});
@@ -787,7 +789,7 @@ Deno.serve(async (req: Request) => {
     }
     if(path === "/creator-discovery/tick" && req.method === "POST"){
       if(!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403,"발굴 실행기 인증 실패");
-      const apify=await apifyTrials.tick();return json(apify||{status:"disabled",reason:"기존 자동 검색 중단 · 승인된 Apify 시험만 실행"});
+      const recovery=await creatorRecovery.scheduled();const apify=await apifyTrials.tick();return json({recovery,apify:apify||{status:"disabled"}});
     }
     if(path==="/gmail/tick"&&req.method==="POST"){
       if(!env("DISCOVERY_RUNNER_TOKEN")||req.headers.get("x-job-token")!==env("DISCOVERY_RUNNER_TOKEN"))fail(403,"회신 동기화 실행기 인증 실패");
@@ -836,6 +838,9 @@ Deno.serve(async (req: Request) => {
       try{return json(await creatorLocal.admin(path,u,await input()));}catch(e){fail(400,String(e.message||"PC 실행기 설정 실패"));}
     }
     if(path==="/email-tracking"||path.startsWith("/email-tracking/"))return json(await emailTracking.handle(path,req.method,u,input,url.searchParams));
+    if(path === "/creator-recovery" || path.startsWith("/creator-recovery/")){
+      try{return json(await creatorRecovery.handle(path,req.method,u,input,url.searchParams));}catch(e){fail(400,String(e.message||"크리에이터 추천 실패"));}
+    }
     if(path === "/creator-discovery" || path.startsWith("/creator-discovery/")){
       try{return json(await creatorDiscovery.handle(path,req.method,u,input));}catch(e){fail(400,String(e.message||"크리에이터 발굴 실패"));}
     }
