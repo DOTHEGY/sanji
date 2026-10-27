@@ -972,10 +972,202 @@ function assessDispatch(d, c, lead, failures = [], replyAddresses = []) {
   return { ...check, allowed: reasons.length === 0, reasons };
 }
 
+// supabase/functions/_shared/creator-visible-import.ts
+import { Buffer as Buffer4 } from "node:buffer";
+var EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+function sanitizeVisibleRows(raw) {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > 30) throw Error("\uD55C \uBC88\uC5D0 1~30\uAC1C \uACC4\uC815\uB9CC \uAC00\uC838\uC62C \uC218 \uC788\uC2B5\uB2C8\uB2E4.");
+  const rows = [], seen = /* @__PURE__ */ new Set();
+  for (const [index, x] of raw.entries()) {
+    const handle2 = String(x?.handle || "").trim().replace(/^@/, "").toLowerCase(), source = String(x?.source_url || "").trim(), reference = String(x?.source_ref || "").trim().replace(/^@/, "").toLowerCase();
+    if (!/^[a-z0-9._]{1,30}$/.test(handle2) || !["https://tagby.io/influencer/search", "https://tagby.io/instant/recommend/search"].includes(source) || !/^[a-z0-9._]{0,30}$/.test(reference)) throw Error("\uC544\uC774\uB514 \uB610\uB294 \uD0DC\uADF8\uBC14\uC774 \uCD9C\uCC98\uB97C \uD655\uC778\uD558\uC138\uC694.");
+    const key2 = [handle2, source, reference].join("|");
+    if (seen.has(key2)) continue;
+    seen.add(key2);
+    let profile = String(x.profile_url || "").trim();
+    if (profile) {
+      let u;
+      try {
+        u = new URL(profile);
+      } catch {
+        throw Error("\uD504\uB85C\uD544 URL\uC774 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+      }
+      if (u.protocol !== "https:" || !["instagram.com", "www.instagram.com"].includes(u.hostname) || u.pathname.replace(/\/$/, "").toLowerCase() !== "/" + handle2) throw Error("\uD504\uB85C\uD544 URL\uACFC \uC544\uC774\uB514\uAC00 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+      profile = u.origin + u.pathname.replace(/\/$/, "") + "/";
+    }
+    const bio = String(x.bio || "").slice(0, 4e3), matches = [...bio.matchAll(EMAIL)].map((m) => m[0].replace(/\.+$/, "")), emails = [...new Set(matches.map((e) => e.toLowerCase()))];
+    const requested = String(x.bio_status || ""), bioStatus = requested || (bio ? emails.length ? "email_present" : "email_not_in_bio" : "not_checked");
+    if (!["email_present", "email_not_in_bio", "bio_unreadable", "not_checked"].includes(bioStatus)) throw Error("\uC18C\uAC1C\uB780 \uD655\uC778 \uC0C1\uD0DC\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+    if (bioStatus === "email_present" && !emails.length || bioStatus === "email_not_in_bio" && emails.length || ["bio_unreadable", "not_checked"].includes(bioStatus) && bio) throw Error("\uC18C\uAC1C\uB780 \uB0B4\uC6A9\uACFC \uD655\uC778 \uC0C1\uD0DC\uAC00 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+    if (bioStatus !== "not_checked") {
+      let bioSource;
+      try {
+        bioSource = new URL(String(x.bio_source_url || ""));
+      } catch {
+        throw Error("\uC18C\uAC1C\uB780\uC744 \uD655\uC778\uD55C Instagram \uCD9C\uCC98\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.");
+      }
+      if (bioSource.protocol !== "https:" || !["instagram.com", "www.instagram.com"].includes(bioSource.hostname) || bioSource.pathname.replace(/\/$/, "").toLowerCase() !== "/" + handle2 || !profile) throw Error("\uC18C\uAC1C\uB780 \uCD9C\uCC98\uC640 \uC544\uC774\uB514\uB97C \uD655\uC778\uD558\uC138\uC694.");
+    }
+    const bioChecked = typeof x.bio_checked_at === "string" && Number.isFinite(Date.parse(x.bio_checked_at)) ? new Date(x.bio_checked_at).toISOString() : null;
+    const count = (v) => Number.isSafeInteger(v) && v >= 0 ? v : null;
+    rows.push({ handle: handle2, profile_url: profile, nickname: String(x.nickname || "").slice(0, 200), followers: count(x.followers), category: String(x.category || "").slice(0, 200), bio, bio_source_url: bioStatus !== "not_checked" ? profile : "", bio_status: bioStatus, bio_checked_at: bioChecked, bio_content_available: !!bio, emails, email_status: bioStatus === "email_present" ? "\uC18C\uAC1C\uB780 \uACF5\uAC1C \xB7 \uC720\uD6A8\uC131 \uBBF8\uAC80\uC99D" : bioStatus === "email_not_in_bio" ? "\uD574\uB2F9 \uC2DC\uC810 \uC18C\uAC1C\uB780\uC5D0 \uC774\uBA54\uC77C \uC5C6\uC74C" : bioStatus === "bio_unreadable" ? "\uC18C\uAC1C\uB780 \uC870\uD68C \uC2E4\uD328 \xB7 \uC774\uBA54\uC77C \uBBF8\uD655\uC778" : "\uC544\uC9C1 \uC870\uD68C\uD558\uC9C0 \uC54A\uC74C", source_url: source, source_ref: reference, checked: typeof x.checked === "string" && Number.isFinite(Date.parse(x.checked)) ? new Date(x.checked).toISOString() : null, observation_kind: ["file_observed", "page_observed"].includes(x.observation_kind) ? x.observation_kind : "unknown", source_position: Number.isInteger(x.source_position) && x.source_position > 0 && x.source_position <= 30 ? x.source_position : index + 1, similarity: String(x.similarity || "").slice(0, 100), average_likes: count(x.average_likes), average_comments: count(x.average_comments) });
+  }
+  return rows;
+}
+function visibleImportService({ sb: sb2, query: query2, audit: audit2 }) {
+  return async (owner, input) => {
+    const rows = sanitizeVisibleRows(input?.rows);
+    const hash3 = Buffer4.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(rows)))).toString("hex");
+    const result = await query2(sb2.rpc("sanji_creator_import_visible", { p_owner: owner, p_hash: hash3, p_rows: rows }));
+    await audit2(owner, "creator_visible_imported", { processed: result.processed, added: result.added, duplicateBatch: result.duplicateBatch });
+    return result;
+  };
+}
+
+// supabase/functions/_shared/creator-meta.ts
+import { Buffer as Buffer5 } from "node:buffer";
+
+// supabase/functions/_shared/creator-recovery-adapters.ts
+function providerError(status, code) {
+  if (status === 401 || code === 190) return { state: "login_expired", retry: false, message: "\uACF5\uC2DD \uC778\uC99D \uB9CC\uB8CC \xB7 \uB2E4\uC2DC \uC5F0\uACB0 \uD544\uC694" };
+  if (status === 429 || code === 4 || code === 17 || code === 32 || code === 613) return { state: "rate_limited", retry: false, message: "\uC81C\uACF5\uC790 \uC870\uD68C \uC81C\uD55C \xB7 \uC790\uB3D9 \uC6B0\uD68C\xB7\uC7AC\uC2DC\uB3C4 \uC911\uC9C0" };
+  if (status === 403 || code === 10 || code === 200) return { state: "permission_required", retry: false, message: "\uACF5\uC2DD \uAD8C\uD55C \uB610\uB294 \uACC4\uC815 \uC720\uD615 \uD655\uC778 \uD544\uC694" };
+  return { state: "unavailable", retry: false, message: "\uD504\uB85C\uD544 \uC870\uD68C \uC2E4\uD328 \xB7 \uD655\uC778 \uD544\uC694" };
+}
+async function instagramBusinessDiscovery({ accountId, token, handle: handle2, request = fetch, version = "v24.0" }) {
+  if (!/^\d+$/.test(String(accountId)) || !/^v\d+\.\d+$/.test(version) || !/^[a-z0-9._]{1,30}$/i.test(handle2) || !token) throw Error("\uACF5\uC2DD \uACC4\uC815\xB7\uAD8C\uD55C \uC5F0\uACB0 \uD544\uC694");
+  const url2 = new URL(`https://graph.facebook.com/${version}/${accountId}`);
+  url2.searchParams.set("fields", `business_discovery.username(${handle2}){username,followers_count,media_count}`);
+  try {
+    const response = await request(url2.toString(), { headers: { Authorization: "Bearer " + token }, signal: AbortSignal.timeout(8e3) });
+    const data = await response.json();
+    if (!response.ok || data.error) return { ...providerError(response.status, data.error?.code), checkedAt: (/* @__PURE__ */ new Date()).toISOString() };
+    const p = data.business_discovery;
+    if (!p || String(p.username || "").toLowerCase() !== handle2.toLowerCase()) return { ...providerError(404), checkedAt: (/* @__PURE__ */ new Date()).toISOString() };
+    return { state: "verified", handle: p.username, followers: Number.isInteger(p.followers_count) && p.followers_count >= 0 ? p.followers_count : null, mediaCount: Number.isInteger(p.media_count) && p.media_count >= 0 ? p.media_count : null, source: "Meta Business Discovery", checkedAt: (/* @__PURE__ */ new Date()).toISOString(), emailStatus: "\uAE30\uC874 \uC18C\uAC1C\uB780 \uC720\uC9C0 \xB7 \uC774 API\uC5D0\uC11C \uC774\uBA54\uC77C \uBBF8\uD655\uC778" };
+  } catch {
+    return { ...providerError(0), checkedAt: (/* @__PURE__ */ new Date()).toISOString() };
+  }
+}
+
+// supabase/functions/_shared/creator-meta.ts
+var hash = async (s) => Buffer5.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s))).toString("hex");
+var random = () => Buffer5.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
+function creatorMetaService({ sb: sb2, query: query2, env: env2, connection: connection2, saveConnection: saveConnection2, audit: audit2, request = fetch }) {
+  const version = () => /^v\d+\.\d+$/.test(env2("META_GRAPH_VERSION") || "") ? env2("META_GRAPH_VERSION") : "v24.0";
+  const graph = async (path, params, token) => {
+    const u = new URL("https://graph.facebook.com/" + version() + "/" + path);
+    for (const [k, v] of Object.entries(params)) u.searchParams.set(k, String(v));
+    let r, d;
+    try {
+      r = await request(u.toString(), { headers: { Authorization: "Bearer " + token }, signal: AbortSignal.timeout(12e3) });
+      d = await r.json();
+    } catch {
+      throw Error("Meta \uC5F0\uACB0 \uC2E4\uD328 \xB7 \uC790\uB3D9 \uC7AC\uC2DC\uB3C4 \uC5C6\uC74C");
+    }
+    if (!r.ok || d.error) throw Error(providerError(r.status, d.error?.code).message);
+    return d;
+  };
+  async function start(owner, base) {
+    if (!env2("META_FB_APP_ID") || !env2("META_FB_APP_SECRET") || !env2("TOKEN_ENCRYPTION_KEY")) throw Error("Facebook \uB85C\uADF8\uC778 \uC571 ID\xB7\uC2DC\uD06C\uB9BF\uACFC \uC11C\uBC84 \uD1A0\uD070 \uC554\uD638\uD654 \uD0A4\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.");
+    const state = random();
+    await query2(sb2.from("sanji_oauth_states").insert({ state: await hash(state), owner, provider: "creator_meta", verifier: random(), expires: new Date(Date.now() + 6e5).toISOString() }));
+    const u = new URL("https://www.facebook.com/" + version() + "/dialog/oauth");
+    for (const [k, v] of Object.entries({ client_id: env2("META_FB_APP_ID"), redirect_uri: base + "/creator-meta/callback", response_type: "code", scope: "instagram_basic,instagram_manage_insights,pages_show_list,pages_read_engagement", state })) u.searchParams.set(k, String(v));
+    return { url: u.toString(), redirectUri: base + "/creator-meta/callback" };
+  }
+  async function callback2(url2, base) {
+    const state = url2.searchParams.get("state") || "", code = url2.searchParams.get("code") || "";
+    if (!state || !code) throw Error("\uC778\uC99D\uC774 \uCDE8\uC18C\uB418\uC5C8\uAC70\uB098 \uC0C1\uD0DC\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.");
+    const key2 = await hash(state), row = await query2(sb2.from("sanji_oauth_states").select("*").eq("state", key2).eq("provider", "creator_meta").maybeSingle());
+    if (!row || Date.parse(row.expires) <= Date.now()) throw Error("\uC778\uC99D \uC0C1\uD0DC\uAC00 \uB9CC\uB8CC\uB410\uC2B5\uB2C8\uB2E4.");
+    const used = await query2(sb2.from("sanji_oauth_states").delete().eq("state", key2).eq("provider", "creator_meta").select("state"));
+    if (!used.length) throw Error("\uC774\uBBF8 \uC0AC\uC6A9\uB41C \uC778\uC99D\uC785\uB2C8\uB2E4.");
+    const u = new URL("https://graph.facebook.com/" + version() + "/oauth/access_token");
+    for (const [k, v] of Object.entries({ client_id: env2("META_FB_APP_ID"), client_secret: env2("META_FB_APP_SECRET"), redirect_uri: base + "/creator-meta/callback", code })) u.searchParams.set(k, String(v));
+    let r, t;
+    try {
+      r = await request(u.toString(), { signal: AbortSignal.timeout(12e3) });
+      t = await r.json();
+    } catch {
+      throw Error("Facebook \uD1A0\uD070 \uAD50\uD658 \uC2E4\uD328");
+    }
+    if (!r.ok || !t.access_token) throw Error("Facebook \uD1A0\uD070 \uAD50\uD658 \uC2E4\uD328 \xB7 \uACF5\uC2DD \uC571 \uC124\uC815 \uD655\uC778");
+    const pages = await graph("me/accounts", { fields: "id,name,instagram_business_account{id,username}", limit: "50" }, t.access_token), accounts = (pages.data || []).filter((p) => /^\d+$/.test(String(p.instagram_business_account?.id || ""))).map((p) => ({ id: String(p.instagram_business_account.id), username: String(p.instagram_business_account.username || ""), pageName: String(p.name || "") }));
+    await saveConnection2(row.owner, "creator_meta", { access_token: t.access_token, expires: Date.now() + Math.max(0, Number(t.expires_in || 3600)) * 1e3, accounts, selectedId: "", username: "", id: "", tokenMode: "facebook_login", apiVerified: false });
+    await audit2(row.owner, "creator_meta_connected", { accountCount: accounts.length });
+    return { owner: row.owner, accountCount: accounts.length };
+  }
+  async function get(owner) {
+    const c = await connection2(owner, "creator_meta");
+    if (!c) throw Error("Facebook \uB85C\uADF8\uC778\uC744 \uD1B5\uD55C Instagram API \uC5F0\uACB0\uC774 \uD544\uC694\uD569\uB2C8\uB2E4.");
+    if (!c.access_token || !c.expires || Date.now() >= c.expires) throw Error("\uACF5\uC2DD \uC778\uC99D\uC774 \uB9CC\uB8CC\uB410\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uC5F0\uACB0\uD574 \uC8FC\uC138\uC694.");
+    return c;
+  }
+  async function handle2(path, method, owner, input, base) {
+    if (path === "/creator-meta/status" && method === "GET") {
+      const c = await connection2(owner, "creator_meta");
+      return { configured: !!env2("META_FB_APP_ID") && !!env2("META_FB_APP_SECRET") && !!env2("TOKEN_ENCRYPTION_KEY"), connected: !!c?.access_token && Number(c.expires) > Date.now(), accounts: c?.accounts || [], selectedId: c?.selectedId || "", expires: c?.expires || null, redirectUri: base + "/creator-meta/callback", scope: "Facebook \uB85C\uADF8\uC778 \xB7 \uBE44\uC988\uB2C8\uC2A4 \uAC80\uC0C9\uACFC \uD574\uC2DC\uD0DC\uADF8 \uAC80\uC0C9 \xB7 Meta \uAD8C\uD55C\xB7App Review \uBCC4\uB3C4" };
+    }
+    const b = await input();
+    if (path === "/creator-meta/start" && method === "POST") return start(owner, base);
+    if (path === "/creator-meta/disconnect" && method === "POST") {
+      await query2(sb2.from("sanji_connections").delete().eq("owner", owner).eq("provider", "creator_meta"));
+      return { ok: true };
+    }
+    if (path === "/creator-meta/select" && method === "POST") {
+      const c = await get(owner), account = (c.accounts || []).find((x) => x.id === b.id);
+      if (!account) throw Error("\uC778\uC99D\uB41C \uC5F0\uACB0 \uACC4\uC815 \uBAA9\uB85D\uC5D0\uC11C \uC120\uD0DD\uD574 \uC8FC\uC138\uC694.");
+      await saveConnection2(owner, "creator_meta", { ...c, selectedId: account.id, id: account.id, username: account.username });
+      return { ok: true };
+    }
+    if (path === "/creator-meta/discover" && method === "POST") {
+      const c = await get(owner), tag = String(b.tag || "").trim().replace(/^#/, "").toLowerCase();
+      if (!c.selectedId || !/^[a-z0-9_가-힣]{1,30}$/.test(tag)) throw Error("\uD504\uB85C\uD398\uC154\uB110 \uACC4\uC815\uACFC \uD574\uC2DC\uD0DC\uADF8\uB97C \uD655\uC778\uD558\uC138\uC694.");
+      await query2(sb2.rpc("sanji_creator_meta_claim", { p_owner: owner, p_tag: tag }));
+      const h = await graph("ig_hashtag_search", { user_id: c.selectedId, q: tag }, c.access_token), hashtag = h.data?.[0]?.id;
+      if (!/^\d+$/.test(String(hashtag || ""))) return { status: "no_results", added: 0 };
+      const media = await graph(String(hashtag) + "/recent_media", { user_id: c.selectedId, fields: "id,username,caption,permalink,timestamp", limit: "20" }, c.access_token), today = (/* @__PURE__ */ new Date()).toISOString();
+      let added = 0, reviewed = 0;
+      for (const m of (media.data || []).slice(0, 20)) {
+        const handle3 = String(m.username || "").toLowerCase(), caption = String(m.caption || "").slice(0, 600), link = String(m.permalink || "");
+        if (!/^[a-z0-9._]{1,30}$/.test(handle3) || !/^https:\/\/(?:www\.)?instagram\.com\/(?:p|reel)\//i.test(link)) continue;
+        reviewed++;
+        const noncreator = /(?:팬계정|팬 페이지|fan\s*(?:account|page)|공식몰|공식\s*스토어|주식회사|기관 공식)/i.test(caption);
+        const indicators = [/(?:공동구매|공구)/i.test(caption) ? "\uACF5\uAC1C \uAC8C\uC2DC\uBB3C\uC5D0 \uACF5\uB3D9\uAD6C\uB9E4 \uAD00\uB828 \uD45C\uD604" : "", /(?:요리|레시피|식단|푸드|웰니스|운동|일상|육아)/i.test(caption) ? "\uACF5\uAC1C \uAC8C\uC2DC\uBB3C\uC5D0 \uC2DD\uD488\xB7\uC0DD\uD65C \uAD00\uB828 \uC8FC\uC81C" : ""].filter(Boolean);
+        const score = Math.min(100, 10 + indicators.length * 15 + (/[가-힣]/.test(caption) ? 10 : 0));
+        const saved = await sb2.from("sanji_creator_recovery").upsert({ owner, handle: handle3, source_id: "meta:" + handle3, profile_url: "https://www.instagram.com/" + handle3 + "/", nickname: "", followers: null, category: "\uD574\uC2DC\uD0DC\uADF8 #" + tag, bio: "", emails: [], email_status: "\uC544\uC9C1 \uC870\uD68C\uD558\uC9C0 \uC54A\uC74C", source_provider: "instagram_official", source_kind: "meta_hashtag", source_file: "Meta \uD574\uC2DC\uD0DC\uADF8 \uAC80\uC0C9", source_url: link, last_verified: null, link_status: "source_confirmed", entity_type: noncreator ? "noncreator_suspected" : "unknown", priority_score: score, assessment: noncreator ? "review" : "explore", reasons: ["\uACF5\uC2DD \uD574\uC2DC\uD0DC\uADF8 \uCD5C\uADFC \uAC8C\uC2DC\uBB3C\uC758 \uC0AC\uC6A9\uC790\uBA85 \xB7 \uD55C\uAD6D \uD06C\uB9AC\uC5D0\uC774\uD130\uC640 \uACC4\uC815 \uC720\uD615 \uD655\uC778 \uD544\uC694", ...indicators], status: "new" }, { onConflict: "owner,handle", ignoreDuplicates: true }).select("id");
+        if (saved.error) throw Error("\uD6C4\uBCF4 \uC800\uC7A5 \uC2E4\uD328 \xB7 \uAE30\uC874 \uACC4\uC815\uC740 \uC720\uC9C0\uB429\uB2C8\uB2E4.");
+        added += (saved.data || []).length;
+        const target = (saved.data || [])[0] || await query2(sb2.from("sanji_creator_recovery").select("id").eq("owner", owner).eq("handle", handle3).maybeSingle());
+        if (target?.id) await query2(sb2.from("sanji_creator_evidence").upsert({ owner, creator_id: target.id, source_provider: "instagram_official", source_kind: "meta_hashtag", source_url: link, source_ref: tag, detail: { checked: today } }, { onConflict: "owner,creator_id,source_kind,source_url,source_ref,observation_key", ignoreDuplicates: true }));
+      }
+      await audit2(owner, "creator_meta_hashtag_discovery", { tag, reviewed, added, checked: today });
+      return { status: "complete", reviewed, added, checked: today, limitation: "\uCD5C\uADFC 24\uC2DC\uAC04 \uACF5\uAC1C \uAC8C\uC2DC\uBB3C\xB7\uCD5C\uB300 20\uAC74, \uC0AC\uC6A9\uC790\uBA85 \uC81C\uACF5 \uD56D\uBAA9\uB9CC \uD0D0\uC0C9 \uD6C4\uBCF4\uB85C \uC800\uC7A5" };
+    }
+    if (path === "/creator-meta/profile" && method === "POST") {
+      const c = await get(owner);
+      if (!c.selectedId) throw Error("\uD504\uB85C\uD398\uC154\uB110 \uACC4\uC815\uC744 \uBA3C\uC800 \uC120\uD0DD\uD558\uC138\uC694.");
+      const target = await query2(sb2.from("sanji_creator_recovery").select("id,handle,profile_url").eq("owner", owner).eq("id", String(b.id || "")).maybeSingle());
+      if (!target) throw Error("\uC18C\uC720\uD55C \uD6C4\uBCF4\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      const handle3 = target.handle;
+      if (!/^[a-z0-9._]{1,30}$/i.test(handle3)) throw Error("\uC544\uC774\uB514\uB97C \uD655\uC778\uD558\uC138\uC694.");
+      await query2(sb2.rpc("sanji_creator_meta_claim", { p_owner: owner, p_tag: "profile_" + handle3.toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 20), p_kind: "profile" }));
+      const result = await instagramBusinessDiscovery({ accountId: c.selectedId, token: c.access_token, handle: handle3, request, version: version() });
+      const patch = result.state === "verified" && result.followers !== null ? { followers: result.followers, followers_checked: result.checkedAt, followers_source: "Meta Business Discovery", lookup_state: "verified" } : { lookup_state: result.state || "unavailable" };
+      await query2(sb2.from("sanji_creator_recovery").update({ ...patch, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("id", target.id));
+      await audit2(owner, "creator_meta_profile_checked", { id: target.id, state: result.state });
+      return { ...result, linkNotice: target.profile_url ? "\uAE30\uC874 \uD504\uB85C\uD544 \uB9C1\uD06C \uC720\uC9C0" : "\uC544\uC774\uB514 \uC77C\uCE58\uB9CC\uC73C\uB85C \uBCF5\uAD6C\uB41C \uC6D0\uBCF8 \uACC4\uC815\uC758 \uC18C\uC720 \uAD00\uACC4\uB97C \uD655\uC815\uD558\uC9C0 \uC54A\uC544 \uB9C1\uD06C\uB294 \uBBF8\uD655\uC778" };
+    }
+    throw Error("\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uACF5\uC2DD API \uC791\uC5C5");
+  }
+  return { handle: handle2, callback: callback2 };
+}
+
 // supabase/functions/_shared/creator-recovery.ts
 var day = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" }).format(/* @__PURE__ */ new Date());
 function recoveryService({ sb: sb2, query: query2, audit: audit2 }) {
-  const config = async (owner) => await query2(sb2.from("sanji_creator_recovery_config").select("*").eq("owner", owner).maybeSingle()) || { enabled: false, target: 30, run_time: "09:00", daily_lookup_limit: 0, retry_limit: 0, paid_limit_usd: 0 };
+  const config = async (owner) => await query2(sb2.from("sanji_creator_recovery_config").select("*").eq("owner", owner).maybeSingle()) || { enabled: false, target: 30, run_time: "09:00", explore_percent: 20, daily_lookup_limit: 0, retry_limit: 0, paid_limit_usd: 0 };
   async function recommend(owner) {
     const c = await config(owner), today = day();
     const added = await query2(sb2.rpc("sanji_creator_recommend", { p_owner: owner, p_day: today, p_target: c.target }));
@@ -984,20 +1176,23 @@ function recoveryService({ sb: sb2, query: query2, audit: audit2 }) {
   }
   async function handle2(path, method, owner, input, params = new URLSearchParams()) {
     if (path === "/creator-recovery" && method === "GET") {
-      const c = await config(owner), today = day(), requested = params.get("day") || today, selectedDay = /^\d{4}-\d{2}-\d{2}$/.test(requested) && requested <= today ? requested : today, preview = await query2(sb2.rpc("sanji_creator_preview", { p_owner: owner, p_target: c.target })), rec = await query2(sb2.from("sanji_creator_recommendations").select("creator_id").eq("owner", owner).eq("day", selectedDay));
+      const c = await config(owner), today = day(), requested = params.get("day") || today, pool = await query2(sb2.rpc("sanji_creator_pool_counts", { p_owner: owner })), selectedDay = /^\d{4}-\d{2}-\d{2}$/.test(requested) && requested <= today ? requested : today, preview = await query2(sb2.rpc("sanji_creator_preview", { p_owner: owner, p_target: c.target })), rec = await query2(sb2.from("sanji_creator_recommendations").select("creator_id").eq("owner", owner).eq("day", selectedDay));
       const ids = rec.map((r) => r.creator_id), rows = [];
       for (let i = 0; i < ids.length; i += 100) rows.push(...await query2(sb2.from("sanji_creator_recovery").select("*").eq("owner", owner).in("id", ids.slice(i, i + 100))));
       const offset = Math.min(1e5, Math.max(0, Number.parseInt(params.get("reviewOffset") || "0", 10) || 0));
-      const review = await query2(sb2.from("sanji_creator_recovery").select("id,handle,profile_url,nickname,followers,emails,email_status,link_status,entity_type,assessment,reasons,status,source_file,source_created_at,last_verified,bio,category").eq("owner", owner).eq("assessment", "review").eq("status", "new").order("created").order("id").range(offset, offset + 99));
-      const managed = await query2(sb2.from("sanji_creator_recovery").select("id,handle,profile_url,nickname,followers,emails,email_status,link_status,entity_type,assessment,reasons,status,source_file,source_created_at,last_verified,bio,category").eq("owner", owner).in("status", ["hold", "excluded", "contacted"]).order("updated", { ascending: false }).limit(100));
-      return { config: c, day: selectedDay, today, recommendations: rows, preview, review, managed, reviewOffset: offset, shortfall: Math.max(0, c.target - rows.filter((x) => x.status === "new").length), shortfallReason: rows.filter((x) => x.status === "new").length < c.target ? "\u6761\u4EF6\u306B\u5408\u3046\u672A\u63A8\u85A6\u5019\u88DC\u304C\u4E0D\u8DB3\u3001\u307E\u305F\u306F\u4ECA\u65E5\u306E\u63A8\u85A6\u304C\u672A\u5B9F\u884C\u3067\u3059\u3002" : "", sourceNotice: "\u5FA9\u65E7\u30C7\u30FC\u30BF\u306E\u904E\u53BB\u306E\u7D39\u4ECB\u6B04\u30FB\u6570\u5024\u3002\u73FE\u5728\u306E\u6D3B\u52D5\u30FB\u56FD\u7C4D\u30FB\u30E1\u30FC\u30EB\u306E\u6709\u52B9\u6027\u306F\u672A\u78BA\u8A8D\u3002" };
+      const review = await query2(sb2.from("sanji_creator_recovery").select("id,handle,profile_url,nickname,followers,emails,bio_status,email_status,link_status,entity_type,assessment,reasons,status,source_provider,source_file,source_url,source_created_at,last_verified,followers_checked,followers_source,lookup_state,bio,category").eq("owner", owner).eq("assessment", "review").eq("status", "new").order("created").order("id").range(offset, offset + 99));
+      const managed = await query2(sb2.from("sanji_creator_recovery").select("id,handle,profile_url,nickname,followers,emails,bio_status,email_status,link_status,entity_type,assessment,reasons,status,source_provider,source_file,source_url,source_created_at,last_verified,followers_checked,followers_source,lookup_state,bio,category").eq("owner", owner).in("status", ["hold", "excluded", "contacted"]).order("updated", { ascending: false }).limit(100));
+      const all = [...rows, ...preview, ...review, ...managed], uniqueIds = [...new Set(all.map((x) => x.id))], evidence = [];
+      for (let i = 0; i < uniqueIds.length; i += 100) evidence.push(...await query2(sb2.from("sanji_creator_evidence").select("creator_id,source_provider,source_kind,source_url,source_ref,batch_id,detail,seen_at").eq("owner", owner).in("creator_id", uniqueIds.slice(i, i + 100))));
+      for (const row of all) row.sourceEvidence = evidence.filter((x) => x.creator_id === row.id);
+      return { config: c, pool, day: selectedDay, today, recommendations: rows, preview, review, managed, reviewOffset: offset, shortfall: Math.max(0, c.target - rows.filter((x) => x.status === "new").length), shortfallReason: rows.filter((x) => x.status === "new").length < c.target ? "\uC870\uAC74\uC5D0 \uB9DE\uB294 \uBBF8\uCD94\uCC9C \uD6C4\uBCF4\uAC00 \uBD80\uC871\uD558\uAC70\uB098 \uC544\uC9C1 \uCD94\uCC9C\uC744 \uC2E4\uD589\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4." : "", sourceNotice: "\uBCF5\uAD6C \uB370\uC774\uD130\uC758 \uACFC\uAC70 \uC18C\uAC1C\uB780\uACFC \uC218\uCE58\uC785\uB2C8\uB2E4. \uD604\uC7AC \uD65C\uB3D9\xB7\uAD6D\uC801\xB7\uC774\uBA54\uC77C \uC720\uD6A8\uC131\uC740 \uBBF8\uD655\uC778\uC785\uB2C8\uB2E4." };
     }
     const b = await input();
     if (path === "/creator-recovery/recommend" && method === "POST") return await recommend(owner);
     if (path === "/creator-recovery/settings" && method === "POST") {
-      const target = Number(b.target), lookup = Number(b.dailyLookupLimit), retry = Number(b.retryLimit), cost = Number(b.paidLimitUsd), time = String(b.runTime || "");
-      if (!Number.isInteger(target) || target < 1 || target > 500 || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time) || !Number.isInteger(lookup) || lookup < 0 || lookup > 500 || !Number.isInteger(retry) || retry < 0 || retry > 5 || !Number.isFinite(cost) || cost < 0 || cost > 100) throw Error("\uC124\uC815\uAC12\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694.");
-      await query2(sb2.from("sanji_creator_recovery_config").upsert({ owner, target, run_time: time, enabled: b.enabled === true, daily_lookup_limit: lookup, retry_limit: retry, paid_limit_usd: cost, updated: (/* @__PURE__ */ new Date()).toISOString() }, { onConflict: "owner" }));
+      const target = Number(b.target), explore = Number(b.explorePercent ?? 20), lookup = Number(b.dailyLookupLimit), retry = Number(b.retryLimit), cost = Number(b.paidLimitUsd), time = String(b.runTime || "");
+      if (!Number.isInteger(target) || target < 1 || target > 500 || !Number.isInteger(explore) || explore < 0 || explore > 100 || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time) || !Number.isInteger(lookup) || lookup < 0 || lookup > 500 || !Number.isInteger(retry) || retry < 0 || retry > 5 || !Number.isFinite(cost) || cost < 0 || cost > 100) throw Error("\uC124\uC815\uAC12\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694.");
+      await query2(sb2.from("sanji_creator_recovery_config").upsert({ owner, target, explore_percent: explore, run_time: time, enabled: b.enabled === true, daily_lookup_limit: lookup, retry_limit: retry, paid_limit_usd: cost, updated: (/* @__PURE__ */ new Date()).toISOString() }, { onConflict: "owner" }));
       return { ok: true };
     }
     if (path === "/creator-recovery/status" && method === "POST") {
@@ -1024,7 +1219,7 @@ function recoveryService({ sb: sb2, query: query2, audit: audit2 }) {
 }
 
 // supabase/functions/_shared/creator-discovery.ts
-import { Buffer as Buffer4 } from "node:buffer";
+import { Buffer as Buffer6 } from "node:buffer";
 
 // supabase/functions/_shared/discovery-search.ts
 var excluded = /(^|\.)(google\.[a-z.]+|naver\.com|navercorp\.com|bing\.com|duckduckgo\.com|youtube\.com|instagram\.com|facebook\.com|coupang\.com|daum\.net|tistory\.com|wikipedia\.org|wikidata\.org|microsoft\.com)$/i;
@@ -1075,7 +1270,7 @@ function searchResults(html, source, query2) {
 }
 
 // supabase/functions/_shared/creator-discovery.ts
-var hash = async (s) => Buffer4.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s))).toString("hex");
+var hash2 = async (s) => Buffer6.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s))).toString("hex");
 var normal = (v) => String(v || "").trim().replace(/^@/, "").toLowerCase();
 function instagramSearchCandidates(html, source, keywords) {
   const found = /* @__PURE__ */ new Map();
@@ -1198,7 +1393,7 @@ function creatorDiscoveryService({ sb: sb2, query: query2, audit: audit2, env: e
       if (!Number.isInteger(target) || target < 1 || target > 500 || !keywords.length || copy.length > 900 || sender && !/^[a-z0-9._]{2,30}$/.test(sender)) throw Error("\uBAA9\uD45C 1~500\uBA85\xB7\uAC80\uC0C9\uC5B4\xB7\uCE74\uD53C 900\uC790 \uC774\uD558\xB7\uBC1C\uC2E0 \uACC4\uC815\uC744 \uD655\uC778\uD558\uC138\uC694.");
       if (b.autoSend) throw Error("\uC2E0\uADDC \uC0C1\uB300 \uC120\uC81C DM \uC790\uB3D9 \uBC1C\uC1A1\uC740 \uACF5\uC2DD \uC5F0\uB3D9\uC5D0\uC11C \uC9C0\uC6D0\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. \uAC80\uC0C9\xB7\uCE74\uD53C \uC900\uBE44\uB9CC \uD65C\uC131\uD654\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.");
       if (/치료|예방|완치|항암|개선.{0,4}보장/.test(copy)) throw Error("\uBBF8\uD655\uC778 \uD6A8\uB2A5\xB7\uC9C8\uBCD1 \uD45C\uD604\uC744 \uC218\uC815\uD558\uC138\uC694.");
-      const approved = b.autoSend ? await hash(JSON.stringify({ copy, keywords, sender })) : "";
+      const approved = b.autoSend ? await hash2(JSON.stringify({ copy, keywords, sender })) : "";
       if (copy !== old.dm_copy || sender !== old.sender_handle || approved !== old.approved_hash) await query2(sb2.from("sanji_creator_prospects").update({ status: "cancelled", result: { note: "\uCEA0\uD398\uC778 \uCE74\uD53C\xB7\uC870\uAC74\xB7\uC2B9\uC778 \uBCC0\uACBD" } }).eq("owner", owner).eq("status", "queued"));
       await query2(sb2.from("sanji_creator_config").upsert({ owner, enabled: b.enabled === true, auto_send: b.autoSend === true, target, keywords, dm_copy: copy, sender_handle: sender, approved_hash: approved, ...sender !== old.sender_handle ? { worker_hash: null, worker_expires: null, worker_state: "new_key_required", server_enabled: false, server_revision: (old.server_revision || 0) + 1, server_test_id: null, server_test_sender: null, server_test_deadline: null, server_runtime: { status: "paused", reason: "\uBC1C\uC2E0 \uACC4\uC815 \uBCC0\uACBD \xB7 \uC0C8 \uACC4\uC815 \uB85C\uADF8\uC778 \uC138\uC158 \uD655\uC778 \uD544\uC694", checked: (/* @__PURE__ */ new Date()).toISOString(), requiresNewSession: true } } : {}, updated: (/* @__PURE__ */ new Date()).toISOString() }, { onConflict: "owner" }));
       const pending = await query2(sb2.from("sanji_creator_prospects").select("id,handle").eq("owner", owner).eq("status", "new"));
@@ -1239,7 +1434,7 @@ function recipientDelivery(recipients, threads, created) {
 }
 
 // supabase/functions/_shared/email-tracking.ts
-import { Buffer as Buffer5 } from "node:buffer";
+import { Buffer as Buffer7 } from "node:buffer";
 
 // supabase/functions/_shared/mail-recipients.ts
 function mailRecipients(d) {
@@ -1252,9 +1447,9 @@ function mailRecipients(d) {
 // supabase/functions/_shared/email-tracking.ts
 var trackingLimitNotice = "\uC5F4\uB78C \uCD94\uC815\uC740 \uC0AC\uB78C\uC758 \uC2E4\uC81C \uC5F4\uB78C \uD655\uC778\uC774 \uC544\uB2D9\uB2C8\uB2E4. Apple Mail \uC0AC\uC804 \uB85C\uB529, \uC774\uBBF8\uC9C0 \uD504\uB85D\uC2DC\xB7\uBCF4\uC548 \uC2DC\uC2A4\uD15C, \uC774\uBBF8\uC9C0 \uCC28\uB2E8\xB7\uCE90\uC2DC\xB7\uC804\uB2EC\uC5D0 \uC601\uD5A5\uC744 \uBC1B\uC2B5\uB2C8\uB2E4. \uAC10\uC9C0 \uC5C6\uC74C\uC740 \uBBF8\uC5F4\uB78C\xB7\uC218\uC2E0 \uC2E4\uD328\uB97C \uB73B\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.";
 var trackingReasonLabels = { none: "\uBD84\uB958 \uADFC\uAC70 \uC5C6\uC74C", image_proxy: "\uBA54\uC77C \uC774\uBBF8\uC9C0 \uD504\uB85D\uC2DC User-Agent \uD328\uD134 \xB7 \uC790\uCCB4 \uCD94\uC815", prefetch_header: "\uC0AC\uC804 \uB85C\uB529 \uBAA9\uC801 \uD5E4\uB354 \xB7 \uC790\uCCB4 \uCD94\uC815", scanner_user_agent: "\uBCF4\uC548 \uC2A4\uCE90\uB108 User-Agent \uD328\uD134 \xB7 \uC790\uCCB4 \uCD94\uC815" };
-var gif = Uint8Array.from(Buffer5.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64"));
+var gif = Uint8Array.from(Buffer7.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64"));
 var tokenHash = async (token) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)))).map((x) => x.toString(16).padStart(2, "0")).join("");
-var newTrackingToken = () => Buffer5.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
+var newTrackingToken = () => Buffer7.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
 function classifyImageRequest(headers) {
   const ua = (headers.get("user-agent") || "").slice(0, 512), purpose = [headers.get("purpose"), headers.get("sec-purpose")].join(" ");
   if (/prefetch|prerender/i.test(purpose)) return { classification: "suspected_automated", reason: "prefetch_header" };
@@ -1307,9 +1502,9 @@ function emailTrackingService({ sb: sb2, query: query2, env: env2, audit: audit2
     const none = (reason) => ({ draft: d, summary: { applied: false, reason } });
     if (d.channel !== "email" || !d.tracking?.eligible || !activated()) return none("\uBBF8\uC801\uC6A9 \uB610\uB294 \uC6B4\uC601 \uD65C\uC131\uD654 \uC2B9\uC778 \uC804");
     try {
-      const token = newTrackingToken(), hash2 = await tokenHash(token), url2 = new URL(baseUrl);
+      const token = newTrackingToken(), hash3 = await tokenHash(token), url2 = new URL(baseUrl);
       if (url2.protocol !== "https:" || url2.username || url2.password) return none("HTTPS \uCD94\uC801 \uC8FC\uC18C \uBBF8\uC124\uC815");
-      const t = await query2(sb2.rpc("sanji_register_email_tracking", { p_owner: owner, p_outbox: outboxId, p_hash: hash2, p_campaign: d.tracking.campaignId, p_policy_version: d.tracking.policyVersion, p_campaign_version: d.tracking.campaignVersion, p_sender: sender, p_test: !!d.tracking.internalTest, p_test_only: env2("EMAIL_TRACKING_TEST_ONLY") !== "false" }));
+      const t = await query2(sb2.rpc("sanji_register_email_tracking", { p_owner: owner, p_outbox: outboxId, p_hash: hash3, p_campaign: d.tracking.campaignId, p_policy_version: d.tracking.policyVersion, p_campaign_version: d.tracking.campaignVersion, p_sender: sender, p_test: !!d.tracking.internalTest, p_test_only: env2("EMAIL_TRACKING_TEST_ONLY") !== "false" }));
       const row = Array.isArray(t) ? t[0] : t;
       if (!row?.id) return none("\uC124\uC815\xB7\uACE0\uC9C0 \uBCC0\uACBD \uB610\uB294 \uCD94\uC801 \uC911\uB2E8 \xB7 \uBBF8\uC801\uC6A9");
       const pixel2 = baseUrl.replace(/\/$/, "") + "/email-events/pixel/" + token + ".gif";
@@ -1384,10 +1579,10 @@ function emailTrackingService({ sb: sb2, query: query2, env: env2, audit: audit2
 }
 
 // supabase/functions/_shared/mail-mime.ts
-import { Buffer as Buffer6 } from "node:buffer";
+import { Buffer as Buffer8 } from "node:buffer";
 function attachmentType(content) {
-  const b = Buffer6.from(content, "base64");
-  if (b.subarray(0, 8).equals(Buffer6.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
+  const b = Buffer8.from(content, "base64");
+  if (b.subarray(0, 8).equals(Buffer8.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
   if (b[0] === 255 && b[1] === 216 && b[2] === 255) return "image/jpeg";
   if (["GIF87a", "GIF89a"].includes(b.subarray(0, 6).toString())) return "image/gif";
   if (b.subarray(0, 4).toString() === "RIFF" && b.subarray(8, 12).toString() === "WEBP") return "image/webp";
@@ -1402,16 +1597,16 @@ function encodedHeader(value) {
   let chunk = "";
   if (/[\r\n]/.test(value)) throw Error("\uBA54\uC77C \uC81C\uBAA9\xB7\uBC1C\uC2E0\uC790\uBA85\uC5D0 \uC904\uBC14\uAFC8\uC744 \uB123\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
   for (const char of String(value || "")) {
-    if (Buffer6.byteLength(chunk + char, "utf8") > 42) {
+    if (Buffer8.byteLength(chunk + char, "utf8") > 42) {
       parts.push(chunk);
       chunk = "";
     }
     chunk += char;
   }
   if (chunk || !parts.length) parts.push(chunk);
-  return parts.map((p) => "=?UTF-8?B?" + Buffer6.from(p).toString("base64") + "?=").join("\r\n ");
+  return parts.map((p) => "=?UTF-8?B?" + Buffer8.from(p).toString("base64") + "?=").join("\r\n ");
 }
-var base64Body = (text2) => Buffer6.from(text2, "utf8").toString("base64").match(/.{1,76}/g)?.join("\r\n") || "";
+var base64Body = (text2) => Buffer8.from(text2, "utf8").toString("base64").match(/.{1,76}/g)?.join("\r\n") || "";
 function trackingHtml(d) {
   const escape2 = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   let url2 = null;
@@ -1471,7 +1666,7 @@ function mime(d, from) {
     `--${alternative}--`
   ] : ["Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", base64Body(d.body)];
   const attachments = d.attachments || [];
-  if (!attachments.length) return Buffer6.from([...lines, ...bodyLines].join("\r\n")).toString("base64url");
+  if (!attachments.length) return Buffer8.from([...lines, ...bodyLines].join("\r\n")).toString("base64url");
   const boundary = "sanji_" + crypto.randomUUID();
   lines.push(
     `Content-Type: multipart/mixed; boundary="${boundary}"`,
@@ -1489,7 +1684,7 @@ function mime(d, from) {
       a.content.match(/.{1,76}/g)?.join("\r\n") || ""
     );
   lines.push(`--${boundary}--`);
-  return Buffer6.from(lines.join("\r\n")).toString("base64url");
+  return Buffer8.from(lines.join("\r\n")).toString("base64url");
 }
 
 // supabase/functions/_shared/discovery-notification.ts
@@ -2518,7 +2713,7 @@ function validateIntro(value, context) {
 
 // supabase/functions/workspace/index.ts
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { Buffer as Buffer7 } from "node:buffer";
+import { Buffer as Buffer9 } from "node:buffer";
 
 // supabase/functions/_shared/schema.ts
 import { z } from "npm:zod@4.6.7";
@@ -2682,7 +2877,7 @@ async function query(p) {
     throw new HttpError(error.code === "23505" ? 409 : 400, error.message);
   return data;
 }
-var digest3 = async (s) => Buffer7.from(
+var digest3 = async (s) => Buffer9.from(
   await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s))
 ).toString("hex");
 async function key() {
@@ -2705,10 +2900,10 @@ async function encrypt(v) {
     await key(),
     new TextEncoder().encode(JSON.stringify(v))
   );
-  return Buffer7.concat([Buffer7.from(iv), Buffer7.from(b)]).toString("base64");
+  return Buffer9.concat([Buffer9.from(iv), Buffer9.from(b)]).toString("base64");
 }
 async function decrypt(v) {
-  const b = Buffer7.from(v, "base64");
+  const b = Buffer9.from(v, "base64");
   return JSON.parse(
     new TextDecoder().decode(
       await crypto.subtle.decrypt(
@@ -2765,6 +2960,8 @@ var emailTracking = emailTrackingService({ sb, query, env, audit, baseUrl: env("
 var notifyOwner = discoveryCompletionNotifier({ sb, query, gmailToken, remote, audit, env });
 var creatorDiscovery = creatorDiscoveryService({ sb, query, audit, env });
 var creatorRecovery = recoveryService({ sb, query, audit });
+var creatorVisibleImport = visibleImportService({ sb, query, audit });
+var creatorMeta = creatorMetaService({ sb, query, env, connection, saveConnection, audit });
 var apifyTrials = apifyTrialService({ sb, query, env, audit });
 var saveManualReply = manualReplyService({ sb, query, putRecord, audit });
 var creatorLocal = creatorLocalService({ sb, query, audit, encrypt, decrypt, putRecord });
@@ -2859,7 +3056,7 @@ function gmailHasAttachments(part) {
 }
 function textBody(p) {
   if (p.mimeType === "text/plain" && p.body?.data)
-    return Buffer7.from(p.body.data, "base64url").toString();
+    return Buffer9.from(p.body.data, "base64url").toString();
   return (p.parts || []).map(textBody).filter(Boolean).join("\n");
 }
 function render(text2, c, deals, brandNames) {
@@ -3034,7 +3231,7 @@ async function sendDraft(u, draftId, b, jobId) {
     const t = await owned(u, d.replyTo, "thread");
     if (!t.lastInbound || Date.now() - t.lastInbound > 864e5 || !t.senderId)
       fail(403, "\uB300\uD654 \uC2DC\uAC04 \uB610\uB294 \uC218\uC2E0\uC790 \uD655\uC778 \uD544\uC694");
-    if (Buffer7.byteLength(d.body) > 1e3 || d.attachments.length)
+    if (Buffer9.byteLength(d.body) > 1e3 || d.attachments.length)
       fail(400, "\uD604\uC7AC \uD68C\uC2E0\uC740 1000\uBC14\uC774\uD2B8 \uC774\uD558 \uD14D\uC2A4\uD2B8\uB9CC \uC9C0\uC6D0\uD569\uB2C8\uB2E4.");
     const account = await instagramForThread(u, t);
     if (d.connectionKey !== account.key) fail(409, "\uBC1C\uC2E0 \uACC4\uC815\uC774 \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uCD5C\uC885 \uBBF8\uB9AC\uBCF4\uAE30\uB97C \uB2E4\uC2DC \uC2B9\uC778\uD558\uC138\uC694.");
@@ -3160,7 +3357,7 @@ async function sendDraft(u, draftId, b, jobId) {
 async function runJobs(req) {
   const expected = env("JOB_RUNNER_TOKEN"), provided = req.headers.get("x-job-token") || "";
   if (expected.length < 32) fail(503, "\uC608\uC57D \uC791\uC5C5 \uC2E4\uD589 \uD1A0\uD070 \uC124\uC815\uC774 \uD544\uC694\uD569\uB2C8\uB2E4.");
-  const a = Buffer7.from(await digest3(expected), "hex"), b = Buffer7.from(await digest3(provided), "hex");
+  const a = Buffer9.from(await digest3(expected), "hex"), b = Buffer9.from(await digest3(provided), "hex");
   let different = 0;
   for (let i = 0; i < a.length; i++) different |= a[i] ^ b[i];
   if (different) fail(401, "\uC791\uC5C5 \uC2E4\uD589 \uAD8C\uD55C \uC5C6\uC74C");
@@ -3221,6 +3418,14 @@ Deno.serve(async (req) => {
       fail(403, "\uD5C8\uC6A9\uB418\uC9C0 \uC54A\uC740 \uCD9C\uCC98");
     if (req.method === "OPTIONS")
       return new Response(null, { status: 204, headers: cors });
+    if (path === "/creator-meta/callback" && req.method === "GET") {
+      try {
+        await creatorMeta.callback(url2, base);
+        return Response.redirect(frontend + "?creator_meta=connected#creators", 302);
+      } catch {
+        return Response.redirect(frontend + "?creator_meta=error#creators", 302);
+      }
+    }
     if (path.startsWith("/instagram/") || path === "/oauth/instagram/callback") return json({ error: "\uACF5\uC2DD Instagram API \uC5F0\uB3D9\uC740 \uC81C\uC678\uB410\uC2B5\uB2C8\uB2E4. \uC11C\uBC84 \uB85C\uADF8\uC778 \uAD00\uB9AC\uB97C \uC0AC\uC6A9\uD558\uC138\uC694." }, 410);
     if (/^\/oauth\/(gmail|instagram)\/callback$/.test(path)) {
       try {
@@ -3238,8 +3443,7 @@ Deno.serve(async (req) => {
     if (path === "/creator-discovery/tick" && req.method === "POST") {
       if (!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403, "\uBC1C\uAD74 \uC2E4\uD589\uAE30 \uC778\uC99D \uC2E4\uD328");
       const recovery = await creatorRecovery.scheduled();
-      const apify = await apifyTrials.tick();
-      return json({ recovery, apify: apify || { status: "disabled" } });
+      return json({ recovery, apify: { status: "disabled", reason: "\uC720\uB8CC Apify \uC790\uB3D9 \uBC1C\uAD74 \uC911\uB2E8" } });
     }
     if (path === "/gmail/tick" && req.method === "POST") {
       if (!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403, "\uD68C\uC2E0 \uB3D9\uAE30\uD654 \uC2E4\uD589\uAE30 \uC778\uC99D \uC2E4\uD328");
@@ -3248,7 +3452,7 @@ Deno.serve(async (req) => {
     }
     if (path.startsWith("/creator-server/worker/") && req.method === "POST") {
       const raw = await req.text();
-      if (Buffer7.byteLength(raw) > 6e5) fail(413, "\uC11C\uBC84 \uC694\uCCAD \uD06C\uAE30 \uCD08\uACFC");
+      if (Buffer9.byteLength(raw) > 6e5) fail(413, "\uC11C\uBC84 \uC694\uCCAD \uD06C\uAE30 \uCD08\uACFC");
       try {
         return json(await creatorServer.worker(path, req.headers.get("x-sanji-server") || "", raw ? JSON.parse(raw) : {}));
       } catch (e) {
@@ -3257,7 +3461,7 @@ Deno.serve(async (req) => {
     }
     if (path.startsWith("/creator-local/worker/") && req.method === "POST") {
       const raw = await req.text();
-      if (Buffer7.byteLength(raw) > 6e5) fail(413, "PC \uC694\uCCAD \uD06C\uAE30 \uCD08\uACFC");
+      if (Buffer9.byteLength(raw) > 6e5) fail(413, "PC \uC694\uCCAD \uD06C\uAE30 \uCD08\uACFC");
       try {
         return json(await creatorLocal.worker(path, req.headers.get("x-sanji-worker") || "", raw ? JSON.parse(raw) : {}));
       } catch (e) {
@@ -3280,7 +3484,7 @@ Deno.serve(async (req) => {
     const u = user.id;
     const input = async () => {
       const text2 = await req.text();
-      if (Buffer7.byteLength(text2) > 10 * 1024 * 1024)
+      if (Buffer9.byteLength(text2) > 10 * 1024 * 1024)
         fail(413, "\uC694\uCCAD \uD06C\uAE30 \uCD08\uACFC");
       return text2 ? JSON.parse(text2) : {};
     };
@@ -3306,6 +3510,20 @@ Deno.serve(async (req) => {
       }
     }
     if (path === "/email-tracking" || path.startsWith("/email-tracking/")) return json(await emailTracking.handle(path, req.method, u, input, url2.searchParams));
+    if (path === "/creator-recovery/import-visible" && req.method === "POST") {
+      try {
+        return json(await creatorVisibleImport(u, await input()));
+      } catch (e) {
+        fail(400, String(e.message || "\uD6C4\uBCF4 \uAC00\uC838\uC624\uAE30 \uC2E4\uD328"));
+      }
+    }
+    if (path.startsWith("/creator-meta/")) {
+      try {
+        return json(await creatorMeta.handle(path, req.method, u, input, base));
+      } catch (e) {
+        fail(400, String(e.message || "\uACF5\uC2DD API \uC5F0\uACB0 \uC2E4\uD328"));
+      }
+    }
     if (path === "/creator-recovery" || path.startsWith("/creator-recovery/")) {
       try {
         return json(await creatorRecovery.handle(path, req.method, u, input, url2.searchParams));
@@ -3517,7 +3735,7 @@ Deno.serve(async (req) => {
       if (!["gmail", "instagram"].includes(provider))
         fail(404, "\uC54C \uC218 \uC5C6\uB294 \uC5F0\uACB0");
       const oauthInput = await input();
-      const state = uuid() + uuid(), verifier = Buffer7.from(
+      const state = uuid() + uuid(), verifier = Buffer9.from(
         crypto.getRandomValues(new Uint8Array(32))
       ).toString("base64url");
       await query(
@@ -3537,7 +3755,7 @@ Deno.serve(async (req) => {
         access_type: "offline",
         prompt: "consent",
         state,
-        code_challenge: Buffer7.from(
+        code_challenge: Buffer9.from(
           await crypto.subtle.digest(
             "SHA-256",
             new TextEncoder().encode(verifier)
@@ -3642,7 +3860,7 @@ Deno.serve(async (req) => {
       if (inputData.marketing && inputData.channel === "email" && !subject.startsWith("(\uAD11\uACE0)"))
         fail(400, "\uAD11\uACE0\uC131 \uC774\uBA54\uC77C \uC81C\uBAA9\uC740 (\uAD11\uACE0)\uB85C \uC2DC\uC791\uD574\uC57C \uD569\uB2C8\uB2E4.");
       if (inputData.attachments.reduce(
-        (n, a) => n + Buffer7.from(a.content, "base64").length,
+        (n, a) => n + Buffer9.from(a.content, "base64").length,
         0
       ) > 5 * 1024 * 1024)
         fail(400, "\uCCA8\uBD80 \uD569\uACC4\uB294 5MB \uC774\uD558\uC785\uB2C8\uB2E4.");
@@ -3695,23 +3913,23 @@ Deno.serve(async (req) => {
         messageId: uuid(),
         attachmentSummary: inputData.attachments.map((a) => ({
           name: a.name,
-          size: Buffer7.from(a.content, "base64").length
+          size: Buffer9.from(a.content, "base64").length
         }))
-      }, hash2 = await digest3(JSON.stringify(d));
+      }, hash3 = await digest3(JSON.stringify(d));
       if (inputData.channel === "email" && (await query(sb.from("sanji_suppression").select("identity").eq("owner", u).in("identity", mailRecipients(d).flatMap((e) => [e, "email:" + e])).limit(1))).length) fail(403, "\uD68C\uC2E0 \uC8FC\uC18C\uAC00 \uC218\uC2E0 \uAC70\uBD80 \uBAA9\uB85D\uC5D0 \uC788\uC2B5\uB2C8\uB2E4.");
       await assertBrandMail(u, d);
       const stored = await query(
         sb.from("sanji_drafts").insert({
           owner: u,
           data: d,
-          hash: hash2,
+          hash: hash3,
           expires: new Date(Date.now() + 9e5).toISOString()
         }).select("id").single()
       );
       return json(
         {
           id: stored.id,
-          hash: hash2,
+          hash: hash3,
           target: c.name,
           email: d.email,
           emails: d.emails,

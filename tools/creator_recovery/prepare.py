@@ -25,10 +25,11 @@ def normalize(row):
  if not valid: status='review';reasons.append('Instagram 프로필 링크와 계정 관계 확인 필요')
  elif entity: status='review';reasons.append('개인 계정 여부 확인 필요')
  elif korean and ((topic_category and topic_bio) or (topic_bio and role)): status='candidate';reasons.append('한국어 소개와 카테고리·소개란 또는 소개란의 주제·창작자 역할 단서 복수 확인 · 국적 및 최신 활동 미확인')
- else: status='review';reasons.append('한국 크리에이터·주제·계정 유형 근거 부족')
+ else: status='explore';reasons.append('탐색 후보 · 한국 크리에이터·주제·계정 유형 추가 확인 필요')
  emails=list(dict.fromkeys(m.group(0).lower() for m in EMAIL.finditer(bio)))
+ score=(15 if korean else 0)+(20 if topic_category else 0)+(20 if topic_bio else 0)+(10 if role else 0)+(20 if re.search(r'공동구매|공구',bio,re.I) else 0)+(5 if re.search(r'협업|제휴|비즈니스|business',bio,re.I) else 0)+(5 if emails else 0)
  followers=int(row['followers']) if row['followers'].isdigit() else None
- return {'source_id':row['source_id'],'source_row':row['source_row'],'handle':h,'profile_url':url,'nickname':row['nickname'],'followers':followers,'category':category.strip(),'bio':bio,'emails':emails,'email_status':'소개란 공개 · 유효성 미검증' if emails else ('이메일 없음 · 과거 소개란 기준' if bio else '아직 조회하지 않음'),'source_kind':row['source_kind'],'source_file':row['source_file'],'source_created_at':row['source_created_at'],'last_verified':None,'link_status':'source_confirmed' if valid else 'needs_verification','entity_type':'noncreator_suspected' if entity else ('creator_evidence' if identity else 'unknown'),'assessment':status,'reasons':reasons,'limitations':['국적·현재 활동·이메일 유효성 미검증'],'status':'new'}
+ return {'source_id':row['source_id'],'source_row':row['source_row'],'handle':h,'profile_url':url,'nickname':row['nickname'],'followers':followers,'category':category.strip(),'bio':bio,'emails':emails,'bio_status':'email_present' if emails else ('email_not_in_bio' if bio else 'not_checked'),'email_status':'소개란 공개 · 유효성 미검증' if emails else ('그때 읽은 소개란에 이메일 없음 · 과거 자료' if bio else '아직 조회하지 않음'),'source_kind':row['source_kind'],'source_file':row['source_file'],'source_created_at':row['source_created_at'],'last_verified':None,'link_status':'source_confirmed' if valid else 'needs_verification','entity_type':'noncreator_suspected' if entity else ('creator_evidence' if identity else 'unknown'),'priority_score':score,'assessment':status,'reasons':reasons,'limitations':['국적·현재 활동·이메일 유효성 미검증'],'status':'new'}
 
 def prepare(src,out):
  records=[];seen=set();counts=Counter();emails=Counter()

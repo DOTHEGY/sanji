@@ -15,7 +15,12 @@ class TestRecovery(unittest.TestCase):
   missing=normalize(self.sample(profile_url='',source_kind='bookshopmap',bio='한국 요리 공식몰'));self.assertEqual(missing['link_status'],'needs_verification');self.assertEqual(missing['entity_type'],'noncreator_suspected')
   first=normalize(self.sample(handle='one',profile_url='https://www.instagram.com/one/',bio='한국 요리 x@shared.com'));second=normalize(self.sample(handle='two',profile_url='https://www.instagram.com/two/',bio='한국 요리 x@shared.com'));self.assertEqual(first['emails'],second['emails']);self.assertNotEqual(first['handle'],second['handle'])
   self.assertEqual(normalize(self.sample(bio='한국 요리 공식몰'))['assessment'],'review')
-  self.assertEqual(normalize(self.sample(bio='food recipe'))['assessment'],'review')
+  self.assertEqual(normalize(self.sample(bio='food recipe'))['assessment'],'explore')
+
+ def test_no_email_or_groupbuy_is_not_exclusion(self):
+  x=normalize(self.sample(bio='한국 요리 레시피',category='푸드'));self.assertEqual(x['assessment'],'candidate');self.assertFalse(x['emails'])
+  y=normalize(self.sample(bio='',category=''));self.assertEqual(y['assessment'],'explore');self.assertEqual(y['priority_score'],0)
+  z=normalize(self.sample(bio='한국 요리 레시피 공구 협업 cook@naver.com',category='푸드'));self.assertGreater(z['priority_score'],x['priority_score'])
  def test_escaping_only_marked_columns(self):
   with tempfile.TemporaryDirectory() as d:
    p=Path(d)/'x.csv'

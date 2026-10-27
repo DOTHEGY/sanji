@@ -7,6 +7,8 @@ import {manualReplyService} from "../_shared/manual-reply.ts";
 import {creatorLocalService} from "../_shared/creator-local.ts";
 import {gmailSyncService} from "../_shared/gmail-sync.ts";
 import {assessDispatch,permanentFailureEmails} from "../_shared/mail-integrity.ts";
+import { visibleImportService } from "../_shared/creator-visible-import.ts";
+import { creatorMetaService } from "../_shared/creator-meta.ts";
 import { recoveryService } from "../_shared/creator-recovery.ts";
 import { creatorDiscoveryService } from "../_shared/creator-discovery.ts";
 import {drainApprovedJobs} from "../_shared/job-batch.ts";
@@ -159,6 +161,8 @@ const emailTracking=emailTrackingService({sb,query,env,audit,baseUrl:env("SUPABA
 const notifyOwner = discoveryCompletionNotifier({sb,query,gmailToken,remote,audit,env});
 const creatorDiscovery = creatorDiscoveryService({sb,query,audit,env});
 const creatorRecovery = recoveryService({sb,query,audit});
+const creatorVisibleImport = visibleImportService({sb,query,audit});
+const creatorMeta = creatorMetaService({sb,query,env,connection,saveConnection,audit});
 const apifyTrials=apifyTrialService({sb,query,env,audit});
 const saveManualReply=manualReplyService({sb,query,putRecord,audit});
 const creatorLocal=creatorLocalService({sb,query,audit,encrypt,decrypt,putRecord});
@@ -774,6 +778,10 @@ Deno.serve(async (req: Request) => {
       fail(403, "허용되지 않은 출처");
     if (req.method === "OPTIONS")
       return new Response(null, { status: 204, headers: cors });
+    if(path==='/creator-meta/callback'&&req.method==='GET'){
+      try{await creatorMeta.callback(url,base);return Response.redirect(frontend+'?creator_meta=connected#creators',302);}
+      catch{return Response.redirect(frontend+'?creator_meta=error#creators',302);}
+    }
     if(path.startsWith("/instagram/")||path==="/oauth/instagram/callback")return json({error:"공식 Instagram API 연동은 제외됐습니다. 서버 로그인 관리를 사용하세요."},410);
     if (/^\/oauth\/(gmail|instagram)\/callback$/.test(path)) {
       try { return await callback(req, url, path.split("/")[2], base); }
@@ -789,7 +797,7 @@ Deno.serve(async (req: Request) => {
     }
     if(path === "/creator-discovery/tick" && req.method === "POST"){
       if(!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403,"발굴 실행기 인증 실패");
-      const recovery=await creatorRecovery.scheduled();const apify=await apifyTrials.tick();return json({recovery,apify:apify||{status:"disabled"}});
+      const recovery=await creatorRecovery.scheduled();return json({recovery,apify:{status:"disabled",reason:"유료 Apify 자동 발굴 중단"}});
     }
     if(path==="/gmail/tick"&&req.method==="POST"){
       if(!env("DISCOVERY_RUNNER_TOKEN")||req.headers.get("x-job-token")!==env("DISCOVERY_RUNNER_TOKEN"))fail(403,"회신 동기화 실행기 인증 실패");
@@ -838,6 +846,8 @@ Deno.serve(async (req: Request) => {
       try{return json(await creatorLocal.admin(path,u,await input()));}catch(e){fail(400,String(e.message||"PC 실행기 설정 실패"));}
     }
     if(path==="/email-tracking"||path.startsWith("/email-tracking/"))return json(await emailTracking.handle(path,req.method,u,input,url.searchParams));
+    if(path==='/creator-recovery/import-visible'&&req.method==='POST'){try{return json(await creatorVisibleImport(u,await input()));}catch(e){fail(400,String(e.message||'후보 가져오기 실패'));}}
+    if(path.startsWith('/creator-meta/')){try{return json(await creatorMeta.handle(path,req.method,u,input,base));}catch(e){fail(400,String(e.message||'공식 API 연결 실패'));}}
     if(path === "/creator-recovery" || path.startsWith("/creator-recovery/")){
       try{return json(await creatorRecovery.handle(path,req.method,u,input,url.searchParams));}catch(e){fail(400,String(e.message||"크리에이터 추천 실패"));}
     }

@@ -1,0 +1,54 @@
+import {Buffer} from 'node:buffer';
+import {instagramBusinessDiscovery,providerError} from './creator-recovery-adapters.ts';
+const hash=async(s:string)=>Buffer.from(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s))).toString('hex');
+const random=()=>Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url');
+export function creatorMetaService({sb,query,env,connection,saveConnection,audit,request=fetch}:any){
+ const version=()=>/^v\d+\.\d+$/.test(env('META_GRAPH_VERSION')||'')?env('META_GRAPH_VERSION'):'v24.0';
+ const graph=async(path:string,params:any,token:string)=>{const u=new URL('https://graph.facebook.com/'+version()+'/'+path);for(const [k,v] of Object.entries(params))u.searchParams.set(k,String(v));let r:any,d:any;try{r=await request(u.toString(),{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(12000)});d=await r.json();}catch{throw Error('Meta 연결 실패 · 자동 재시도 없음');}if(!r.ok||d.error)throw Error(providerError(r.status,d.error?.code).message);return d;};
+ async function start(owner:string,base:string){
+  if(!env('META_FB_APP_ID')||!env('META_FB_APP_SECRET')||!env('TOKEN_ENCRYPTION_KEY'))throw Error('Facebook 로그인 앱 ID·시크릿과 서버 토큰 암호화 키가 필요합니다.');
+  const state=random();await query(sb.from('sanji_oauth_states').insert({state:await hash(state),owner,provider:'creator_meta',verifier:random(),expires:new Date(Date.now()+600000).toISOString()}));
+  const u=new URL('https://www.facebook.com/'+version()+'/dialog/oauth');for(const [k,v] of Object.entries({client_id:env('META_FB_APP_ID'),redirect_uri:base+'/creator-meta/callback',response_type:'code',scope:'instagram_basic,instagram_manage_insights,pages_show_list,pages_read_engagement',state}))u.searchParams.set(k,String(v));return {url:u.toString(),redirectUri:base+'/creator-meta/callback'};
+ }
+ async function callback(url:URL,base:string){
+  const state=url.searchParams.get('state')||'',code=url.searchParams.get('code')||'';if(!state||!code)throw Error('인증이 취소되었거나 상태가 없습니다.');
+  const key=await hash(state),row=await query(sb.from('sanji_oauth_states').select('*').eq('state',key).eq('provider','creator_meta').maybeSingle());if(!row||Date.parse(row.expires)<=Date.now())throw Error('인증 상태가 만료됐습니다.');
+  const used=await query(sb.from('sanji_oauth_states').delete().eq('state',key).eq('provider','creator_meta').select('state'));if(!used.length)throw Error('이미 사용된 인증입니다.');
+  // Secret stays in the server request. Provider errors are never returned with the URL.
+  const u=new URL('https://graph.facebook.com/'+version()+'/oauth/access_token');for(const [k,v] of Object.entries({client_id:env('META_FB_APP_ID'),client_secret:env('META_FB_APP_SECRET'),redirect_uri:base+'/creator-meta/callback',code}))u.searchParams.set(k,String(v));
+  let r:any,t:any;try{r=await request(u.toString(),{signal:AbortSignal.timeout(12000)});t=await r.json();}catch{throw Error('Facebook 토큰 교환 실패');}if(!r.ok||!t.access_token)throw Error('Facebook 토큰 교환 실패 · 공식 앱 설정 확인');
+  const pages=await graph('me/accounts',{fields:'id,name,instagram_business_account{id,username}',limit:'50'},t.access_token),accounts=(pages.data||[]).filter((p:any)=>/^\d+$/.test(String(p.instagram_business_account?.id||''))).map((p:any)=>({id:String(p.instagram_business_account.id),username:String(p.instagram_business_account.username||''),pageName:String(p.name||'')}));
+  await saveConnection(row.owner,'creator_meta',{access_token:t.access_token,expires:Date.now()+Math.max(0,Number(t.expires_in||3600))*1000,accounts,selectedId:'',username:'',id:'',tokenMode:'facebook_login',apiVerified:false});await audit(row.owner,'creator_meta_connected',{accountCount:accounts.length});return {owner:row.owner,accountCount:accounts.length};
+ }
+ async function get(owner:string){const c=await connection(owner,'creator_meta');if(!c)throw Error('Facebook 로그인을 통한 Instagram API 연결이 필요합니다.');if(!c.access_token||!c.expires||Date.now()>=c.expires)throw Error('공식 인증이 만료됐습니다. 다시 연결해 주세요.');return c;}
+ async function handle(path:string,method:string,owner:string,input:any,base:string){
+  if(path==='/creator-meta/status'&&method==='GET'){const c=await connection(owner,'creator_meta');return {configured:!!env('META_FB_APP_ID')&&!!env('META_FB_APP_SECRET')&&!!env('TOKEN_ENCRYPTION_KEY'),connected:!!c?.access_token&&Number(c.expires)>Date.now(),accounts:c?.accounts||[],selectedId:c?.selectedId||'',expires:c?.expires||null,redirectUri:base+'/creator-meta/callback',scope:'Facebook 로그인 · 비즈니스 검색과 해시태그 검색 · Meta 권한·App Review 별도'};}
+  const b=await input();
+  if(path==='/creator-meta/start'&&method==='POST')return start(owner,base);
+  if(path==='/creator-meta/disconnect'&&method==='POST'){await query(sb.from('sanji_connections').delete().eq('owner',owner).eq('provider','creator_meta'));return {ok:true};}
+  if(path==='/creator-meta/select'&&method==='POST'){const c=await get(owner),account=(c.accounts||[]).find((x:any)=>x.id===b.id);if(!account)throw Error('인증된 연결 계정 목록에서 선택해 주세요.');await saveConnection(owner,'creator_meta',{...c,selectedId:account.id,id:account.id,username:account.username});return {ok:true};}
+  if(path==='/creator-meta/discover'&&method==='POST'){
+   const c=await get(owner),tag=String(b.tag||'').trim().replace(/^#/,'').toLowerCase();if(!c.selectedId||!/^[a-z0-9_가-힣]{1,30}$/.test(tag))throw Error('프로페셔널 계정과 해시태그를 확인하세요.');
+   await query(sb.rpc('sanji_creator_meta_claim',{p_owner:owner,p_tag:tag}));
+   const h=await graph('ig_hashtag_search',{user_id:c.selectedId,q:tag},c.access_token),hashtag=h.data?.[0]?.id;if(!/^\d+$/.test(String(hashtag||'')))return {status:'no_results',added:0};
+   const media=await graph(String(hashtag)+'/recent_media',{user_id:c.selectedId,fields:'id,username,caption,permalink,timestamp',limit:'20'},c.access_token),today=new Date().toISOString();let added=0,reviewed=0;
+   for(const m of (media.data||[]).slice(0,20)){const handle=String(m.username||'').toLowerCase(),caption=String(m.caption||'').slice(0,600),link=String(m.permalink||'');if(!/^[a-z0-9._]{1,30}$/.test(handle)||!/^https:\/\/(?:www\.)?instagram\.com\/(?:p|reel)\//i.test(link))continue;reviewed++;
+    const noncreator=/(?:팬계정|팬 페이지|fan\s*(?:account|page)|공식몰|공식\s*스토어|주식회사|기관 공식)/i.test(caption);const indicators=[/(?:공동구매|공구)/i.test(caption)?'공개 게시물에 공동구매 관련 표현':'',/(?:요리|레시피|식단|푸드|웰니스|운동|일상|육아)/i.test(caption)?'공개 게시물에 식품·생활 관련 주제':''].filter(Boolean);const score=Math.min(100,10+indicators.length*15+(/[가-힣]/.test(caption)?10:0));
+    const saved=await sb.from('sanji_creator_recovery').upsert({owner,handle,source_id:'meta:'+handle,profile_url:'https://www.instagram.com/'+handle+'/',nickname:'',followers:null,category:'해시태그 #'+tag,bio:'',emails:[],email_status:'아직 조회하지 않음',source_provider:'instagram_official',source_kind:'meta_hashtag',source_file:'Meta 해시태그 검색',source_url:link,last_verified:null,link_status:'source_confirmed',entity_type:noncreator?'noncreator_suspected':'unknown',priority_score:score,assessment:noncreator?'review':'explore',reasons:['공식 해시태그 최근 게시물의 사용자명 · 한국 크리에이터와 계정 유형 확인 필요',...indicators],status:'new'},{onConflict:'owner,handle',ignoreDuplicates:true}).select('id');if(saved.error)throw Error('후보 저장 실패 · 기존 계정은 유지됩니다.');added+=(saved.data||[]).length;
+    const target=(saved.data||[])[0]||await query(sb.from('sanji_creator_recovery').select('id').eq('owner',owner).eq('handle',handle).maybeSingle());
+    if(target?.id)await query(sb.from('sanji_creator_evidence').upsert({owner,creator_id:target.id,source_provider:'instagram_official',source_kind:'meta_hashtag',source_url:link,source_ref:tag,detail:{checked:today}},{onConflict:'owner,creator_id,source_kind,source_url,source_ref,observation_key',ignoreDuplicates:true}));
+   }
+   await audit(owner,'creator_meta_hashtag_discovery',{tag,reviewed,added,checked:today});return {status:'complete',reviewed,added,checked:today,limitation:'최근 24시간 공개 게시물·최대 20건, 사용자명 제공 항목만 탐색 후보로 저장'};
+  }
+  if(path==='/creator-meta/profile'&&method==='POST'){
+   const c=await get(owner);if(!c.selectedId)throw Error('프로페셔널 계정을 먼저 선택하세요.');
+   const target=await query(sb.from('sanji_creator_recovery').select('id,handle,profile_url').eq('owner',owner).eq('id',String(b.id||'')).maybeSingle());if(!target)throw Error('소유한 후보를 찾을 수 없습니다.');const handle=target.handle;
+   if(!/^[a-z0-9._]{1,30}$/i.test(handle))throw Error('아이디를 확인하세요.');await query(sb.rpc('sanji_creator_meta_claim',{p_owner:owner,p_tag:'profile_'+handle.toLowerCase().replace(/[^a-z0-9_]/g,'_').slice(0,20),p_kind:'profile'}));
+   const result=await instagramBusinessDiscovery({accountId:c.selectedId,token:c.access_token,handle,request,version:version()});
+   const patch=result.state==='verified'&&result.followers!==null?{followers:result.followers,followers_checked:result.checkedAt,followers_source:'Meta Business Discovery',lookup_state:'verified'}:{lookup_state:result.state||'unavailable'};
+   await query(sb.from('sanji_creator_recovery').update({...patch,updated:new Date().toISOString()}).eq('owner',owner).eq('id',target.id));await audit(owner,'creator_meta_profile_checked',{id:target.id,state:result.state});return {...result,linkNotice:target.profile_url?'기존 프로필 링크 유지':'아이디 일치만으로 복구된 원본 계정의 소유 관계를 확정하지 않아 링크는 미확인'};
+  }
+  throw Error('지원하지 않는 공식 API 작업');
+ }
+ return {handle,callback};
+}
