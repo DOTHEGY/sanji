@@ -1174,6 +1174,18 @@ function creatorMetaService({ sb: sb2, query: query2, env: env2, connection: con
       await query2(sb2.from("sanji_connections").delete().eq("owner", owner).eq("provider", "creator_meta"));
       return { ok: true };
     }
+    if (path === "/creator-meta/connect-page" && method === "POST") {
+      const c = await get(owner), pageId = String(b.pageId || "").trim();
+      if (!/^[0-9]{5,30}$/.test(pageId)) throw Error("Facebook \uD398\uC774\uC9C0 ID\uB97C \uD655\uC778\uD558\uC138\uC694.");
+      const p = await graph(pageId, { fields: "id,name,instagram_business_account{id,username}" }, c.access_token);
+      const ig = p.instagram_business_account;
+      if (String(p.id || "") !== pageId || !/^\d+$/.test(String(ig?.id || "")) || !/^[a-z0-9._]{1,30}$/i.test(String(ig?.username || ""))) throw Error("Meta\uC5D0\uC11C \uD398\uC774\uC9C0\uC5D0 \uC5F0\uACB0\uB41C Instagram \uD504\uB85C\uD398\uC154\uB110 \uACC4\uC815\uC744 \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+      const account = { id: String(ig.id), username: String(ig.username), pageName: String(p.name || "") };
+      const accounts = [...(c.accounts || []).filter((x) => x.id !== account.id), account];
+      await saveConnection2(owner, "creator_meta", { ...c, accounts, selectedId: account.id, id: account.id, username: account.username });
+      await audit2(owner, "creator_meta_page_connected", { pageId, username: account.username });
+      return { ok: true, account };
+    }
     if (path === "/creator-meta/select" && method === "POST") {
       const c = await get(owner), account = (c.accounts || []).find((x) => x.id === b.id);
       if (!account) throw Error("\uC778\uC99D\uB41C \uC5F0\uACB0 \uACC4\uC815 \uBAA9\uB85D\uC5D0\uC11C \uC120\uD0DD\uD574 \uC8FC\uC138\uC694.");
