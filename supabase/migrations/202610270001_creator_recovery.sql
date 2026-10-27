@@ -86,6 +86,15 @@ alter table public.sanji_creator_recovery enable row level security;
 alter table public.sanji_creator_recommendations enable row level security;
 revoke all on public.sanji_creator_recovery_config,public.sanji_creator_recovery,public.sanji_creator_recommendations from public,anon,authenticated;
 grant all on public.sanji_creator_recovery_config,public.sanji_creator_recovery,public.sanji_creator_recommendations to service_role;
+-- Explicit refusals are excluded from recommendation without changing the original record.
+create or replace function public.sanji_groupbuy_eligibility(p_bio text) returns text language sql immutable set search_path='' as $$
+ select case
+ when regexp_replace(coalesce(p_bio,''),'[[:space:]]+','','g') ~* '(과거|예전|이전|한때|작년|지난해|했었|않았|안했)' and regexp_replace(coalesce(p_bio,''),'[[:space:]]+','','g') ~* '(공구|공동구매|협찬|광고)' then 'review'
+ when regexp_replace(coalesce(p_bio,''),'[[:space:]]+','','g') ~* '(공구|공동구매)[^.!?\n]{0,30}(협찬|광고)[^.!?\n]{0,20}(사절|거절|안합니다|받지않|불가)' then 'review'
+ when regexp_replace(coalesce(p_bio,''),'[[:space:]]+','','g') ~* '(공구|공동구매)[^.!?\n]{0,30}(사절|거절|안합니다|안해요|하지않|하지마|받지않|받지못|미진행|진행하지않|불가)' then 'deny'
+ when regexp_replace(coalesce(p_bio,''),'[[:space:]]+','','g') ~* '(협찬|광고)[^.!?\n]{0,20}(사절|거절|안합니다|받지않|불가)' then 'review'
+ else 'allow' end;
+$$;
 create or replace function public.sanji_creator_pool_counts(p_owner uuid) returns jsonb language sql stable security definer set search_path='' as $$
  select jsonb_build_object('priority',count(*) filter(where c.assessment='candidate' and c.status='new'),'explore',count(*) filter(where c.assessment='explore' and c.status='new'),'review',count(*) filter(where c.assessment='review' and c.status='new'),'unverified_links',count(*) filter(where c.link_status<>'source_confirmed')) from public.sanji_creator_recovery c where c.owner=p_owner and exists(select 1 from public.sanji_members where user_id=p_owner) and not exists(select 1 from public.sanji_creator_recommendations r where r.owner=p_owner and r.creator_id=c.id) and not exists(select 1 from public.sanji_creator_prospects p where p.owner=p_owner and lower(ltrim(p.handle,'@'))=c.handle) and not exists(select 1 from public.sanji_records x where x.owner=p_owner and x.kind='candidate' and x.data->>'kind'='크리에이터' and lower(ltrim(coalesce(x.data->>'handle',''),'@'))=c.handle);
 $$;
@@ -96,6 +105,8 @@ create or replace function public.sanji_creator_preview(p_owner uuid,p_target in
   select c.*,row_number() over(partition by c.assessment order by c.priority_score desc,c.created,c.id) as choice_rank,
   coalesce((select explore_percent from public.sanji_creator_recovery_config where owner=p_owner),20) as explore_share
   from public.sanji_creator_recovery c where c.owner=p_owner and c.assessment in ('candidate','explore') and c.status='new' and p_target between 1 and 500
+  and public.sanji_groupbuy_eligibility(c.bio)='allow'
+  and not exists(select 1 from public.sanji_creator_evidence e where e.owner=c.owner and e.creator_id=c.id and public.sanji_groupbuy_eligibility(e.detail->>'bio')<>'allow')
   and exists(select 1 from public.sanji_members where user_id=p_owner)
   and not exists(select 1 from public.sanji_creator_recommendations r where r.owner=p_owner and r.creator_id=c.id)
   and not exists(select 1 from public.sanji_creator_prospects p where p.owner=p_owner and lower(ltrim(p.handle,'@'))=c.handle)
