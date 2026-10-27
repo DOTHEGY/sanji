@@ -15,6 +15,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm ci --prefix local-worker --ignore-scripts
       - run: npm run build:supabase
       - run: git diff --exit-code -- public/workspace supabase/dashboard public/setup public/connect
       - run: npx playwright install --with-deps chromium
