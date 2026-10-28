@@ -1,3 +1,4 @@
+import {gmailSignature} from "./gmail-signature.ts";
 // Review-only data: no queue, dispatch, external API or automatic sending.
 function text(v:any,max:number){return String(v||'').trim().slice(0,max);}
 function content(v:any,max:number){const s=String(v??'');if(s.length>max)throw Error('본문 길이가 허용 범위를 넘었습니다.');return s;}
@@ -5,10 +6,11 @@ function date(v:any){if(!v)return null;const d=new Date(v);if(!Number.isFinite(d
 function campaign(v:any){if(!v)return '';let u:URL;try{u=new URL(String(v));}catch{throw Error('캠페인 링크를 확인하세요.');}if(u.protocol!=='https:'||!['tagby.io','www.tagby.io'].includes(u.hostname)||u.username||u.password||u.search||u.hash)throw Error('태그바이 HTTPS 링크만 저장합니다.');return u.toString();}
 export function cleanCreatorReview(input:any){
  const e=input?.email||{},d=input?.dm||{},o=d.observation||{};
+ const sig=e.signatureHtml?gmailSignature(String(e.signatureHtml)):null; const body=content(e.body,15000); if(sig&&(!sig.text||sig.text!==String(e.signatureText||'')||!body.includes(sig.text)))throw Error('서명과 본문이 일치하지 않습니다.');
  const email=text(e.address,254).toLowerCase();if(email&&!/^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(email))throw Error('이메일 형식을 확인하세요.');
  if((o.status||o.actualScheduledAt||o.body)&&(!o.sourceUrl||!o.observedAt))throw Error('태그바이 관찰 출처와 확인 시각이 필요합니다.');
  const statuses=['not_prepared','planned','reviewed','hold'];if(!statuses.includes(e.status||'not_prepared')||!statuses.includes(d.status||'not_prepared'))throw Error('검토 상태를 확인하세요.');
- return {email:{address:email,sourceUrl:text(e.sourceUrl,2000),subject:content(e.subject,200),body:content(e.body,15000),plannedAt:date(e.plannedAt),status:e.status||'not_prepared'},dm:{body:content(d.body,5000),plannedAt:date(d.plannedAt),status:d.status||'not_prepared',campaignUrl:campaign(d.campaignUrl),sourceAccount:text(d.sourceAccount,100),observation:{status:text(o.status,100),observedAt:date(o.observedAt),sourceUrl:campaign(o.sourceUrl),actualScheduledAt:date(o.actualScheduledAt),body:content(o.body,5000)}}};
+ return {email:{address:email,sourceUrl:text(e.sourceUrl,2000),subject:content(e.subject,200),body,signatureHtml:sig?.html||'',signatureText:sig?.text||'',plannedAt:date(e.plannedAt),status:e.status||'not_prepared'},dm:{body:content(d.body,5000),plannedAt:date(d.plannedAt),status:d.status||'not_prepared',campaignUrl:campaign(d.campaignUrl),sourceAccount:text(d.sourceAccount,100),observation:{status:text(o.status,100),observedAt:date(o.observedAt),sourceUrl:campaign(o.sourceUrl),actualScheduledAt:date(o.actualScheduledAt),body:content(o.body,5000)}}};
 }
 export function creatorContactReviewService({sb,query,audit}:any){return async(path:string,method:string,owner:string,input:any)=>{
  if(path==='/creator-contact-review'&&method==='GET')return {rows:await query(sb.from('sanji_creator_contact_review').select('*').eq('owner',owner))};
