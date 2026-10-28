@@ -1,3 +1,4 @@
+import {brandAutoService} from '../_shared/brand-auto-service.ts';
 import {apifyTrialService} from "../_shared/apify-creators.ts";
 import {gmailSignatureSync} from "../_shared/gmail-signature-sync.ts";
 import {gmailSignature,selectGmailSignature} from "../_shared/gmail-signature.ts";
@@ -167,7 +168,8 @@ const apifyTrials=apifyTrialService({sb,query,env,audit});
 const saveManualReply=manualReplyService({sb,query,putRecord,audit});
 const creatorLocal=creatorLocalService({sb,query,audit,encrypt,decrypt,putRecord});
 const creatorServer=creatorServerService({sb,query,encrypt,decrypt,audit,creatorLocal,creatorDiscovery});
-const discovery = discoveryService({sb,query,connection,saveConnection,env,audit,putRecord,notifyOwner});
+const brandAuto = brandAutoService({sb,query,env,connection,emailTracking,digest,uuid,audit});
+const discovery = discoveryService({sb,query,connection,saveConnection,env,audit,putRecord,notifyOwner,autoSchedule:(u:string)=>brandAuto.process(u)});
 async function loadGmailSignature(u:string){
  const c=await gmailToken(u);try{const result=await remote("https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs",{headers:{Authorization:"Bearer "+c.access_token}},"Gmail 기본 서명 조회");return {...selectGmailSignature(result,c.email),checked:now(),needsConsent:false};}
  catch(e){if(e instanceof HttpError&&e.status===403)return {needsConsent:true,message:"Gmail 설정 접근 권한 승인이 필요합니다. 산지는 서명 조회에만 사용합니다."};throw e;}
@@ -854,6 +856,8 @@ Deno.serve(async (req: Request) => {
     if(path === "/creator-discovery" || path.startsWith("/creator-discovery/")){
       try{return json(await creatorDiscovery.handle(path,req.method,u,input));}catch(e){fail(400,String(e.message||"크리에이터 발굴 실패"));}
     }
+    if(path==='/brand-auto-schedule'&&req.method==='GET')return json(await brandAuto.config(u));
+    if(path==='/brand-auto-schedule'&&req.method==='POST'){const b=await input();if(typeof b.enabled!=='boolean')fail(400,'설정값을 확인하세요.');return json(await brandAuto.setConfig(u,b.enabled));}
     if (path === "/discovery" || path.startsWith("/discovery/")) {
       try { return json(await discovery.handle(path,req.method,u,input)); }
       catch(e) { fail(e instanceof HttpError ? e.status : 400, String(e.message || "발굴 작업 실패")); }

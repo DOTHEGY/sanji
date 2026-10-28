@@ -17,5 +17,6 @@ export function planAutomaticBrand({lead,template,enabledSince,now=new Date(),th
  const emails=mailRecipients({emails:review.contacts.map((c:any)=>c.email)}).filter((e:string)=>!blocked.has(e.toLowerCase()));
  if(!emails.length)return {eligible:false,reason:'검증된 수신 이메일 없음 또는 수신 거부'};
  if(!refreshed.subject||!refreshed.body||/\{\{/.test(refreshed.subject+refreshed.body)||/치료|예방|완치|항암|효능.{0,4}보장|혈당.{0,5}(낮|개선)/.test(refreshed.subject+refreshed.body))return {eligible:false,reason:'템플릿 변수 또는 표현 확인 필요'};
- return {eligible:true,leadId:lead.id,discoveredAt:new Date(discovered).toISOString(),runAt:brandNextSafeSlot(discovered,now),emails,contacts:review.contacts.filter((c:any)=>emails.includes(c.email)),copy:refreshed,templateId:template.id,templateVersion:template.version};
+ const contacts=review.contacts.filter((c:any)=>emails.includes(c.email));const qualifiedAt=Math.max(Date.parse(discovered),Date.parse(contacts[0].checked));if(!Number.isFinite(qualifiedAt)||qualifiedAt>new Date(now).getTime())return {eligible:false,reason:'유효 연락처 확인 시각 미확인'};
+ return {eligible:true,leadId:lead.id,discoveredAt:new Date(qualifiedAt).toISOString(),runAt:brandNextSafeSlot(qualifiedAt,now),emails,contacts,copy:refreshed,templateId:template.id,templateVersion:template.version};
 }
