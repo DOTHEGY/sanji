@@ -116,6 +116,30 @@ function creatorContactReviewService({ sb: sb2, query: query2, audit: audit2 }) 
       await audit2(owner, "creator_contact_review_imported", { count });
       return { count };
     }
+    if (path === "/creator-contact-review/receipt" && method === "POST") {
+      const b = await input(), id = String(b.creatorId || ""), o = b.observation || {};
+      const old = await query2(sb2.from("sanji_creator_contact_review").select("*").eq("owner", owner).eq("creator_id", id).maybeSingle());
+      if (!old || Number(b.version) !== old.version) throw Error("\uAC80\uD1A0 \uC790\uB8CC\uAC00 \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uBD88\uB7EC\uC624\uC138\uC694.");
+      const email = old.data?.email || {};
+      if (o.provider !== "gmail" || !["scheduled", "sent", "failed", "cancelled", "unknown"].includes(o.status)) throw Error("Gmail \uAD00\uCC30 \uC0C1\uD0DC\uB97C \uD655\uC778\uD558\uC138\uC694.");
+      if (String(o.recipient || "").toLowerCase() !== String(email.address || "").toLowerCase() || !email.address) throw Error("\uAE30\uC874 \uAC80\uD1A0 \uC218\uC2E0\uC790\uC640 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+      for (const k of ["subjectHash", "bodyHash"]) if (!/^[a-f0-9]{64}$/i.test(String(o[k] || ""))) throw Error("\uBCF8\uBB38 \uB610\uB294 \uC81C\uBAA9 \uD574\uC2DC\uB97C \uD655\uC778\uD558\uC138\uC694.");
+      if (!o.observedAt || !o.sourceUrl) throw Error("\uAD00\uCC30 \uC2DC\uAC01\uACFC Gmail \uCD9C\uCC98\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.");
+      let url2;
+      try {
+        url2 = new URL(o.sourceUrl);
+      } catch {
+        throw Error("Gmail \uCD9C\uCC98\uB97C \uD655\uC778\uD558\uC138\uC694.");
+      }
+      if (url2.protocol !== "https:" || url2.hostname !== "mail.google.com" || url2.username || url2.password || url2.search) throw Error("Gmail \uCD9C\uCC98\uB97C \uD655\uC778\uD558\uC138\uC694.");
+      const receipt = { provider: "gmail", status: o.status, scheduledAt: date(o.scheduledAt), observedAt: date(o.observedAt), providerMessageId: text(o.providerMessageId, 200), draftId: text(o.draftId, 200), recipient: String(o.recipient).toLowerCase(), subjectHash: String(o.subjectHash).toLowerCase(), bodyHash: String(o.bodyHash).toLowerCase(), sourceUrl: url2.toString() };
+      if (receipt.status === "scheduled" && !receipt.scheduledAt) throw Error("\uC2E4\uC81C \uC608\uC57D \uC2DC\uAC01\uC774 \uD544\uC694\uD569\uB2C8\uB2E4.");
+      if (!receipt.providerMessageId && !receipt.draftId) throw Error("\uBA54\uC2DC\uC9C0 \uB610\uB294 \uCD08\uC548 ID\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.");
+      const updated = await query2(sb2.from("sanji_creator_contact_review").update({ data: { ...old.data, email: { ...email, observation: receipt } }, version: old.version + 1, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("creator_id", id).eq("version", old.version).select("creator_id"));
+      if (!updated.length) throw Error("\uAC80\uD1A0 \uC790\uB8CC\uAC00 \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
+      await audit2(owner, "creator_gmail_receipt_recorded", { creator: id, status: receipt.status, noDispatch: true });
+      return { ok: true, version: old.version + 1 };
+    }
     if (path === "/creator-contact-review" && method === "POST") {
       const b = await input(), id = String(b.creatorId || "");
       const creator = await query2(sb2.from("sanji_creator_recovery").select("id,emails,profile_url").eq("owner", owner).eq("id", id).maybeSingle());
@@ -130,8 +154,9 @@ function creatorContactReviewService({ sb: sb2, query: query2, audit: audit2 }) 
         }
         if (source.protocol !== "https:" || !["instagram.com", "www.instagram.com"].includes(source.hostname) || !creator.profile_url || source.pathname.replace(/\/$/, "").toLowerCase() !== new URL(creator.profile_url).pathname.replace(/\/$/, "").toLowerCase()) throw Error("\uD574\uB2F9 \uACC4\uC815\uC758 \uACF5\uAC1C \uC18C\uAC1C\uB780 \uCD9C\uCC98\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.");
       }
-      const previous = await query2(sb2.from("sanji_creator_contact_review").select("version").eq("owner", owner).eq("creator_id", id).maybeSingle());
+      const previous = await query2(sb2.from("sanji_creator_contact_review").select("version,data").eq("owner", owner).eq("creator_id", id).maybeSingle());
       if (previous && Number(b.version) !== previous.version) throw Error("\uB2E4\uB978 \uACF3\uC5D0\uC11C \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uBD88\uB7EC\uC624\uC138\uC694.");
+      if (previous?.data?.email?.observation) data.email.observation = previous.data.email.observation;
       const version = (previous?.version || 0) + 1;
       if (previous) {
         const changed = await query2(sb2.from("sanji_creator_contact_review").update({ data, version, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("creator_id", id).eq("version", previous.version).select("creator_id"));
@@ -3867,7 +3892,7 @@ Deno.serve(async (req) => {
       }
     }
     if (path === "/email-tracking" || path.startsWith("/email-tracking/")) return json(await emailTracking.handle(path, req.method, u, input, url2.searchParams));
-    if (path === "/creator-contact-review" || path === "/creator-contact-review/move" || path === "/creator-contact-review/import") {
+    if (path === "/creator-contact-review" || path === "/creator-contact-review/move" || path === "/creator-contact-review/import" || path === "/creator-contact-review/receipt") {
       try {
         return json(await creatorContactReview(path, req.method, u, input));
       } catch (e) {
