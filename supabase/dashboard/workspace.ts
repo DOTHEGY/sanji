@@ -1,3 +1,98 @@
+// supabase/functions/_shared/creator-contact-review.ts
+function text(v, max) {
+  return String(v || "").trim().slice(0, max);
+}
+function content(v, max) {
+  const s = String(v ?? "");
+  if (s.length > max) throw Error("\uBCF8\uBB38 \uAE38\uC774\uAC00 \uD5C8\uC6A9 \uBC94\uC704\uB97C \uB118\uC5C8\uC2B5\uB2C8\uB2E4.");
+  return s;
+}
+function date(v) {
+  if (!v) return null;
+  const d = new Date(v);
+  if (!Number.isFinite(d.getTime())) throw Error("\uC2DC\uAC01\uC744 \uD655\uC778\uD558\uC138\uC694.");
+  return d.toISOString();
+}
+function campaign(v) {
+  if (!v) return "";
+  let u;
+  try {
+    u = new URL(String(v));
+  } catch {
+    throw Error("\uCEA0\uD398\uC778 \uB9C1\uD06C\uB97C \uD655\uC778\uD558\uC138\uC694.");
+  }
+  if (u.protocol !== "https:" || !["tagby.io", "www.tagby.io"].includes(u.hostname) || u.username || u.password || u.search || u.hash) throw Error("\uD0DC\uADF8\uBC14\uC774 HTTPS \uB9C1\uD06C\uB9CC \uC800\uC7A5\uD569\uB2C8\uB2E4.");
+  return u.toString();
+}
+function cleanCreatorReview(input) {
+  const e = input?.email || {}, d = input?.dm || {}, o = d.observation || {};
+  const email = text(e.address, 254).toLowerCase();
+  if (email && !/^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(email)) throw Error("\uC774\uBA54\uC77C \uD615\uC2DD\uC744 \uD655\uC778\uD558\uC138\uC694.");
+  if ((o.status || o.actualScheduledAt || o.body) && (!o.sourceUrl || !o.observedAt)) throw Error("\uD0DC\uADF8\uBC14\uC774 \uAD00\uCC30 \uCD9C\uCC98\uC640 \uD655\uC778 \uC2DC\uAC01\uC774 \uD544\uC694\uD569\uB2C8\uB2E4.");
+  const statuses = ["not_prepared", "planned", "reviewed", "hold"];
+  if (!statuses.includes(e.status || "not_prepared") || !statuses.includes(d.status || "not_prepared")) throw Error("\uAC80\uD1A0 \uC0C1\uD0DC\uB97C \uD655\uC778\uD558\uC138\uC694.");
+  return { email: { address: email, sourceUrl: text(e.sourceUrl, 2e3), subject: content(e.subject, 200), body: content(e.body, 15e3), plannedAt: date(e.plannedAt), status: e.status || "not_prepared" }, dm: { body: content(d.body, 5e3), plannedAt: date(d.plannedAt), status: d.status || "not_prepared", campaignUrl: campaign(d.campaignUrl), sourceAccount: text(d.sourceAccount, 100), observation: { status: text(o.status, 100), observedAt: date(o.observedAt), sourceUrl: campaign(o.sourceUrl), actualScheduledAt: date(o.actualScheduledAt), body: content(o.body, 5e3) } } };
+}
+function creatorContactReviewService({ sb: sb2, query: query2, audit: audit2 }) {
+  return async (path, method, owner, input) => {
+    if (path === "/creator-contact-review" && method === "GET") return { rows: await query2(sb2.from("sanji_creator_contact_review").select("*").eq("owner", owner)) };
+    if (path === "/creator-contact-review/import" && method === "POST") {
+      const b = await input();
+      if (!Array.isArray(b.rows) || b.rows.length < 1 || b.rows.length > 30) throw Error("1~30\uBA85\uC744 \uC785\uB825\uD558\uC138\uC694.");
+      const clean2 = [];
+      for (const row of b.rows) {
+        const handle2 = String(row.handle || "").replace(/^@/, "").toLowerCase();
+        if (!/^[a-z0-9._]{1,30}$/.test(handle2)) throw Error("\uC544\uC774\uB514\uB97C \uD655\uC778\uD558\uC138\uC694.");
+        const c = await query2(sb2.from("sanji_creator_recovery").select("id,profile_url").eq("owner", owner).eq("handle", handle2).maybeSingle());
+        if (!c) throw Error("\uAE30\uC874 \uBAA9\uB85D\uC5D0 \uC5C6\uB294 \uC544\uC774\uB514: " + handle2);
+        const data = cleanCreatorReview(row.data);
+        if (data.email.address) {
+          let u;
+          try {
+            u = new URL(data.email.sourceUrl);
+          } catch {
+            throw Error("\uACF5\uAC1C \uC774\uBA54\uC77C \uCD9C\uCC98 URL\uC744 \uD655\uC778\uD558\uC138\uC694.");
+          }
+          if (u.protocol !== "https:" || !["instagram.com", "www.instagram.com"].includes(u.hostname) || !c.profile_url || u.pathname.replace(/\/$/, "").toLowerCase() !== new URL(c.profile_url).pathname.replace(/\/$/, "").toLowerCase()) throw Error("\uD574\uB2F9 \uACC4\uC815\uC758 \uACF5\uAC1C \uC18C\uAC1C\uB780 \uCD9C\uCC98\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.");
+        }
+        clean2.push({ creatorId: c.id, data });
+      }
+      const count = await query2(sb2.rpc("sanji_creator_review_import", { p_owner: owner, p_rows: clean2 }));
+      await audit2(owner, "creator_contact_review_imported", { count });
+      return { count };
+    }
+    if (path === "/creator-contact-review" && method === "POST") {
+      const b = await input(), id = String(b.creatorId || "");
+      const creator = await query2(sb2.from("sanji_creator_recovery").select("id,emails,profile_url").eq("owner", owner).eq("id", id).maybeSingle());
+      if (!creator) throw Error("\uD06C\uB9AC\uC5D0\uC774\uD130\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      const data = cleanCreatorReview(b.data);
+      if (data.email.address) {
+        let source;
+        try {
+          source = new URL(data.email.sourceUrl);
+        } catch {
+          throw Error("\uACF5\uAC1C \uC774\uBA54\uC77C \uCD9C\uCC98 URL\uC744 \uD655\uC778\uD558\uC138\uC694.");
+        }
+        if (source.protocol !== "https:" || !["instagram.com", "www.instagram.com"].includes(source.hostname) || !creator.profile_url || source.pathname.replace(/\/$/, "").toLowerCase() !== new URL(creator.profile_url).pathname.replace(/\/$/, "").toLowerCase()) throw Error("\uD574\uB2F9 \uACC4\uC815\uC758 \uACF5\uAC1C \uC18C\uAC1C\uB780 \uCD9C\uCC98\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.");
+      }
+      const previous = await query2(sb2.from("sanji_creator_contact_review").select("version").eq("owner", owner).eq("creator_id", id).maybeSingle());
+      if (previous && Number(b.version) !== previous.version) throw Error("\uB2E4\uB978 \uACF3\uC5D0\uC11C \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uBD88\uB7EC\uC624\uC138\uC694.");
+      const version = (previous?.version || 0) + 1;
+      if (previous) {
+        const changed = await query2(sb2.from("sanji_creator_contact_review").update({ data, version, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("creator_id", id).eq("version", previous.version).select("creator_id"));
+        if (!changed.length) throw Error("\uB2E4\uB978 \uACF3\uC5D0\uC11C \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uBD88\uB7EC\uC624\uC138\uC694.");
+      } else await query2(sb2.from("sanji_creator_contact_review").insert({ owner, creator_id: id, data, version }));
+      await audit2(owner, "creator_contact_review_saved", { creator: id, version });
+      return { ok: true, version };
+    }
+    if (path === "/creator-contact-review/move" && method === "POST") {
+      const b = await input();
+      return { moved: await query2(sb2.rpc("sanji_creator_move_recommendations", { p_owner: owner, p_handles: b.handles, p_from: b.from, p_to: b.to })) };
+    }
+    throw Error("\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uAC80\uD1A0 \uC791\uC5C5");
+  };
+}
+
 // supabase/functions/_shared/gmail-health.ts
 function gmailFailure(error, previous = {}, now2 = Date.now()) {
   if (error?.code === "GMAIL_REAUTH_REQUIRED") return { status: "reauth_required", reauthRequired: true, error: "Gmail \uC778\uC99D\uC774 \uB9CC\uB8CC\uB418\uAC70\uB098 \uCDE8\uC18C\uB410\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uC5F0\uACB0\uD574 \uC8FC\uC138\uC694.", attempts: 0, retryAt: null };
@@ -73,7 +168,7 @@ function attribute(tag, name) {
 }
 function parseOfficialPage(html, source, checked) {
   const visible = html.replace(/<span\b[^>]*>(\.[a-z]{2,})<\/span>/gi, "$1").replace(/<\/?(?:span|b|strong|em|i|wbr)\b[^>]*>/gi, " ").replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style|noscript)\b[^>]*>[\s\S]*?<\/\1>/gi, " ");
-  const text2 = plainHtml(visible), host = publicUrl(source).hostname.replace(/^www\./, "");
+  const text3 = plainHtml(visible), host = publicUrl(source).hostname.replace(/^www\./, "");
   const footerStart = visible.search(/<(?:footer\b|(?:div|section)\b[^>]*(?:id|class)\s*=\s*["'][^"']*footer)/i);
   const footerHtml = footerStart >= 0 ? visible.slice(footerStart) : "";
   const footerText = plainHtml(footerHtml);
@@ -84,17 +179,17 @@ function parseOfficialPage(html, source, checked) {
       return "";
     }
   });
-  const emails = Array.from(/* @__PURE__ */ new Set([...footerText.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [], ...text2.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [], ...mailto])).filter((v) => /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(v)).slice(0, 30);
+  const emails = Array.from(/* @__PURE__ */ new Set([...footerText.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [], ...text3.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [], ...mailto])).filter((v) => /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(v)).slice(0, 30);
   const blocks = visible.replace(/<\/(?:p|li|address|dd|dt|td|div)>|<br\b[^>]*>/gi, "\n").split("\n").map(plainHtml).filter(Boolean);
   const contacts = [], rejected = [];
   for (const email of emails) {
     const escaped = email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const literal = new RegExp("(?<![a-z0-9._%+-])" + escaped + "(?![a-z0-9.-])", "i");
-    if (emails.some((other) => other.toLowerCase().startsWith(email.toLowerCase() + ".")) && !literal.test(text2)) {
+    if (emails.some((other) => other.toLowerCase().startsWith(email.toLowerCase() + ".")) && !literal.test(text3)) {
       rejected.push({ email, reason: "\uC798\uB9B0 \uC8FC\uC18C \uC811\uB450\uBD80 \xB7 \uC6D0\uBB38 \uC804\uCCB4 \uB3C4\uBA54\uC778\uACFC \uBD88\uC77C\uCE58", source });
       continue;
     }
-    const at = text2.toLowerCase().indexOf(email.toLowerCase()), context = at < 0 ? "" : text2.slice(Math.max(0, at - 100), at + email.length + 100);
+    const at = text3.toLowerCase().indexOf(email.toLowerCase()), context = at < 0 ? "" : text3.slice(Math.max(0, at - 100), at + email.length + 100);
     const block = blocks.filter((v) => v.toLowerCase().includes(email.toLowerCase())).sort((a, b) => a.length - b.length)[0] || email;
     const domain = email.split("@")[1]?.toLowerCase(), ownerMatch = domain === host || host.endsWith("." + domain) || domain.endsWith("." + host);
     const unsafe2 = unsafeContactReason(email, block.length < 500 ? block : context);
@@ -152,7 +247,7 @@ function parseOfficialPage(html, source, checked) {
   }
   const title = plainHtml(/<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] || "");
   const description = Array.from(html.matchAll(/<meta\b([^>]*)>/gi)).map((m) => ({ name: attribute(m[1], "name") || attribute(m[1], "property"), content: attribute(m[1], "content") })).find((m) => /^(description|og:description)$/i.test(m.name))?.content || "";
-  return { contacts, rejected, links, text: text2.slice(-8e3), publicEvidence: { url: source, title, sourceType: /NewsMediaOrganization/.test(html) || (footerText || text2.slice(-8e3)).match(/발행인|편집인|인터넷신문|언론사고충처리/g)?.length >= 2 ? "NewsMediaOrganization" : "", products: products.slice(0, 12), description: plainHtml(description), excerpt: text2.slice(0, 5e3), checked } };
+  return { contacts, rejected, links, text: text3.slice(-8e3), publicEvidence: { url: source, title, sourceType: /NewsMediaOrganization/.test(html) || (footerText || text3.slice(-8e3)).match(/발행인|편집인|인터넷신문|언론사고충처리/g)?.length >= 2 ? "NewsMediaOrganization" : "", products: products.slice(0, 12), description: plainHtml(description), excerpt: text3.slice(0, 5e3), checked } };
 }
 function robotsAllowed(robots, path) {
   let active = false;
@@ -186,9 +281,9 @@ var publisherDomains = ["pharmnews.com", "inthenews.co.kr", "foodbank.co.kr", "m
 function permanentFailureEmails(threads = [], suppression = []) {
   return [...new Set([...suppression.filter((s) => /영구.{0,4}반송|permanent/i.test(s.reason || "")).map((s) => String(s.identity || "").replace(/^email:/, "").toLowerCase()), ...threads.flatMap((t) => (t.data || t).messages || []).flatMap((m) => m.bounceFailures || []).filter((f) => f.kind === "permanent" && f.source === "delivery_status" && /^5\./.test(f.status || "")).map((f) => String(f.email || "").toLowerCase())].filter((e) => e.includes("@")))];
 }
-function exactEmailIn(text2, email) {
+function exactEmailIn(text3, email) {
   const escaped = email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp("(?<![a-z0-9._%+-])" + escaped + "(?![a-z0-9.-])", "i").test(text2);
+  return new RegExp("(?<![a-z0-9._%+-])" + escaped + "(?![a-z0-9.-])", "i").test(text3);
 }
 function editorialSource(url2, pages = []) {
   try {
@@ -200,9 +295,9 @@ function editorialSource(url2, pages = []) {
       } catch {
         return false;
       }
-    }), text2 = [p?.title, p?.description, p?.excerpt].join(" ");
-    const editorialMarkers = text2.match(/발행인|편집인|인터넷신문|언론사고충처리/g) || [];
-    return editorialMarkers.length >= 2 || /NewsArticle|NewsMediaOrganization/.test(p?.sourceType || "") || /\/news\/article|\/articleView|\/news\/view/i.test(u.pathname) && /기자|발행인|편집인|인터넷신문|고충처리/.test(text2);
+    }), text3 = [p?.title, p?.description, p?.excerpt].join(" ");
+    const editorialMarkers = text3.match(/발행인|편집인|인터넷신문|언론사고충처리/g) || [];
+    return editorialMarkers.length >= 2 || /NewsArticle|NewsMediaOrganization/.test(p?.sourceType || "") || /\/news\/article|\/articleView|\/news\/view/i.test(u.pathname) && /기자|발행인|편집인|인터넷신문|고충처리/.test(text3);
   } catch {
     return true;
   }
@@ -224,21 +319,21 @@ function productDetailUrl(url2) {
     return false;
   }
 }
-function duplicateParagraphs(text2) {
+function duplicateParagraphs(text3) {
   const seen = /* @__PURE__ */ new Set(), duplicates = [];
-  for (const p of String(text2 || "").split(/\n\s*\n/)) {
+  for (const p of String(text3 || "").split(/\n\s*\n/)) {
     const key2 = p.replace(/\s+/g, "").replace(/[.!！。]/g, "");
     if (key2.length < 30) continue;
     if (seen.has(key2)) duplicates.push(p);
     seen.add(key2);
   }
-  const requests = String(text2 || "").match(/저희가 적합한 크리에이터 후보와 채널 자료,?\s*구체적인 진행안을 정리해 제안드리겠습니다[.!]?/g) || [];
+  const requests = String(text3 || "").match(/저희가 적합한 크리에이터 후보와 채널 자료,?\s*구체적인 진행안을 정리해 제안드리겠습니다[.!]?/g) || [];
   if (requests.length > 1) duplicates.push("\uD06C\uB9AC\uC5D0\uC774\uD130 \uD6C4\uBCF4\xB7\uCC44\uB110 \uC790\uB8CC\xB7\uC9C4\uD589\uC548 \uC81C\uACF5 \uBB38\uB2E8 \uBC18\uBCF5");
   return duplicates;
 }
-function dedupeProposal(text2) {
+function dedupeProposal(text3) {
   let seen = /* @__PURE__ */ new Set();
-  let out = String(text2 || "").split(/\n\s*\n/).filter((p) => {
+  let out = String(text3 || "").split(/\n\s*\n/).filter((p) => {
     const key2 = p.replace(/\s+/g, "").replace(/[.!！。]/g, "");
     if (key2.length < 30) return true;
     if (seen.has(key2)) return false;
@@ -345,8 +440,8 @@ function assessDispatch(d, c, lead, failures = [], replyAddresses = []) {
 }
 
 // supabase/functions/_shared/mail-template.ts
-function renderLeadText(text2, brand, product, intro = "") {
-  let body = String(text2 || "").replace(/\{\{(브랜드명|회사명|제품명)\}\}/g, (_, key2) => key2 === "\uC81C\uD488\uBA85" ? product : brand);
+function renderLeadText(text3, brand, product, intro = "") {
+  let body = String(text3 || "").replace(/\{\{(브랜드명|회사명|제품명)\}\}/g, (_, key2) => key2 === "\uC81C\uD488\uBA85" ? product : brand);
   return body.includes("{{\uAC1C\uC778\uD654}}") ? body.split("{{\uAC1C\uC778\uD654}}").join(intro) : (intro ? intro + "\n\n" : "") + body;
 }
 function leadOutreach(template2, lead, time = (/* @__PURE__ */ new Date()).toISOString()) {
@@ -414,19 +509,19 @@ function planAutomaticBrand({ lead, template: template2, enabledSince, now: now2
 // supabase/functions/_shared/mail-content.ts
 var normalize = (s) => String(s || "").replace(/\r\n?/g, "\n").trim();
 function mailContent(body, signature, settings = {}, email = true, marketing = false) {
-  let text2 = normalize(body), original = normalize(signature), custom = email ? normalize(settings.emailSignature) : "", sig = custom || original;
-  if (custom && original && custom !== original && text2.endsWith(original)) text2 = text2.slice(0, -original.length).trim();
-  if (sig && !text2.includes(sig)) text2 += (text2 ? "\n\n" : "") + sig;
-  if (!email) return text2;
-  if (sig && !marketing) return text2.replace(/(?:\n\s*)?회신으로 수신 거부를 요청하실 수 있습니다\./g, "").trim();
+  let text3 = normalize(body), original = normalize(signature), custom = email ? normalize(settings.emailSignature) : "", sig = custom || original;
+  if (custom && original && custom !== original && text3.endsWith(original)) text3 = text3.slice(0, -original.length).trim();
+  if (sig && !text3.includes(sig)) text3 += (text3 ? "\n\n" : "") + sig;
+  if (!email) return text3;
+  if (sig && !marketing) return text3.replace(/(?:\n\s*)?회신으로 수신 거부를 요청하실 수 있습니다\./g, "").trim();
   const lines = [], name = normalize(settings.senderName), address = normalize(settings.senderAddress), phone = normalize(settings.senderPhone), optOut = normalize(settings.optOut) || "\uD68C\uC2E0\uC73C\uB85C \uC218\uC2E0 \uAC70\uBD80\uB97C \uC694\uCCAD\uD558\uC2E4 \uC218 \uC788\uC2B5\uB2C8\uB2E4.";
   const nameParts = name.split(/[·•|]/).map((s) => s.trim()).filter(Boolean);
-  if (name && (!nameParts.length || !nameParts.every((s) => text2.includes(s)))) lines.push(name);
-  if (address && !text2.includes(address)) lines.push(address);
-  if (phone && !text2.replace(/[\s()-]/g, "").includes(phone.replace(/[\s()-]/g, ""))) lines.push(phone);
-  if (marketing && optOut && !text2.includes(optOut)) lines.push(optOut);
-  if (!marketing) text2 = text2.replace(/(?:\n\s*)?회신으로 수신 거부를 요청하실 수 있습니다\./g, "").trim();
-  return text2 + (lines.length ? "\n\n" + lines.join("\n") : "");
+  if (name && (!nameParts.length || !nameParts.every((s) => text3.includes(s)))) lines.push(name);
+  if (address && !text3.includes(address)) lines.push(address);
+  if (phone && !text3.replace(/[\s()-]/g, "").includes(phone.replace(/[\s()-]/g, ""))) lines.push(phone);
+  if (marketing && optOut && !text3.includes(optOut)) lines.push(optOut);
+  if (!marketing) text3 = text3.replace(/(?:\n\s*)?회신으로 수신 거부를 요청하실 수 있습니다\./g, "").trim();
+  return text3 + (lines.length ? "\n\n" + lines.join("\n") : "");
 }
 
 // supabase/functions/_shared/gmail-signature.ts
@@ -472,8 +567,8 @@ function gmailSignature(input) {
     if (styles.length) out.push('style="' + escape(styles.join(";")) + '"');
     return "<" + name + (out.length ? " " + out.join(" ") : "") + ">";
   }).join("");
-  const text2 = decode(html.replace(/<img\b[^>]*>/gi, "").replace(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (_, url2, label) => label + (decode(label.replace(/<[^>]*>/g, "")).trim() === decode(url2).replace(/^(?:mailto:|tel:)/i, "").trim() ? "" : " (" + url2 + ")")).replace(/<br\s*\/?\s*>|<\/(?:div|p|tr)>/gi, "\n").replace(/<[^>]*>/g, "")).replace(/\n{3,}/g, "\n\n").trim();
-  return { html, text: text2 };
+  const text3 = decode(html.replace(/<img\b[^>]*>/gi, "").replace(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (_, url2, label) => label + (decode(label.replace(/<[^>]*>/g, "")).trim() === decode(url2).replace(/^(?:mailto:|tel:)/i, "").trim() ? "" : " (" + url2 + ")")).replace(/<br\s*\/?\s*>|<\/(?:div|p|tr)>/gi, "\n").replace(/<[^>]*>/g, "")).replace(/\n{3,}/g, "\n\n").trim();
+  return { html, text: text3 };
 }
 function selectGmailSignature(result, email) {
   const row = (result.sendAs || []).find((r) => String(r.sendAsEmail || "").toLowerCase() === String(email).toLowerCase());
@@ -564,13 +659,13 @@ function apifyCreator(raw, run, checked = (/* @__PURE__ */ new Date()).toISOStri
   const no = (reason) => ({ accepted: false, handle: handle2, reason });
   if (!/^[a-z0-9._]{2,30}$/.test(handle2) || raw.error) return no("\uC720\uD6A8\uD55C \uACF5\uAC1C \uD504\uB85C\uD544 \uACB0\uACFC \uC544\uB2D8");
   if (raw.isPrivate === true) return no("\uBE44\uACF5\uAC1C \uACC4\uC815");
-  const bio = String(raw.biography || ""), name = String(raw.fullName || handle2), posts = (Array.isArray(raw.latestPosts) ? raw.latestPosts : []).filter((p) => p.url && p.caption), korean = posts.filter((p) => (String(p.caption).match(/[가-힣]/g) || []).length >= 15), text2 = [bio, ...posts.map((p) => p.caption)].join("\n");
+  const bio = String(raw.biography || ""), name = String(raw.fullName || handle2), posts = (Array.isArray(raw.latestPosts) ? raw.latestPosts : []).filter((p) => p.url && p.caption), korean = posts.filter((p) => (String(p.caption).match(/[가-힣]/g) || []).length >= 15), text3 = [bio, ...posts.map((p) => p.caption)].join("\n");
   if (/유소년|축구성장기|초[1-6]\s*.*성장기|키즈모델/.test(name + " " + bio)) return no("\uC544\uB3D9 \uC911\uC2EC \uACC4\uC815 \xB7 \uC131\uC778 \uACF5\uB3D9\uAD6C\uB9E4 \uD611\uC5C5 \uC120\uBCC4\uC5D0\uC11C \uC81C\uC678");
   const identityPost = posts.find((p) => /(?:저는\s*한국인|한국인인\s*저|한국인으로서|我是韓國人|身為韓國人|韓国人の私|\b(?:I'm|I am|as a|being a)\s+(?:a\s+)?Korean\b)/i.test(String(p.caption)));
   const selfHandle = /^korean[_.]?mom(?:[_.]|co+ks|life|diary|daily|blog|$)/i.test(handle2);
   if (!identityPost && !selfHandle && !/(?:한국\s*(?:인(?!삼)|사람|엄마|아빠|여자|남자|크리에이터)|韓國(?:人|媽媽)|韓国(?:人|ママ)|대한민국\s*국적|Korean\s+(?:creator|mom|mother|dad|father|woman|man|influencer|chef|cook|baker|foodie)\b|(?:I'm|I am)\s+Korean)/i.test(name + " " + bio)) return no("\uACF5\uAC1C \uC790\uAE30\uC18C\uAC1C\uC5D0\uC11C \uD55C\uAD6D \uD06C\uB9AC\uC5D0\uC774\uD130\uB77C\uB294 \uADFC\uAC70 \uBBF8\uD655\uC778 \xB7 \uC5B8\uC5B4\xB7\uC774\uB984\xB7\uC678\uBAA8\uB85C \uD310\uC815\uD558\uC9C0 \uC54A\uC74C");
   if (!posts.length) return no("\uC2E4\uC81C \uACF5\uAC1C \uCF58\uD150\uCE20 \uADFC\uAC70 \uBD80\uC871");
-  if (!/공동구매|공구|레시피|식단|요리|베이킹|푸드|홈카페|웰니스|운동|건강식|라이프스타일|살림|육아|책육아|집밥|먹방|홈쿡|recipe|cook|chef|food|baking|wellness|fitness|lifestyle|parenting|motherhood/i.test(text2)) return no("\uD478\uB4DC\xB7\uC6F0\uB2C8\uC2A4 \uACF5\uB3D9\uAD6C\uB9E4 \uCF58\uD150\uCE20 \uC801\uD569\uC131 \uADFC\uAC70 \uBD80\uC871");
+  if (!/공동구매|공구|레시피|식단|요리|베이킹|푸드|홈카페|웰니스|운동|건강식|라이프스타일|살림|육아|책육아|집밥|먹방|홈쿡|recipe|cook|chef|food|baking|wellness|fitness|lifestyle|parenting|motherhood/i.test(text3)) return no("\uD478\uB4DC\xB7\uC6F0\uB2C8\uC2A4 \uACF5\uB3D9\uAD6C\uB9E4 \uCF58\uD150\uCE20 \uC801\uD569\uC131 \uADFC\uAC70 \uBD80\uC871");
   if (/브랜드\s*공식|공식\s*(계정|스토어|쇼핑몰)|고객센터|주식회사|도매\s*문의/.test(bio)) return no("\uAE30\uC5C5\xB7\uD310\uB9E4\uC810 \uACC4\uC815 \uAC00\uB2A5\uC131 \xB7 \uAC1C\uC778 \uD06C\uB9AC\uC5D0\uC774\uD130 \uC120\uBCC4\uC5D0\uC11C \uC81C\uC678");
   const dated = posts.map((p) => Date.parse(p.timestamp)).filter(Number.isFinite), latest = dated.length ? Math.max(...dated) : null;
   if (!latest || Date.parse(checked) - latest > 120 * 864e5) return no("\uCD5C\uADFC 120\uC77C \uACF5\uAC1C \uD65C\uB3D9 \uD655\uC778 \uBD88\uAC00");
@@ -1017,8 +1112,8 @@ function manualReplyService({ sb: sb2, query: query2, putRecord: putRecord2, aud
     if (!name || !["phone", "sms"].includes(b.channel)) throw Error("\uC5C5\uCCB4\uBA85\uACFC \uC804\uD654\xB7\uBB38\uC790 \uACBD\uB85C\uB97C \uD655\uC778\uD558\uC138\uC694.");
     const classification = String(b.classification || "\uBBF8\uBD84\uB958");
     if (!["\uBBF8\uBD84\uB958", "\uAD00\uC2EC \uD68C\uC2E0", "\uB2E8\uC21C \uC548\uB0B4", "\uAC70\uC808", "\uC218\uC2E0 \uAC70\uBD80"].includes(classification)) throw Error("\uD68C\uC2E0 \uBD84\uB958\uB97C \uD655\uC778\uD558\uC138\uC694.");
-    const text2 = String(b.text || "").trim();
-    if (text2.length > 5e3) throw Error("\uD68C\uC2E0 \uBA54\uBAA8\uB294 5000\uC790 \uC774\uB0B4\uC785\uB2C8\uB2E4.");
+    const text3 = String(b.text || "").trim();
+    if (text3.length > 5e3) throw Error("\uD68C\uC2E0 \uBA54\uBAA8\uB294 5000\uC790 \uC774\uB0B4\uC785\uB2C8\uB2E4.");
     const at = b.at ? new Date(b.at) : /* @__PURE__ */ new Date();
     if (!Number.isFinite(at.getTime()) || at.getTime() > Date.now() + 6e4) throw Error("\uD68C\uC2E0 \uC77C\uC2DC\uB97C \uD655\uC778\uD558\uC138\uC694.");
     const candidates = await query2(sb2.from("sanji_records").select("*").eq("owner", owner).eq("kind", "candidate"));
@@ -1036,7 +1131,7 @@ function manualReplyService({ sb: sb2, query: query2, putRecord: putRecord2, aud
     }
     const records2 = await query2(sb2.from("sanji_records").select("*").eq("owner", owner).eq("kind", "thread"));
     const old = records2.find((r) => r.data.target === target.id && r.data.channel === b.channel), label = b.channel === "phone" ? "\uC804\uD654" : "\uBB38\uC790";
-    const t = await putRecord2(owner, "thread", { ...old?.data || {}, target: target.id, channel: b.channel, subject: label + " \uD68C\uC2E0 \xB7 \uC218\uB3D9 \uAE30\uB85D", classification, owner: old?.data.owner || "", due: old?.data.due || "", next: old?.data.next || "", manual: true, messages: [...old?.data.messages || [], { id: crypto.randomUUID(), out: false, automatic: false, text: text2 || label + " \uD68C\uC2E0 \uC218\uC2E0 (\uB0B4\uC6A9 \uBBF8\uAE30\uB85D)", at: at.toISOString(), source: "operator_reported", recordedBy: owner, recordedAt: (/* @__PURE__ */ new Date()).toISOString() }], ...old ? { version: old.version } : {} }, old?.id);
+    const t = await putRecord2(owner, "thread", { ...old?.data || {}, target: target.id, channel: b.channel, subject: label + " \uD68C\uC2E0 \xB7 \uC218\uB3D9 \uAE30\uB85D", classification, owner: old?.data.owner || "", due: old?.data.due || "", next: old?.data.next || "", manual: true, messages: [...old?.data.messages || [], { id: crypto.randomUUID(), out: false, automatic: false, text: text3 || label + " \uD68C\uC2E0 \uC218\uC2E0 (\uB0B4\uC6A9 \uBBF8\uAE30\uB85D)", at: at.toISOString(), source: "operator_reported", recordedBy: owner, recordedAt: (/* @__PURE__ */ new Date()).toISOString() }], ...old ? { version: old.version } : {} }, old?.id);
     const status = ["\uAC70\uC808", "\uC218\uC2E0 \uAC70\uBD80"].includes(classification) ? classification : ["\uAC70\uC808", "\uC218\uC2E0 \uAC70\uBD80", "\uD611\uC0C1", "\uB51C \uD655\uBCF4"].includes(target.data.status) ? target.data.status : "\uD68C\uC2E0";
     await putRecord2(owner, "candidate", { ...target.data, status, lastManualReply: { channel: b.channel, at: at.toISOString(), thread: t.id }, version: target.version }, target.id);
     if (status === "\uC218\uC2E0 \uAC70\uBD80") {
@@ -1442,7 +1537,7 @@ function recoveryService({ sb: sb2, query: query2, audit: audit2 }) {
   }
   async function handle2(path, method, owner, input, params = new URLSearchParams()) {
     if (path === "/creator-recovery" && method === "GET") {
-      const c = await config(owner), today = day(), requested = params.get("day") || today, pool = await query2(sb2.rpc("sanji_creator_pool_counts", { p_owner: owner })), selectedDay = /^\d{4}-\d{2}-\d{2}$/.test(requested) && requested <= today ? requested : today, preview = await query2(sb2.rpc("sanji_creator_preview", { p_owner: owner, p_target: c.target })), rec = await query2(sb2.from("sanji_creator_recommendations").select("creator_id").eq("owner", owner).eq("day", selectedDay));
+      const c = await config(owner), today = day(), requested = params.get("day") || today, pool = await query2(sb2.rpc("sanji_creator_pool_counts", { p_owner: owner })), selectedDay = /^\d{4}-\d{2}-\d{2}$/.test(requested) && requested <= new Date(Date.now() + 9 * 36e5 + 864e5).toISOString().slice(0, 10) ? requested : today, preview = await query2(sb2.rpc("sanji_creator_preview", { p_owner: owner, p_target: c.target })), rec = await query2(sb2.from("sanji_creator_recommendations").select("creator_id").eq("owner", owner).eq("day", selectedDay));
       const ids = rec.map((r) => r.creator_id), rows = [];
       for (let i = 0; i < ids.length; i += 100) rows.push(...await query2(sb2.from("sanji_creator_recovery").select("*").eq("owner", owner).in("id", ids.slice(i, i + 100))));
       const offset = Math.min(1e5, Math.max(0, Number.parseInt(params.get("reviewOffset") || "0", 10) || 0));
@@ -1517,9 +1612,9 @@ function searchResults(html, source, query2) {
   const add = (href, title) => {
     try {
       const u = destination(href, source), host = u.hostname.replace(/^www\./, "");
-      const text2 = plainHtml(title).replace(/새\s*창\s*열림/g, "").replace(/(?:https?:\/\/)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/[^\s]*)?/gi, "").replace(/›.*$/, "").replace(/\s+/g, " ").trim();
-      if (text2.length < 2 || hosts.has(host) || /개인정보|이용약관|로그인|회원가입|뉴스|신문|블로그|리뷰|후기|백과|채용/.test(text2)) return;
-      const name = text2.split(/\s+[|｜–—]\s+|\s+-\s+/)[0].replace(/공식\s*(쇼핑몰|홈페이지|온라인몰|스토어|사이트|몰)|홈페이지|바로가기/g, "").trim().slice(0, 100);
+      const text3 = plainHtml(title).replace(/새\s*창\s*열림/g, "").replace(/(?:https?:\/\/)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/[^\s]*)?/gi, "").replace(/›.*$/, "").replace(/\s+/g, " ").trim();
+      if (text3.length < 2 || hosts.has(host) || /개인정보|이용약관|로그인|회원가입|뉴스|신문|블로그|리뷰|후기|백과|채용/.test(text3)) return;
+      const name = text3.split(/\s+[|｜–—]\s+|\s+-\s+/)[0].replace(/공식\s*(쇼핑몰|홈페이지|온라인몰|스토어|사이트|몰)|홈페이지|바로가기/g, "").trim().slice(0, 100);
       if (name.length < 2) return;
       hosts.add(host);
       rows.push({ name, website: u.origin + "/", source, searchResultUrl: u.toString(), searchQuery: query2, industry: "food candidate" });
@@ -1823,10 +1918,10 @@ function emailTrackingService({ sb: sb2, query: query2, env: env2, audit: audit2
       return { ok: true };
     }
     if (path === "/email-tracking/report" && method === "GET") {
-      const from = new Date(params.get("from") || Date.now() - 30 * 864e5), to = new Date(params.get("to") || Date.now()), campaign = params.get("campaign") || null;
+      const from = new Date(params.get("from") || Date.now() - 30 * 864e5), to = new Date(params.get("to") || Date.now()), campaign2 = params.get("campaign") || null;
       if (params.get("target") && !/^[0-9a-f-]{36}$/.test(params.get("target"))) throw Error("\uB300\uC0C1 ID\uB97C \uD655\uC778\uD558\uC138\uC694.");
-      if (!Number.isFinite(+from) || !Number.isFinite(+to) || +to <= +from || +to - +from > 90 * 864e5 || campaign && !/^[0-9a-f-]{36}$/.test(campaign)) throw Error("\uC9D1\uACC4 \uAE30\uAC04\uC740 \uCD5C\uB300 90\uC77C\uC774\uBA70 \uCEA0\uD398\uC778\uC744 \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4.");
-      const report = await query2(sb2.rpc("sanji_email_tracking_report", { p_owner: owner, p_from: from.toISOString(), p_to: to.toISOString(), p_campaign: campaign, p_include_automated: params.get("includeAutomated") === "true", p_target: params.get("target") || null }));
+      if (!Number.isFinite(+from) || !Number.isFinite(+to) || +to <= +from || +to - +from > 90 * 864e5 || campaign2 && !/^[0-9a-f-]{36}$/.test(campaign2)) throw Error("\uC9D1\uACC4 \uAE30\uAC04\uC740 \uCD5C\uB300 90\uC77C\uC774\uBA70 \uCEA0\uD398\uC778\uC744 \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4.");
+      const report = await query2(sb2.rpc("sanji_email_tracking_report", { p_owner: owner, p_from: from.toISOString(), p_to: to.toISOString(), p_campaign: campaign2, p_include_automated: params.get("includeAutomated") === "true", p_target: params.get("target") || null }));
       return { ...report, rows: (report?.rows || []).map((r) => ({ ...r, label: trackingLabel(r, params.get("includeAutomated") === "true"), reasonLabels: (r.reasons || []).map((code) => trackingReasonLabels[code] || "\uADFC\uAC70 \uBBF8\uD655\uC778") })), notice: trackingLimitNotice };
     }
     throw Error("\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uCD94\uC801 \uC694\uCCAD");
@@ -1836,8 +1931,8 @@ function emailTrackingService({ sb: sb2, query: query2, env: env2, audit: audit2
 
 // supabase/functions/_shared/mail-mime.ts
 import { Buffer as Buffer8 } from "node:buffer";
-function attachmentType(content) {
-  const b = Buffer8.from(content, "base64");
+function attachmentType(content2) {
+  const b = Buffer8.from(content2, "base64");
   if (b.subarray(0, 8).equals(Buffer8.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
   if (b[0] === 255 && b[1] === 216 && b[2] === 255) return "image/jpeg";
   if (["GIF87a", "GIF89a"].includes(b.subarray(0, 6).toString())) return "image/gif";
@@ -1862,7 +1957,7 @@ function encodedHeader(value) {
   if (chunk || !parts.length) parts.push(chunk);
   return parts.map((p) => "=?UTF-8?B?" + Buffer8.from(p).toString("base64") + "?=").join("\r\n ");
 }
-var base64Body = (text2) => Buffer8.from(text2, "utf8").toString("base64").match(/.{1,76}/g)?.join("\r\n") || "";
+var base64Body = (text3) => Buffer8.from(text3, "utf8").toString("base64").match(/.{1,76}/g)?.join("\r\n") || "";
 function trackingHtml(d) {
   const escape2 = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   let url2 = null;
@@ -1877,20 +1972,20 @@ function trackingHtml(d) {
     if (clean2.text === d.signatureText && String(d.body).includes(clean2.text)) signature = clean2;
   }
   if (!url2 && !signature) return null;
-  const linkify = (text3) => {
+  const linkify = (text4) => {
     const parts = [];
     let last = 0;
-    for (const m of text3.matchAll(/https?:\/\/[^\s<>"']+/g)) {
-      parts.push(escape2(text3.slice(last, m.index)));
+    for (const m of text4.matchAll(/https?:\/\/[^\s<>"']+/g)) {
+      parts.push(escape2(text4.slice(last, m.index)));
       parts.push('<a href="' + escape2(m[0]) + '">' + escape2(m[0]) + "</a>");
       last = m.index + m[0].length;
     }
-    parts.push(escape2(text3.slice(last)));
+    parts.push(escape2(text4.slice(last)));
     return parts.join("");
   };
-  const text2 = String(d.body), i = signature ? text2.lastIndexOf(signature.text) : -1;
-  const content = i >= 0 ? '<div style="white-space:pre-wrap">' + linkify(text2.slice(0, i)) + "</div><div>" + signature.html + '</div><div style="white-space:pre-wrap">' + linkify(text2.slice(i + signature.text.length)) + "</div>" : '<div style="white-space:pre-wrap">' + linkify(text2) + "</div>";
-  return '<!doctype html><html><head><meta charset="utf-8"></head><body>' + content + (url2 ? '<img src="' + escape2(url2.toString()) + '" width="1" height="1" alt="" referrerpolicy="no-referrer" style="width:1px;height:1px;border:0" />' : "") + "</body></html>";
+  const text3 = String(d.body), i = signature ? text3.lastIndexOf(signature.text) : -1;
+  const content2 = i >= 0 ? '<div style="white-space:pre-wrap">' + linkify(text3.slice(0, i)) + "</div><div>" + signature.html + '</div><div style="white-space:pre-wrap">' + linkify(text3.slice(i + signature.text.length)) + "</div>" : '<div style="white-space:pre-wrap">' + linkify(text3) + "</div>";
+  return '<!doctype html><html><head><meta charset="utf-8"></head><body>' + content2 + (url2 ? '<img src="' + escape2(url2.toString()) + '" width="1" height="1" alt="" referrerpolicy="no-referrer" style="width:1px;height:1px;border:0" />' : "") + "</body></html>";
 }
 function mime(d, from) {
   const lines = [
@@ -2068,10 +2163,10 @@ function researchBrand(lead, template2, checked = (/* @__PURE__ */ new Date()).t
   let product = candidates.find((p) => concreteProductName(p.name) && productDetailUrl(p.url) && p.name.length <= 95 && !unsafe.test(p.name) && !/(로그인|쿠폰|배송비|판매가|공식몰|쇼핑몰|헬스케어몰)/.test(p.name));
   if (!product) {
     for (const p of pages) {
-      const text2 = [p.title, p.description, p.excerpt].join(" ");
-      const group = ["\uB77D\uD1A0\uD54F", "\uC544\uC784\uBE44\uD0C0", "\uD504\uB85C\uBA54\uAC00", "\uC544\uC774\uD074\uB9AC\uC5B4", "\uC62C\uB9AC\uBE0C\uC624\uC77C", "\uB2E8\uBC31\uC9C8 \uC250\uC774\uD06C", "\uC720\uC0B0\uADE0", "\uD504\uB85C\uD3F4\uB9AC\uC2A4", "\uB9C8\uB204\uCE74\uAFC0", "\uC2A4\uD53C\uB8E8\uB9AC\uB098", "\uCD08\uC720", "\uBE44\uD0C0\uBBFC", "\uC624\uBA54\uAC003", "\uACAC\uACFC", "\uBA78\uADE0\uC6B0\uC720", "\uC720\uC81C\uD488", "\uD64D\uC0BC", "\uCF5C\uB77C\uAC90", "\uD6A8\uC18C", "\uC624\uD2B8\uBC00", "\uB514\uCE74\uD398\uC778 \uCEE4\uD53C"].find((k) => text2.includes(k));
+      const text3 = [p.title, p.description, p.excerpt].join(" ");
+      const group = ["\uB77D\uD1A0\uD54F", "\uC544\uC784\uBE44\uD0C0", "\uD504\uB85C\uBA54\uAC00", "\uC544\uC774\uD074\uB9AC\uC5B4", "\uC62C\uB9AC\uBE0C\uC624\uC77C", "\uB2E8\uBC31\uC9C8 \uC250\uC774\uD06C", "\uC720\uC0B0\uADE0", "\uD504\uB85C\uD3F4\uB9AC\uC2A4", "\uB9C8\uB204\uCE74\uAFC0", "\uC2A4\uD53C\uB8E8\uB9AC\uB098", "\uCD08\uC720", "\uBE44\uD0C0\uBBFC", "\uC624\uBA54\uAC003", "\uACAC\uACFC", "\uBA78\uADE0\uC6B0\uC720", "\uC720\uC81C\uD488", "\uD64D\uC0BC", "\uCF5C\uB77C\uAC90", "\uD6A8\uC18C", "\uC624\uD2B8\uBC00", "\uB514\uCE74\uD398\uC778 \uCEE4\uD53C"].find((k) => text3.includes(k));
       if (group) {
-        product = { name: group + " \uC81C\uD488\uAD70", quote: text2.slice(Math.max(0, text2.indexOf(group) - 30), text2.indexOf(group) + 90), url: p.url };
+        product = { name: group + " \uC81C\uD488\uAD70", quote: text3.slice(Math.max(0, text3.indexOf(group) - 30), text3.indexOf(group) + 90), url: p.url };
         break;
       }
     }
@@ -2085,7 +2180,7 @@ function researchBrand(lead, template2, checked = (/* @__PURE__ */ new Date()).t
   if (old.needsPersonalization && home?.title && /공식.*(?:몰|쇼핑몰)/.test(home.title) && !old.sendBlockedReason && !companyIdentity(home.title + " " + home.description).includes(companyIdentity(brand))) brand = clean(home.title.split(/\s+-\s+|\s*[|｜]\s*/)[0]).replace(/\s*공식.*$/, "");
   if (/새\s*창\s*열림|›|https?:|\.(?:co\.kr|com)\b/.test(brand) && home?.title) brand = clean(home.title.split(/\s+-\s+|\s*[|｜]\s*/)[0]).replace(/\s*공식.*$/, "");
   const identities2 = Array.from(new Set([brand, old.brandName, lead.name].filter(Boolean).flatMap((s) => String(s).split(/[·|｜]/)).map((s) => companyIdentity(s).replace(/(?:건강식품|공식몰|건강몰)$/, "")).filter((s) => s.length >= 2)));
-  const matches = (text2) => identities2.some((s) => companyIdentity(text2).includes(s));
+  const matches = (text3) => identities2.some((s) => companyIdentity(text3).includes(s));
   const sameName = !!home && matches([home.title, home.description, home.excerpt].join(" "));
   const contactEvidence = (lead.contacts || []).map((c) => {
     const p = pages.find((p2) => {
@@ -2152,7 +2247,7 @@ function discoveryHealth(settings, usage, leads, at = Date.now()) {
 
 // supabase/functions/_shared/discovery-sources.ts
 var excludedHosts = /(^|\.)(google|bing|naver|coupang|facebook|instagram|youtube|kakao|twitter|wikimedia|wikipedia|wikidata|w3|adobe|microsoft)\.(com|co\.kr|org|net)$/i;
-function sourceProspects(rows, known, date) {
+function sourceProspects(rows, known, date2) {
   const names = new Set(known.map((l) => companyIdentity(l.identity || l.data?.name || ""))), hosts = new Set(known.map((l) => {
     try {
       return new URL(l.data?.website).hostname.replace(/^www\./, "");
@@ -2178,7 +2273,7 @@ function sourceProspects(rows, known, date) {
     if (names.has(identity) || hosts.has(host)) continue;
     names.add(identity);
     hosts.add(host);
-    out.push({ identity, data: { name, website: url2.toString(), source: r.source, sourceEntity: r.entity || "", searchQuery: r.searchQuery || "", searchResultUrl: r.searchResultUrl || "", channel: r.searchQuery ? "\uACF5\uAC1C \uAC80\uC0C9 \xB7 \uD648\uD398\uC774\uC9C0\xB7\uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804" : "\uACF5\uAC1C \uAE30\uC5C5 \uB370\uC774\uD130\xB7\uD611\uD68C \uBAA9\uB85D \xB7 \uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804", company: "", product: "", contacts: [], checked: date, officialVerified: false, classification: "\uBBF8\uD655\uC778", authority: "\uBBF8\uD655\uC778", researchNote: "\uC678\uBD80 \uBAA9\uB85D\uC5D0 \uAC8C\uC2DC\uB41C \uC2DD\uD488\xB7\uAC74\uAC15 \uAD00\uB828 \uC5C5\uCCB4 \uD6C4\uBCF4\uC785\uB2C8\uB2E4. \uD648\uD398\uC774\uC9C0\xB7\uC774\uBA54\uC77C\xB7\uBC95\uC778 \uC18C\uC720\xB7\uC0C1\uD488 \uBD84\uB958\uB294 \uC6D0\uBB38 \uD655\uC778 \uD6C4 \uBCC4\uB3C4 \uAC80\uD1A0\uD569\uB2C8\uB2E4." } });
+    out.push({ identity, data: { name, website: url2.toString(), source: r.source, sourceEntity: r.entity || "", searchQuery: r.searchQuery || "", searchResultUrl: r.searchResultUrl || "", channel: r.searchQuery ? "\uACF5\uAC1C \uAC80\uC0C9 \xB7 \uD648\uD398\uC774\uC9C0\xB7\uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804" : "\uACF5\uAC1C \uAE30\uC5C5 \uB370\uC774\uD130\xB7\uD611\uD68C \uBAA9\uB85D \xB7 \uC18C\uC720 \uAD00\uACC4 \uAC80\uD1A0 \uC804", company: "", product: "", contacts: [], checked: date2, officialVerified: false, classification: "\uBBF8\uD655\uC778", authority: "\uBBF8\uD655\uC778", researchNote: "\uC678\uBD80 \uBAA9\uB85D\uC5D0 \uAC8C\uC2DC\uB41C \uC2DD\uD488\xB7\uAC74\uAC15 \uAD00\uB828 \uC5C5\uCCB4 \uD6C4\uBCF4\uC785\uB2C8\uB2E4. \uD648\uD398\uC774\uC9C0\xB7\uC774\uBA54\uC77C\xB7\uBC95\uC778 \uC18C\uC720\xB7\uC0C1\uD488 \uBD84\uB958\uB294 \uC6D0\uBB38 \uD655\uC778 \uD6C4 \uBCC4\uB3C4 \uAC80\uD1A0\uD569\uB2C8\uB2E4." } });
   }
   return out;
 }
@@ -2266,13 +2361,13 @@ function discoveryService(deps) {
         at += b.length;
       }
       const charset = /charset=([^;\s]+)/i.exec(type)?.[1] || "utf-8";
-      let text2;
+      let text3;
       try {
-        text2 = new TextDecoder(charset).decode(bytes);
+        text3 = new TextDecoder(charset).decode(bytes);
       } catch {
-        text2 = new TextDecoder().decode(bytes);
+        text3 = new TextDecoder().decode(bytes);
       }
-      return { text: text2, url: url2.toString(), bytes: size, redirects };
+      return { text: text3, url: url2.toString(), bytes: size, redirects };
     }
     throw Error("\uB9AC\uB514\uB809\uC158 \uD69F\uC218 \uC81C\uD55C \uCD08\uACFC");
   }
@@ -2414,7 +2509,7 @@ function discoveryService(deps) {
           }
           const reader = r.body?.getReader();
           if (!reader) throw Error("\uBE48 \uAC80\uC0C9 \uACB0\uACFC");
-          let text2 = "", size = 0;
+          let text3 = "", size = 0;
           const decoder = new TextDecoder();
           while (true) {
             const b = await reader.read();
@@ -2424,11 +2519,11 @@ function discoveryService(deps) {
               await reader.cancel();
               throw Error("\uAC80\uC0C9 \uD398\uC774\uC9C0 \uD06C\uAE30 \uC81C\uD55C");
             }
-            text2 += decoder.decode(b.value, { stream: true });
+            text3 += decoder.decode(b.value, { stream: true });
           }
-          text2 += decoder.decode();
-          const rows2 = searchResults(text2, url2, q);
-          sources.push({ engine, query: q, count: rows2.length, ok: rows2.length > 0, checked, diagnostics: { title: /<title[^>]*>([^<]*)/i.exec(text2)?.[1]?.slice(0, 150), bytes: size, anchors: (text2.match(/<a\b/gi) || []).length, items: (text2.match(/<item\b/gi) || []).length } });
+          text3 += decoder.decode();
+          const rows2 = searchResults(text3, url2, q);
+          sources.push({ engine, query: q, count: rows2.length, ok: rows2.length > 0, checked, diagnostics: { title: /<title[^>]*>([^<]*)/i.exec(text3)?.[1]?.slice(0, 150), bytes: size, anchors: (text3.match(/<a\b/gi) || []).length, items: (text3.match(/<item\b/gi) || []).length } });
           if (rows2.length) {
             found.push(...rows2);
             break;
@@ -2947,7 +3042,7 @@ import { Buffer as Buffer9 } from "node:buffer";
 
 // supabase/functions/_shared/schema.ts
 import { z } from "npm:zod@4.6.7";
-var text = z.string().trim().max(5e3);
+var text2 = z.string().trim().max(5e3);
 var short = z.string().trim().max(200);
 var url = z.union([
   z.literal(""),
@@ -2971,25 +3066,25 @@ var candidate = z.object({
   companyKey: short.default(""),
   kind: z.enum(["\uBE0C\uB79C\uB4DC", "\uC81C\uC870\uC0AC", "\uACF5\uC2DD \uC720\uD1B5\uC0AC", "\uD06C\uB9AC\uC5D0\uC774\uD130"]),
   category: z.enum(["\uAC74\uAC15\uAE30\uB2A5\uC2DD\uD488", "\uC77C\uBC18 \uAC74\uAC15\uC2DD\uD488", "\uBBF8\uD655\uC778"]).default("\uBBF8\uD655\uC778"),
-  classification: text.default("\uBBF8\uD655\uC778"),
-  authority: text.default("\uBBF8\uD655\uC778"),
+  classification: text2.default("\uBBF8\uD655\uC778"),
+  authority: text2.default("\uBBF8\uD655\uC778"),
   product: short.default(""),
   website: url.default(""),
   profile: url.default(""),
   handle: z.string().regex(/^[A-Za-z0-9_.]*$/).max(100).default(""),
   agency: short.default(""),
-  channels: text.default(""),
+  channels: text2.default(""),
   contact: contact.default({}),
   topics: z.array(short).max(20).default([]),
-  evidence: z.array(z.object({ url, description: text, checked: short })).max(30).default([]),
+  evidence: z.array(z.object({ url, description: text2, checked: short })).max(30).default([]),
   followers: nullableNumber.default(null),
   metricsSource: url.default(""),
   metricsChecked: short.default(""),
-  reaction: text.default("\uBBF8\uD655\uC778"),
-  experience: text.default("\uBBF8\uD655\uC778"),
-  active: text.default("\uBBF8\uD655\uC778"),
-  schedule: text.default("\uBBF8\uD655\uC778"),
-  reason: text.default(""),
+  reaction: text2.default("\uBBF8\uD655\uC778"),
+  experience: text2.default("\uBBF8\uD655\uC778"),
+  active: text2.default("\uBBF8\uD655\uC778"),
+  schedule: text2.default("\uBBF8\uD655\uC778"),
+  reason: text2.default(""),
   status: z.enum([
     "\uBBF8\uC811\uCD09",
     "\uAC80\uD1A0 \uC911",
@@ -3004,9 +3099,9 @@ var candidate = z.object({
     "\uACF5\uB3D9\uAD6C\uB9E4 \uD655\uC815"
   ]).default("\uBBF8\uC811\uCD09"),
   owner: short.default(""),
-  next: text.default(""),
+  next: text2.default(""),
   due: short.default(""),
-  note: text.default("")
+  note: text2.default("")
 });
 var deal = z.object({
   name: short.min(1),
@@ -3017,20 +3112,20 @@ var deal = z.object({
   retail: nullableNumber.default(null),
   price: nullableNumber.default(null),
   supply: nullableNumber.default(null),
-  commission: text.default("\uBBF8\uD611\uC758"),
-  settlement: text.default("\uBBF8\uD611\uC758"),
+  commission: text2.default("\uBBF8\uD611\uC758"),
+  settlement: text2.default("\uBBF8\uD611\uC758"),
   moq: nullableNumber.default(null),
   stock: nullableNumber.default(null),
-  shipping: text.default("\uBBF8\uD611\uC758"),
-  returns: text.default("\uBBF8\uD655\uC778"),
-  expiry: text.default("\uBBF8\uD655\uC778"),
-  schedule: text.default("\uBBF8\uD611\uC758"),
-  target: text.default(""),
-  claims: text.default("\uBBF8\uD655\uC778"),
-  assets: text.default("\uBBF8\uD655\uC778"),
+  shipping: text2.default("\uBBF8\uD611\uC758"),
+  returns: text2.default("\uBBF8\uD655\uC778"),
+  expiry: text2.default("\uBBF8\uD655\uC778"),
+  schedule: text2.default("\uBBF8\uD611\uC758"),
+  target: text2.default(""),
+  claims: text2.default("\uBBF8\uD655\uC778"),
+  assets: text2.default("\uBBF8\uD655\uC778"),
   topics: z.array(short).max(20).default([]),
   source: url.default(""),
-  sourceNote: text.default(""),
+  sourceNote: text2.default(""),
   checked: short.default(""),
   state: z.enum(["\uD611\uC758 \uC911", "\uD655\uC815"]).default("\uD611\uC758 \uC911")
 });
@@ -3041,8 +3136,8 @@ var template = z.object({
   name: short.min(1),
   channel: z.enum(["\uC774\uBA54\uC77C", "Instagram DM"]),
   subject: short,
-  body: text,
-  signature: text,
+  body: text2,
+  signature: text2,
   attachments: z.array(z.object({ name: short, size: z.number().nonnegative() })).max(5).default([])
 });
 var attachment = z.object({
@@ -3055,7 +3150,7 @@ var draft = z.object({
   channel: z.enum(["email", "manual_dm", "instagram"]),
   subject: z.string().min(1).max(200).refine((v) => !/[\r\n]/.test(v)),
   body: z.string().min(1).max(15e3),
-  signature: text.default(""),
+  signature: text2.default(""),
   attachments: z.array(attachment).max(5).default([]),
   replyTo: z.string().optional(),
   templateId: z.string().uuid().optional(),
@@ -3065,7 +3160,7 @@ var draft = z.object({
   trackingCampaignId: z.string().uuid().optional(),
   trackingNoticeAcknowledged: z.boolean().default(false),
   trackingInternalTest: z.boolean().default(false),
-  lawfulBasis: text.nullish().transform((value) => value || ""),
+  lawfulBasis: text2.nullish().transform((value) => value || ""),
   marketing: z.boolean().default(false)
 });
 
@@ -3192,6 +3287,7 @@ var notifyOwner = discoveryCompletionNotifier({ sb, query, gmailToken, remote, a
 var creatorDiscovery = creatorDiscoveryService({ sb, query, audit, env });
 var creatorRecovery = recoveryService({ sb, query, audit });
 var creatorVisibleImport = visibleImportService({ sb, query, audit });
+var creatorContactReview = creatorContactReviewService({ sb, query, audit });
 var creatorMeta = creatorMetaService({ sb, query, env, connection, saveConnection, audit });
 var apifyTrials = apifyTrialService({ sb, query, env, audit });
 var saveManualReply = manualReplyService({ sb, query, putRecord, audit });
@@ -3311,8 +3407,8 @@ function textBody(p) {
     return Buffer9.from(p.body.data, "base64url").toString();
   return (p.parts || []).map(textBody).filter(Boolean).join("\n");
 }
-function render(text2, c, deals, brandNames) {
-  if (text2.includes("{{\uC81C\uD488\uBA85}}") && !deals.length && !String(c.product || "").trim())
+function render(text3, c, deals, brandNames) {
+  if (text3.includes("{{\uC81C\uD488\uBA85}}") && !deals.length && !String(c.product || "").trim())
     fail(400, "\uC218\uC2E0 \uD6C4\uBCF4\uC5D0 \uC2E4\uC81C \uC81C\uD488\uBA85\uC744 \uBA3C\uC800 \uC785\uB825\uD558\uC138\uC694.");
   const vars = {
     \uD68C\uC0AC\uBA85: c.company || "\uBBF8\uD655\uC778",
@@ -3327,7 +3423,7 @@ function render(text2, c, deals, brandNames) {
     ).join(" / ") || "\uBBF8\uD655\uC778",
     \uC77C\uC815: deals.map((d) => d.schedule).join(" / ") || "\uBBF8\uD655\uC778"
   };
-  return text2.replace(/\{\{(.*?)\}\}/g, (_, v) => vars[v] ?? "{{" + v + "}}");
+  return text3.replace(/\{\{(.*?)\}\}/g, (_, v) => vars[v] ?? "{{" + v + "}}");
 }
 async function callback(req, url2, provider, base) {
   const state = url2.searchParams.get("state") || "";
@@ -3741,10 +3837,10 @@ Deno.serve(async (req) => {
     if (!member) fail(403, "\uAD00\uB9AC\uC790 \uC811\uADFC \uAD8C\uD55C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
     const u = user.id;
     const input = async () => {
-      const text2 = await req.text();
-      if (Buffer9.byteLength(text2) > 10 * 1024 * 1024)
+      const text3 = await req.text();
+      if (Buffer9.byteLength(text3) > 10 * 1024 * 1024)
         fail(413, "\uC694\uCCAD \uD06C\uAE30 \uCD08\uACFC");
-      return text2 ? JSON.parse(text2) : {};
+      return text3 ? JSON.parse(text3) : {};
     };
     if (path === "/manual-reply" && req.method === "POST") {
       try {
@@ -3768,6 +3864,13 @@ Deno.serve(async (req) => {
       }
     }
     if (path === "/email-tracking" || path.startsWith("/email-tracking/")) return json(await emailTracking.handle(path, req.method, u, input, url2.searchParams));
+    if (path === "/creator-contact-review" || path === "/creator-contact-review/move" || path === "/creator-contact-review/import") {
+      try {
+        return json(await creatorContactReview(path, req.method, u, input));
+      } catch (e) {
+        fail(400, String(e.message || "\uD06C\uB9AC\uC5D0\uC774\uD130 \uAC80\uD1A0 \uC800\uC7A5 \uC2E4\uD328"));
+      }
+    }
     if (path === "/creator-recovery/import-visible" && req.method === "POST") {
       try {
         return json(await creatorVisibleImport(u, await input()));
@@ -3863,10 +3966,10 @@ Deno.serve(async (req) => {
           }
         })
       });
-      const text2 = (r.output || []).flatMap((o) => o.content || []).filter((x) => x.type === "output_text").map((x) => x.text).join("");
+      const text3 = (r.output || []).flatMap((o) => o.content || []).filter((x) => x.type === "output_text").map((x) => x.text).join("");
       let validated;
       try {
-        validated = validateIntro(JSON.parse(text2), context);
+        validated = validateIntro(JSON.parse(text3), context);
       } catch (e) {
         fail(422, e.message);
       }

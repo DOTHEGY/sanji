@@ -1,3 +1,4 @@
+import {creatorContactReviewService} from '../_shared/creator-contact-review.ts';
 import {isRevokedGoogleRefresh} from '../_shared/gmail-health.ts';
 import {brandAutoService} from '../_shared/brand-auto-service.ts';
 import {apifyTrialService} from "../_shared/apify-creators.ts";
@@ -165,6 +166,7 @@ const notifyOwner = discoveryCompletionNotifier({sb,query,gmailToken,remote,audi
 const creatorDiscovery = creatorDiscoveryService({sb,query,audit,env});
 const creatorRecovery = recoveryService({sb,query,audit});
 const creatorVisibleImport = visibleImportService({sb,query,audit});
+const creatorContactReview=creatorContactReviewService({sb,query,audit});
 const creatorMeta = creatorMetaService({sb,query,env,connection,saveConnection,audit});
 const apifyTrials=apifyTrialService({sb,query,env,audit});
 const saveManualReply=manualReplyService({sb,query,putRecord,audit});
@@ -846,6 +848,7 @@ Deno.serve(async (req: Request) => {
       try{return json(await creatorLocal.admin(path,u,await input()));}catch(e){fail(400,String(e.message||"PC 실행기 설정 실패"));}
     }
     if(path==="/email-tracking"||path.startsWith("/email-tracking/"))return json(await emailTracking.handle(path,req.method,u,input,url.searchParams));
+    if(path==='/creator-contact-review'||path==='/creator-contact-review/move'||path==='/creator-contact-review/import'){try{return json(await creatorContactReview(path,req.method,u,input));}catch(e){fail(400,String(e.message||'크리에이터 검토 저장 실패'));}}
     if(path==='/creator-recovery/import-visible'&&req.method==='POST'){try{return json(await creatorVisibleImport(u,await input()));}catch(e){fail(400,String(e.message||'후보 가져오기 실패'));}}
     if(path.startsWith('/creator-meta/')){try{return json(await creatorMeta.handle(path,req.method,u,input,base,url.searchParams));}catch(e){fail(400,String(e.message||'공식 API 연결 실패'));}}
     if(path === "/creator-recovery" || path.startsWith("/creator-recovery/")){
