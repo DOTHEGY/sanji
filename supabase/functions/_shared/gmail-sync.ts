@@ -1,3 +1,4 @@
+import {gmailFailure,gmailSyncPaused} from './gmail-health.ts';
 export function decodedPart(part:any):string{try{return part?.body?.data?new TextDecoder().decode(Uint8Array.from(atob(part.body.data.replace(/-/g,"+").replace(/_/g,"/")),x=>x.charCodeAt(0))):"";}catch{return "";}}
 export function deliveryFailures(payload:any){
  const parts:any[]=[];const walk=(p:any)=>{if(!p)return;parts.push(p);for(const c of p.parts||[])walk(c);};walk(payload);
@@ -13,13 +14,14 @@ export function gmailMessages(remoteThread:any,account:string,old:any[],textBody
  const automatic=failures.length>0||/mailer-daemon|postmaster@/i.test(h.from||"")||!!h["auto-submitted"]&&h["auto-submitted"]!=="no"||/auto_reply|auto-replied|bulk/i.test(h.precedence||"");
  return {id:m.id,...(old.find(o=>o.id===m.id)?.outboxId?{outboxId:old.find(o=>o.id===m.id).outboxId}:{}),messageId:h["message-id"]||"",references:h.references||"",inReplyTo:h["in-reply-to"]||"",subject:h.subject||"",from:h.from||"",replyToHeader:h["reply-to"]||"",replyAddress:mailbox(h["reply-to"]||h.from||""),out:(m.labelIds||[]).includes("SENT")||mailbox(h.from||"").toLowerCase()===account.toLowerCase(),recordOrigin:"gmail_sync",to:h.to||"",cc:h.cc||"",text:textBody(m.payload)||m.snippet||"[본문 미지원]",hasAttachments:hasAttachments(m.payload),at:new Date(Number(m.internalDate)).toISOString(),automatic,bounceFailures:failures};
  }).sort((a:any,b:any)=>a.at.localeCompare(b.at));}
-export function gmailSyncService({sb,query,records,putRecord,gmailToken,remote,textBody,gmailHasAttachments}:any){
+export function gmailSyncService({sb,query,records,putRecord,gmailToken,remote,textBody,gmailHasAttachments,isGmailReconnected}:any){
  async function rememberFailures(owner:string,messages:any[]){
   for(const f of messages.flatMap(m=>m.bounceFailures||[]))if(f.kind==="permanent"&&f.source==="delivery_status"&&/^5\./.test(f.status||""))await query(sb.from("sanji_suppression").upsert({owner,identity:"email:"+f.email.toLowerCase(),reason:"영구 반송 DSN "+f.status},{onConflict:"owner,identity",ignoreDuplicates:true}));
  }
  async function sync(owner:string){
   const claimed=await query(sb.rpc("sanji_claim_gmail_sync",{p_owner:owner})),state=Array.isArray(claimed)?claimed[0]:claimed;
   if(!state?.owner)return {status:"busy",imported:0};
+  let paused=gmailSyncPaused(state.result);if(paused?.status==="reauth_required"&&isGmailReconnected&&await isGmailReconnected(owner)){await query(sb.from("sanji_gmail_sync").update({result:{}}).eq("owner",owner));state.result={};paused=null;}if(paused){await query(sb.from("sanji_gmail_sync").update({lease_until:null}).eq("owner",owner));return paused;}
   const now=new Date().toISOString();
   try{
    const g=await gmailToken(owner),threads=(await records(owner,"thread")).filter((t:any)=>t.channel==="email"&&t.providerId&&t.target).sort((a:any,b:any)=>a.id.localeCompare(b.id));
@@ -49,7 +51,7 @@ if(inbound.length){humanReplies++;const c=candidates.find((c:any)=>c.id===t.targ
    const next=start+batch.length>=threads.length?0:start+batch.length;
    await query(sb.from("sanji_gmail_sync").update({cursor:next,last_checked:now,lease_until:null,result:{imported,humanReplies,bounceMessages,total:threads.length,remaining:Math.max(0,threads.length-start-batch.length),errors}}).eq("owner",owner));
    return {status:"synced",imported,humanReplies,bounceMessages,total:threads.length,remaining:Math.max(0,threads.length-start-batch.length),errors};
-  }catch(e){await query(sb.from("sanji_gmail_sync").update({lease_until:null,result:{error:String(e.message||e).slice(0,180)}}).eq("owner",owner));throw e;}
+  }catch(e){const failure=gmailFailure(e,state.result);await query(sb.from("sanji_gmail_sync").update({lease_until:null,result:failure}).eq("owner",owner));return {status:failure.status,imported:0,retryAt:failure.retryAt};}
  }
  return {sync};
 }

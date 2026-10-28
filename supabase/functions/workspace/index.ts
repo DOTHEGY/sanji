@@ -1,3 +1,5 @@
+import {isRevokedGoogleRefresh} from '../_shared/gmail-health.ts';
+import {brandAutoService} from '../_shared/brand-auto-service.ts';
 import {apifyTrialService} from "../_shared/apify-creators.ts";
 import {gmailSignatureSync} from "../_shared/gmail-signature-sync.ts";
 import {gmailSignature,selectGmailSignature} from "../_shared/gmail-signature.ts";
@@ -47,6 +49,7 @@ const now = () => new Date().toISOString(),
   uuid = () => crypto.randomUUID();
 class HttpError extends Error {
   status: number;
+  code?: string;
   constructor(status: number, message: string) {
     super(message);
     this.status = status;
@@ -167,7 +170,8 @@ const apifyTrials=apifyTrialService({sb,query,env,audit});
 const saveManualReply=manualReplyService({sb,query,putRecord,audit});
 const creatorLocal=creatorLocalService({sb,query,audit,encrypt,decrypt,putRecord});
 const creatorServer=creatorServerService({sb,query,encrypt,decrypt,audit,creatorLocal,creatorDiscovery});
-const discovery = discoveryService({sb,query,connection,saveConnection,env,audit,putRecord,notifyOwner});
+const brandAuto = brandAutoService({sb,query,env,connection,emailTracking,digest,uuid,audit});
+const discovery = discoveryService({sb,query,connection,saveConnection,env,audit,putRecord,notifyOwner,autoSchedule:(u:string)=>brandAuto.process(u)});
 async function loadGmailSignature(u:string){
  const c=await gmailToken(u);try{const result=await remote("https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs",{headers:{Authorization:"Bearer "+c.access_token}},"Gmail 기본 서명 조회");return {...selectGmailSignature(result,c.email),checked:now(),needsConsent:false};}
  catch(e){if(e instanceof HttpError&&e.status===403)return {needsConsent:true,message:"Gmail 설정 접근 권한 승인이 필요합니다. 산지는 서명 조회에만 사용합니다."};throw e;}
@@ -179,6 +183,7 @@ async function remote(url: string, options: any = {}, stage = "") {
     }),
     d = await r.json().catch(() => ({}));
   if (!r.ok) {
+    if(isRevokedGoogleRefresh(url,options?.body,d)){const e=new HttpError(401,"Gmail 인증이 만료되거나 취소됐습니다. 다시 연결해 주세요.");e.code="GMAIL_REAUTH_REQUIRED";throw e;}
     const detail = providerErrorDetail(url, options, d);
     throw new HttpError(r.status, (stage ? stage + " · " : "") + "외부 제공자 요청 실패 (" + r.status + ")" + (detail ? " · " + detail : ""));
   }
@@ -251,21 +256,15 @@ async function putRecord(u: string, kind: string, data: any, id?: string) {
     : await query(sb.from("sanji_records").insert(row).select().single());
 }
 async function gmailToken(u: string) {
-  const c = await connection(u, "gmail");
-  if (!c) fail(503, "Gmail을 먼저 연결하세요.");
-  if (c.expires > Date.now() + 60000) return c;
-  const r = await remote("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    body: new URLSearchParams({
-      client_id: env("GOOGLE_CLIENT_ID"),
-      client_secret: env("GOOGLE_CLIENT_SECRET"),
-      refresh_token: c.refresh_token,
-      grant_type: "refresh_token",
-    }),
-  });
-  const updated = { ...c, ...r, expires: Date.now() + r.expires_in * 1000 };
-  await saveConnection(u, "gmail", updated);
-  return updated;
+  const row=await query(sb.from("sanji_connections").select("encrypted,summary").eq("owner",u).eq("provider","gmail").maybeSingle());
+  if(!row) fail(503,"Gmail을 먼저 연결하세요.");
+  if(row.summary?.reauthRequired){const e=new HttpError(401,"Gmail 인증이 만료되거나 취소됐습니다. 다시 연결해 주세요.");e.code="GMAIL_REAUTH_REQUIRED";throw e;}
+  const c=await decrypt(row.encrypted);
+  if(c.expires>Date.now()+60000)return c;
+  let r:any;try{r=await remote("https://oauth2.googleapis.com/token",{method:"POST",body:new URLSearchParams({client_id:env("GOOGLE_CLIENT_ID"),client_secret:env("GOOGLE_CLIENT_SECRET"),refresh_token:c.refresh_token,grant_type:"refresh_token"})});}
+  catch(e){if(e?.code==="GMAIL_REAUTH_REQUIRED"){const changed=await query(sb.from("sanji_connections").update({summary:{...row.summary,connected:false,reauthRequired:true}}).eq("owner",u).eq("provider","gmail").eq("encrypted",row.encrypted).select("owner"));if(!changed.length)throw new HttpError(503,"Gmail 연결이 변경되었습니다. 다시 확인하세요.");}throw e;}
+  if(typeof r.access_token!=="string"||!Number.isFinite(Number(r.expires_in))||Number(r.expires_in)<=0)throw new HttpError(503,"Gmail 토큰 갱신 응답을 확인할 수 없습니다.");
+  const updated={...c,...r,expires:Date.now()+Number(r.expires_in)*1000};const changed=await query(sb.from("sanji_connections").update({encrypted:await encrypt(updated),summary:{email:updated.email,connected:true}}).eq("owner",u).eq("provider","gmail").eq("encrypted",row.encrypted).select("owner"));if(!changed.length){const latestRow=await query(sb.from("sanji_connections").select("encrypted,summary").eq("owner",u).eq("provider","gmail").maybeSingle());if(!latestRow||latestRow.summary?.reauthRequired)fail(503,"Gmail 연결이 변경되었습니다. 다시 연결해 주세요.");const latest=await decrypt(latestRow.encrypted);if(!(latest.expires>Date.now()+60000))fail(503,"Gmail 연결이 변경되었습니다. 잠시 후 다시 확인하세요.");return latest;}return updated;
 }
 function gmailHasAttachments(part: any): boolean {
   return !!part?.filename || (part?.parts || []).some(gmailHasAttachments);
@@ -437,6 +436,7 @@ async function callback(
       email: profile.emailAddress,
       expires: Date.now() + token.expires_in * 1000,
     });
+    await query(sb.from("sanji_gmail_sync").update({lease_until:null,result:{}}).eq("owner",row.owner));
   } else if (provider === "instagram") {
     // Use the multipart form and login parameters documented for Instagram Login.
     const form = new FormData();
@@ -767,7 +767,7 @@ async function runScheduledJob(){
     });
   }
 }
-const gmailSync=gmailSyncService({sb,query,records,putRecord,gmailToken,remote,textBody,gmailHasAttachments});
+const gmailSync=gmailSyncService({sb,query,records,putRecord,gmailToken,remote,textBody,gmailHasAttachments,isGmailReconnected:async(owner:string)=>{const r=await query(sb.from("sanji_connections").select("summary").eq("owner",owner).eq("provider","gmail").maybeSingle());return r?.summary?.connected===true&&!r?.summary?.reauthRequired;}});
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url),
     { path, base } = functionRoute(req.url, env("SUPABASE_URL"));
@@ -802,7 +802,7 @@ Deno.serve(async (req: Request) => {
     if(path==="/gmail/tick"&&req.method==="POST"){
       if(!env("DISCOVERY_RUNNER_TOKEN")||req.headers.get("x-job-token")!==env("DISCOVERY_RUNNER_TOKEN"))fail(403,"회신 동기화 실행기 인증 실패");
       const owners=await query(sb.from("sanji_connections").select("owner").eq("provider","gmail").limit(5));
-      return json({results:await Promise.all(owners.map((c:any)=>gmailSync.sync(c.owner))),signature:await syncRequestedGmailSignature()});
+      const results=await Promise.all(owners.map((c:any)=>gmailSync.sync(c.owner))),signature=await syncRequestedGmailSignature();const unhealthy=results.some((r:any)=>["reauth_required","temporarily_unavailable"].includes(r.status));return json({results,signature},unhealthy?503:200);
     }
     if(path.startsWith("/creator-server/worker/")&&req.method==="POST"){
       const raw=await req.text();if(Buffer.byteLength(raw)>600000)fail(413,"서버 요청 크기 초과");
@@ -854,6 +854,8 @@ Deno.serve(async (req: Request) => {
     if(path === "/creator-discovery" || path.startsWith("/creator-discovery/")){
       try{return json(await creatorDiscovery.handle(path,req.method,u,input));}catch(e){fail(400,String(e.message||"크리에이터 발굴 실패"));}
     }
+    if(path==='/brand-auto-schedule'&&req.method==='GET')return json(await brandAuto.config(u));
+    if(path==='/brand-auto-schedule'&&req.method==='POST'){const b=await input();if(typeof b.enabled!=='boolean')fail(400,'설정값을 확인하세요.');return json(await brandAuto.setConfig(u,b.enabled,String(b.messageType||'')));}
     if (path === "/discovery" || path.startsWith("/discovery/")) {
       try { return json(await discovery.handle(path,req.method,u,input)); }
       catch(e) { fail(e instanceof HttpError ? e.status : 400, String(e.message || "발굴 작업 실패")); }
@@ -1003,11 +1005,13 @@ Deno.serve(async (req: Request) => {
     if(path==="/gmail/signature"&&req.method==="POST")return json(await loadGmailSignature(u));
     if (path === "/connections" && req.method === "GET") {
       const gmail=await connection(u,"gmail");
+      const gmailStatus=await query(sb.from("sanji_connections").select("summary").eq("owner",u).eq("provider","gmail").maybeSingle());
       return json({
         gmail: {
           configured:
             !!env("GOOGLE_CLIENT_ID") && !!env("GOOGLE_CLIENT_SECRET"),
-          connected: !!gmail,
+          connected: !!gmail&&!gmailStatus?.summary?.reauthRequired,
+          reauthRequired: !!gmailStatus?.summary?.reauthRequired,
           email: gmail?.email || "",
           enabled: env("EMAIL_SENDING_ENABLED") === "true",
         },
