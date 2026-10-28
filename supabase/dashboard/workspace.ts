@@ -1,3 +1,18 @@
+// supabase/functions/_shared/gmail-health.ts
+function gmailFailure(error, previous = {}, now2 = Date.now()) {
+  if (error?.code === "GMAIL_REAUTH_REQUIRED") return { status: "reauth_required", reauthRequired: true, error: "Gmail \uC778\uC99D\uC774 \uB9CC\uB8CC\uB418\uAC70\uB098 \uCDE8\uC18C\uB410\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uC5F0\uACB0\uD574 \uC8FC\uC138\uC694.", attempts: 0, retryAt: null };
+  const attempts = Math.min(10, Math.max(0, Number(previous?.attempts) || 0) + 1), delay = Math.min(30, 2 ** (attempts - 1)) * 6e4;
+  return { status: "temporarily_unavailable", reauthRequired: false, error: "Gmail \uC5F0\uACB0\uC5D0 \uC77C\uC2DC\uC801\uC778 \uC624\uB958\uAC00 \uBC1C\uC0DD\uD588\uC2B5\uB2C8\uB2E4.", attempts, retryAt: new Date(now2 + delay).toISOString() };
+}
+function gmailSyncPaused(result, now2 = Date.now()) {
+  if (result?.reauthRequired) return { status: "reauth_required", imported: 0 };
+  if (result?.retryAt && Date.parse(result.retryAt) > now2) return { status: "backoff", imported: 0, retryAt: result.retryAt };
+  return null;
+}
+function isRevokedGoogleRefresh(url2, body, response) {
+  return url2 === "https://oauth2.googleapis.com/token" && body instanceof URLSearchParams && body.get("grant_type") === "refresh_token" && response?.error === "invalid_grant";
+}
+
 // supabase/functions/_shared/contact-safety.ts
 function unsafeContactReason(email, context = "") {
   const value = String(email || "").trim().toLowerCase(), local = value.split("@")[0];
@@ -485,6 +500,8 @@ function brandAutoService({ sb: sb2, query: query2, env: env2, connection: conne
     if (env2("EMAIL_SENDING_ENABLED") !== "true") return { status: "email_disabled" };
     const gmail = await connection2(owner, "gmail");
     if (!gmail?.email) return { status: "gmail_not_connected" };
+    const gmailStatus = await query2(sb2.from("sanji_connections").select("summary").eq("owner", owner).eq("provider", "gmail").maybeSingle());
+    if (gmailStatus?.summary?.reauthRequired) return { status: "gmail_reauth_required" };
     if (!["non_marketing", "marketing"].includes(cfg.message_type)) return { status: "message_type_required" };
     const marketing = cfg.message_type === "marketing";
     const rows = await query2(sb2.from("sanji_discovery_leads").select("*").eq("owner", owner).eq("status", "review").gte("data->>firstEmailAt", cfg.enabled_at).order("updated", { ascending: false }).limit(500));
@@ -1065,13 +1082,23 @@ function gmailMessages(remoteThread, account, old, textBody2, hasAttachments) {
     return { id: m.id, ...old.find((o) => o.id === m.id)?.outboxId ? { outboxId: old.find((o) => o.id === m.id).outboxId } : {}, messageId: h["message-id"] || "", references: h.references || "", inReplyTo: h["in-reply-to"] || "", subject: h.subject || "", from: h.from || "", replyToHeader: h["reply-to"] || "", replyAddress: mailbox(h["reply-to"] || h.from || ""), out: (m.labelIds || []).includes("SENT") || mailbox(h.from || "").toLowerCase() === account.toLowerCase(), recordOrigin: "gmail_sync", to: h.to || "", cc: h.cc || "", text: textBody2(m.payload) || m.snippet || "[\uBCF8\uBB38 \uBBF8\uC9C0\uC6D0]", hasAttachments: hasAttachments(m.payload), at: new Date(Number(m.internalDate)).toISOString(), automatic, bounceFailures: failures };
   }).sort((a, b) => a.at.localeCompare(b.at));
 }
-function gmailSyncService({ sb: sb2, query: query2, records: records2, putRecord: putRecord2, gmailToken: gmailToken2, remote: remote2, textBody: textBody2, gmailHasAttachments: gmailHasAttachments2 }) {
+function gmailSyncService({ sb: sb2, query: query2, records: records2, putRecord: putRecord2, gmailToken: gmailToken2, remote: remote2, textBody: textBody2, gmailHasAttachments: gmailHasAttachments2, isGmailReconnected }) {
   async function rememberFailures(owner, messages) {
     for (const f of messages.flatMap((m) => m.bounceFailures || [])) if (f.kind === "permanent" && f.source === "delivery_status" && /^5\./.test(f.status || "")) await query2(sb2.from("sanji_suppression").upsert({ owner, identity: "email:" + f.email.toLowerCase(), reason: "\uC601\uAD6C \uBC18\uC1A1 DSN " + f.status }, { onConflict: "owner,identity", ignoreDuplicates: true }));
   }
   async function sync(owner) {
     const claimed = await query2(sb2.rpc("sanji_claim_gmail_sync", { p_owner: owner })), state = Array.isArray(claimed) ? claimed[0] : claimed;
     if (!state?.owner) return { status: "busy", imported: 0 };
+    let paused = gmailSyncPaused(state.result);
+    if (paused?.status === "reauth_required" && isGmailReconnected && await isGmailReconnected(owner)) {
+      await query2(sb2.from("sanji_gmail_sync").update({ result: {} }).eq("owner", owner));
+      state.result = {};
+      paused = null;
+    }
+    if (paused) {
+      await query2(sb2.from("sanji_gmail_sync").update({ lease_until: null }).eq("owner", owner));
+      return paused;
+    }
     const now2 = (/* @__PURE__ */ new Date()).toISOString();
     try {
       const g = await gmailToken2(owner), threads = (await records2(owner, "thread")).filter((t) => t.channel === "email" && t.providerId && t.target).sort((a, b) => a.id.localeCompare(b.id));
@@ -1124,8 +1151,9 @@ function gmailSyncService({ sb: sb2, query: query2, records: records2, putRecord
       await query2(sb2.from("sanji_gmail_sync").update({ cursor: next, last_checked: now2, lease_until: null, result: { imported, humanReplies, bounceMessages, total: threads.length, remaining: Math.max(0, threads.length - start - batch.length), errors } }).eq("owner", owner));
       return { status: "synced", imported, humanReplies, bounceMessages, total: threads.length, remaining: Math.max(0, threads.length - start - batch.length), errors };
     } catch (e) {
-      await query2(sb2.from("sanji_gmail_sync").update({ lease_until: null, result: { error: String(e.message || e).slice(0, 180) } }).eq("owner", owner));
-      throw e;
+      const failure = gmailFailure(e, state.result);
+      await query2(sb2.from("sanji_gmail_sync").update({ lease_until: null, result: failure }).eq("owner", owner));
+      return { status: failure.status, imported: 0, retryAt: failure.retryAt };
     }
   }
   return { sync };
@@ -3059,6 +3087,7 @@ var now = () => (/* @__PURE__ */ new Date()).toISOString();
 var uuid = () => crypto.randomUUID();
 var HttpError = class extends Error {
   status;
+  code;
   constructor(status, message) {
     super(message);
     this.status = status;
@@ -3186,6 +3215,11 @@ async function remote(url2, options = {}, stage = "") {
     signal: AbortSignal.timeout(2e4)
   }), d = await r.json().catch(() => ({}));
   if (!r.ok) {
+    if (isRevokedGoogleRefresh(url2, options?.body, d)) {
+      const e = new HttpError(401, "Gmail \uC778\uC99D\uC774 \uB9CC\uB8CC\uB418\uAC70\uB098 \uCDE8\uC18C\uB410\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uC5F0\uACB0\uD574 \uC8FC\uC138\uC694.");
+      e.code = "GMAIL_REAUTH_REQUIRED";
+      throw e;
+    }
     const detail = providerErrorDetail(url2, options, d);
     throw new HttpError(r.status, (stage ? stage + " \xB7 " : "") + "\uC678\uBD80 \uC81C\uACF5\uC790 \uC694\uCCAD \uC2E4\uD328 (" + r.status + ")" + (detail ? " \xB7 " + detail : ""));
   }
@@ -3238,20 +3272,35 @@ async function putRecord(u, kind, data, id) {
   ) : await query(sb.from("sanji_records").insert(row).select().single());
 }
 async function gmailToken(u) {
-  const c = await connection(u, "gmail");
-  if (!c) fail(503, "Gmail\uC744 \uBA3C\uC800 \uC5F0\uACB0\uD558\uC138\uC694.");
+  const row = await query(sb.from("sanji_connections").select("encrypted,summary").eq("owner", u).eq("provider", "gmail").maybeSingle());
+  if (!row) fail(503, "Gmail\uC744 \uBA3C\uC800 \uC5F0\uACB0\uD558\uC138\uC694.");
+  if (row.summary?.reauthRequired) {
+    const e = new HttpError(401, "Gmail \uC778\uC99D\uC774 \uB9CC\uB8CC\uB418\uAC70\uB098 \uCDE8\uC18C\uB410\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uC5F0\uACB0\uD574 \uC8FC\uC138\uC694.");
+    e.code = "GMAIL_REAUTH_REQUIRED";
+    throw e;
+  }
+  const c = await decrypt(row.encrypted);
   if (c.expires > Date.now() + 6e4) return c;
-  const r = await remote("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    body: new URLSearchParams({
-      client_id: env("GOOGLE_CLIENT_ID"),
-      client_secret: env("GOOGLE_CLIENT_SECRET"),
-      refresh_token: c.refresh_token,
-      grant_type: "refresh_token"
-    })
-  });
-  const updated = { ...c, ...r, expires: Date.now() + r.expires_in * 1e3 };
-  await saveConnection(u, "gmail", updated);
+  let r;
+  try {
+    r = await remote("https://oauth2.googleapis.com/token", { method: "POST", body: new URLSearchParams({ client_id: env("GOOGLE_CLIENT_ID"), client_secret: env("GOOGLE_CLIENT_SECRET"), refresh_token: c.refresh_token, grant_type: "refresh_token" }) });
+  } catch (e) {
+    if (e?.code === "GMAIL_REAUTH_REQUIRED") {
+      const changed2 = await query(sb.from("sanji_connections").update({ summary: { ...row.summary, connected: false, reauthRequired: true } }).eq("owner", u).eq("provider", "gmail").eq("encrypted", row.encrypted).select("owner"));
+      if (!changed2.length) throw new HttpError(503, "Gmail \uC5F0\uACB0\uC774 \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uD655\uC778\uD558\uC138\uC694.");
+    }
+    throw e;
+  }
+  if (typeof r.access_token !== "string" || !Number.isFinite(Number(r.expires_in)) || Number(r.expires_in) <= 0) throw new HttpError(503, "Gmail \uD1A0\uD070 \uAC31\uC2E0 \uC751\uB2F5\uC744 \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+  const updated = { ...c, ...r, expires: Date.now() + Number(r.expires_in) * 1e3 };
+  const changed = await query(sb.from("sanji_connections").update({ encrypted: await encrypt(updated), summary: { email: updated.email, connected: true } }).eq("owner", u).eq("provider", "gmail").eq("encrypted", row.encrypted).select("owner"));
+  if (!changed.length) {
+    const latestRow = await query(sb.from("sanji_connections").select("encrypted,summary").eq("owner", u).eq("provider", "gmail").maybeSingle());
+    if (!latestRow || latestRow.summary?.reauthRequired) fail(503, "Gmail \uC5F0\uACB0\uC774 \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uC5F0\uACB0\uD574 \uC8FC\uC138\uC694.");
+    const latest = await decrypt(latestRow.encrypted);
+    if (!(latest.expires > Date.now() + 6e4)) fail(503, "Gmail \uC5F0\uACB0\uC774 \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uC7A0\uC2DC \uD6C4 \uB2E4\uC2DC \uD655\uC778\uD558\uC138\uC694.");
+    return latest;
+  }
   return updated;
 }
 function gmailHasAttachments(part) {
@@ -3320,6 +3369,7 @@ async function callback(req, url2, provider, base) {
       email: profile.emailAddress,
       expires: Date.now() + token.expires_in * 1e3
     });
+    await query(sb.from("sanji_gmail_sync").update({ lease_until: null, result: {} }).eq("owner", row.owner));
   } else if (provider === "instagram") {
     const form = new FormData();
     for (const [name, value] of Object.entries({ client_id: env("META_APP_ID"), client_secret: env("META_APP_SECRET"), code, grant_type: "authorization_code", redirect_uri: base + "/oauth/instagram/callback" })) form.set(name, value);
@@ -3611,7 +3661,10 @@ async function runScheduledJob() {
     });
   }
 }
-var gmailSync = gmailSyncService({ sb, query, records, putRecord, gmailToken, remote, textBody, gmailHasAttachments });
+var gmailSync = gmailSyncService({ sb, query, records, putRecord, gmailToken, remote, textBody, gmailHasAttachments, isGmailReconnected: async (owner) => {
+  const r = await query(sb.from("sanji_connections").select("summary").eq("owner", owner).eq("provider", "gmail").maybeSingle());
+  return r?.summary?.connected === true && !r?.summary?.reauthRequired;
+} });
 Deno.serve(async (req) => {
   const url2 = new URL(req.url), { path, base } = functionRoute(req.url, env("SUPABASE_URL"));
   try {
@@ -3651,7 +3704,9 @@ Deno.serve(async (req) => {
     if (path === "/gmail/tick" && req.method === "POST") {
       if (!env("DISCOVERY_RUNNER_TOKEN") || req.headers.get("x-job-token") !== env("DISCOVERY_RUNNER_TOKEN")) fail(403, "\uD68C\uC2E0 \uB3D9\uAE30\uD654 \uC2E4\uD589\uAE30 \uC778\uC99D \uC2E4\uD328");
       const owners = await query(sb.from("sanji_connections").select("owner").eq("provider", "gmail").limit(5));
-      return json({ results: await Promise.all(owners.map((c) => gmailSync.sync(c.owner))), signature: await syncRequestedGmailSignature() });
+      const results = await Promise.all(owners.map((c) => gmailSync.sync(c.owner))), signature = await syncRequestedGmailSignature();
+      const unhealthy = results.some((r) => ["reauth_required", "temporarily_unavailable"].includes(r.status));
+      return json({ results, signature }, unhealthy ? 503 : 200);
     }
     if (path.startsWith("/creator-server/worker/") && req.method === "POST") {
       const raw = await req.text();
@@ -3900,10 +3955,12 @@ Deno.serve(async (req) => {
     if (path === "/gmail/signature" && req.method === "POST") return json(await loadGmailSignature(u));
     if (path === "/connections" && req.method === "GET") {
       const gmail = await connection(u, "gmail");
+      const gmailStatus = await query(sb.from("sanji_connections").select("summary").eq("owner", u).eq("provider", "gmail").maybeSingle());
       return json({
         gmail: {
           configured: !!env("GOOGLE_CLIENT_ID") && !!env("GOOGLE_CLIENT_SECRET"),
-          connected: !!gmail,
+          connected: !!gmail && !gmailStatus?.summary?.reauthRequired,
+          reauthRequired: !!gmailStatus?.summary?.reauthRequired,
           email: gmail?.email || "",
           enabled: env("EMAIL_SENDING_ENABLED") === "true"
         },

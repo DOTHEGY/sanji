@@ -9,7 +9,7 @@ export function brandAutoService({sb,query,env,connection,emailTracking,digest,u
  async function process(owner:string){
   const cfg=await config(owner);if(!cfg.enabled||!cfg.enabled_at)return {status:'disabled'};
   if(env('EMAIL_SENDING_ENABLED')!=='true')return {status:'email_disabled'};
-  const gmail=await connection(owner,'gmail');if(!gmail?.email)return {status:'gmail_not_connected'};if(!['non_marketing','marketing'].includes(cfg.message_type))return {status:'message_type_required'};const marketing=cfg.message_type==='marketing';
+  const gmail=await connection(owner,'gmail');if(!gmail?.email)return {status:'gmail_not_connected'};const gmailStatus=await query(sb.from('sanji_connections').select('summary').eq('owner',owner).eq('provider','gmail').maybeSingle());if(gmailStatus?.summary?.reauthRequired)return {status:'gmail_reauth_required'};if(!['non_marketing','marketing'].includes(cfg.message_type))return {status:'message_type_required'};const marketing=cfg.message_type==='marketing';
   const rows=await query(sb.from('sanji_discovery_leads').select('*').eq('owner',owner).eq('status','review').gte('data->>firstEmailAt',cfg.enabled_at).order('updated',{ascending:false}).limit(500));
   if(!rows.length)return {status:'idle'};
   const ts=await query(sb.from('sanji_records').select('id,data,version,updated').eq('owner',owner).eq('kind','template').order('updated',{ascending:true}).limit(20));const template=ts.find((x:any)=>x.data.channel==='이메일'&&x.data.purpose!=='brand_reply'&&x.data.purpose!=='creator_proposal');
