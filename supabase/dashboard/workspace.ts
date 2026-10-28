@@ -1,3 +1,55 @@
+// supabase/functions/_shared/gmail-signature.ts
+var decode = (s) => s.replace(/&#(x[0-9a-f]+|\d+);?/gi, (_, v) => {
+  const n = v[0].toLowerCase() === "x" ? parseInt(v.slice(1), 16) : Number(v);
+  return n > 0 && n <= 1114111 ? String.fromCodePoint(n) : "";
+}).replace(/&(amp|lt|gt|quot|apos|nbsp);/gi, (_, k) => ({ amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " })[k.toLowerCase()] || "");
+var escape = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+function gmailSignature(input) {
+  if (typeof input !== "string" || input.length > 3e4) throw Error("Gmail \uC11C\uBA85 \uD06C\uAE30 \uC81C\uD55C");
+  const allowed = new Set("div span p br b strong i em u small table tbody tr td th a img font hr".split(" "));
+  const html = input.replace(/<(script|style|iframe|object|svg|math)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "").replace(/<!--[\s\S]*?-->/g, "").split(/(<\/?[A-Za-z][^>]*>)/g).map((token) => {
+    if (!token.startsWith("<")) return escape(decode(token));
+    const match = /^<(\/?)([A-Za-z][\w:-]*)\b([^>]*)>$/.exec(token);
+    if (!match) return escape(token);
+    const name = match[2].toLowerCase();
+    if (!allowed.has(name)) return "";
+    if (match[1]) return ["img", "br", "hr"].includes(name) ? "" : "</" + name + ">";
+    const attrs = {};
+    for (const m of match[3].matchAll(/(?:^|\s)([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)) attrs[m[1].toLowerCase()] = decode(m[2] ?? m[3] ?? m[4] ?? "");
+    const out = [];
+    if (name === "a" || name === "img") {
+      const key2 = name === "a" ? "href" : "src", value = attrs[key2] || "";
+      try {
+        const u = new URL(value);
+        if (!(name === "img" ? ["https:"] : ["https:", "http:", "mailto:", "tel:"]).includes(u.protocol) || u.username || u.password || /\/email-events\/pixel\//.test(u.pathname)) return "";
+        out.push(key2 + '="' + escape(u.toString()) + '"');
+      } catch {
+        return "";
+      }
+      if (name === "a") out.push('rel="noopener noreferrer"');
+    }
+    if (name === "img") {
+      if (Number(attrs.width) === 1 && Number(attrs.height) === 1) return "";
+      out.push('alt="' + escape(attrs.alt || "\uC11C\uBA85 \uC774\uBBF8\uC9C0") + '"');
+      for (const k of ["width", "height"]) if (/^\d{1,4}$/.test(attrs[k] || "")) out.push(k + '="' + attrs[k] + '"');
+    }
+    const styles = [];
+    for (const part of String(attrs.style || "").split(";")) {
+      const [raw, ...rest] = part.split(":"), k = raw.trim().toLowerCase(), v = rest.join(":").trim();
+      if (["color", "background-color"].includes(k) && /^(#[\da-f]{3,8}|[a-z]{3,20}|rgba?\([\d., %]+\))$/i.test(v) || ["font-size", "line-height", "padding", "margin", "width", "height"].includes(k) && /^[\d.]+(?:px|pt|em|%)?$/.test(v) || k === "font-weight" && /^(normal|bold|[1-9]00)$/.test(v) || k === "text-align" && /^(left|right|center)$/.test(v) || k === "font-family" && /^[a-zA-Z0-9 ,'-]{1,100}$/.test(v)) styles.push(k + ":" + v);
+    }
+    if (styles.length) out.push('style="' + escape(styles.join(";")) + '"');
+    return "<" + name + (out.length ? " " + out.join(" ") : "") + ">";
+  }).join("");
+  const text3 = decode(html.replace(/<img\b[^>]*>/gi, "").replace(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (_, url2, label) => label + (decode(label.replace(/<[^>]*>/g, "")).trim() === decode(url2).replace(/^(?:mailto:|tel:)/i, "").trim() ? "" : " (" + url2 + ")")).replace(/<br\s*\/?\s*>|<\/(?:div|p|tr)>/gi, "\n").replace(/<[^>]*>/g, "")).replace(/\n{3,}/g, "\n\n").trim();
+  return { html, text: text3 };
+}
+function selectGmailSignature(result, email) {
+  const row = (result.sendAs || []).find((r) => String(r.sendAsEmail || "").toLowerCase() === String(email).toLowerCase());
+  if (!row) throw Error("\uD604\uC7AC Gmail \uBC1C\uC2E0 \uC8FC\uC18C\uC758 \uC11C\uBA85\uC744 \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uB2E4\uB978 \uBCC4\uCE6D\uC758 \uC11C\uBA85\uC744 \uC790\uB3D9 \uC0AC\uC6A9\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+  return { ...gmailSignature(String(row.signature || "")), email: row.sendAsEmail };
+}
+
 // supabase/functions/_shared/creator-contact-review.ts
 function text(v, max) {
   return String(v || "").trim().slice(0, max);
@@ -26,12 +78,15 @@ function campaign(v) {
 }
 function cleanCreatorReview(input) {
   const e = input?.email || {}, d = input?.dm || {}, o = d.observation || {};
+  const sig = e.signatureHtml ? gmailSignature(String(e.signatureHtml)) : null;
+  const body = content(e.body, 15e3);
+  if (sig && (!sig.text || sig.text !== String(e.signatureText || "") || !body.includes(sig.text))) throw Error("\uC11C\uBA85\uACFC \uBCF8\uBB38\uC774 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
   const email = text(e.address, 254).toLowerCase();
   if (email && !/^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(email)) throw Error("\uC774\uBA54\uC77C \uD615\uC2DD\uC744 \uD655\uC778\uD558\uC138\uC694.");
   if ((o.status || o.actualScheduledAt || o.body) && (!o.sourceUrl || !o.observedAt)) throw Error("\uD0DC\uADF8\uBC14\uC774 \uAD00\uCC30 \uCD9C\uCC98\uC640 \uD655\uC778 \uC2DC\uAC01\uC774 \uD544\uC694\uD569\uB2C8\uB2E4.");
   const statuses = ["not_prepared", "planned", "reviewed", "hold"];
   if (!statuses.includes(e.status || "not_prepared") || !statuses.includes(d.status || "not_prepared")) throw Error("\uAC80\uD1A0 \uC0C1\uD0DC\uB97C \uD655\uC778\uD558\uC138\uC694.");
-  return { email: { address: email, sourceUrl: text(e.sourceUrl, 2e3), subject: content(e.subject, 200), body: content(e.body, 15e3), plannedAt: date(e.plannedAt), status: e.status || "not_prepared" }, dm: { body: content(d.body, 5e3), plannedAt: date(d.plannedAt), status: d.status || "not_prepared", campaignUrl: campaign(d.campaignUrl), sourceAccount: text(d.sourceAccount, 100), observation: { status: text(o.status, 100), observedAt: date(o.observedAt), sourceUrl: campaign(o.sourceUrl), actualScheduledAt: date(o.actualScheduledAt), body: content(o.body, 5e3) } } };
+  return { email: { address: email, sourceUrl: text(e.sourceUrl, 2e3), subject: content(e.subject, 200), body, signatureHtml: sig?.html || "", signatureText: sig?.text || "", plannedAt: date(e.plannedAt), status: e.status || "not_prepared" }, dm: { body: content(d.body, 5e3), plannedAt: date(d.plannedAt), status: d.status || "not_prepared", campaignUrl: campaign(d.campaignUrl), sourceAccount: text(d.sourceAccount, 100), observation: { status: text(o.status, 100), observedAt: date(o.observedAt), sourceUrl: campaign(o.sourceUrl), actualScheduledAt: date(o.actualScheduledAt), body: content(o.body, 5e3) } } };
 }
 function creatorContactReviewService({ sb: sb2, query: query2, audit: audit2 }) {
   return async (path, method, owner, input) => {
@@ -522,58 +577,6 @@ function mailContent(body, signature, settings = {}, email = true, marketing = f
   if (marketing && optOut && !text3.includes(optOut)) lines.push(optOut);
   if (!marketing) text3 = text3.replace(/(?:\n\s*)?회신으로 수신 거부를 요청하실 수 있습니다\./g, "").trim();
   return text3 + (lines.length ? "\n\n" + lines.join("\n") : "");
-}
-
-// supabase/functions/_shared/gmail-signature.ts
-var decode = (s) => s.replace(/&#(x[0-9a-f]+|\d+);?/gi, (_, v) => {
-  const n = v[0].toLowerCase() === "x" ? parseInt(v.slice(1), 16) : Number(v);
-  return n > 0 && n <= 1114111 ? String.fromCodePoint(n) : "";
-}).replace(/&(amp|lt|gt|quot|apos|nbsp);/gi, (_, k) => ({ amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " })[k.toLowerCase()] || "");
-var escape = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-function gmailSignature(input) {
-  if (typeof input !== "string" || input.length > 3e4) throw Error("Gmail \uC11C\uBA85 \uD06C\uAE30 \uC81C\uD55C");
-  const allowed = new Set("div span p br b strong i em u small table tbody tr td th a img font hr".split(" "));
-  const html = input.replace(/<(script|style|iframe|object|svg|math)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "").replace(/<!--[\s\S]*?-->/g, "").split(/(<\/?[A-Za-z][^>]*>)/g).map((token) => {
-    if (!token.startsWith("<")) return escape(decode(token));
-    const match = /^<(\/?)([A-Za-z][\w:-]*)\b([^>]*)>$/.exec(token);
-    if (!match) return escape(token);
-    const name = match[2].toLowerCase();
-    if (!allowed.has(name)) return "";
-    if (match[1]) return ["img", "br", "hr"].includes(name) ? "" : "</" + name + ">";
-    const attrs = {};
-    for (const m of match[3].matchAll(/(?:^|\s)([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)) attrs[m[1].toLowerCase()] = decode(m[2] ?? m[3] ?? m[4] ?? "");
-    const out = [];
-    if (name === "a" || name === "img") {
-      const key2 = name === "a" ? "href" : "src", value = attrs[key2] || "";
-      try {
-        const u = new URL(value);
-        if (!(name === "img" ? ["https:"] : ["https:", "http:", "mailto:", "tel:"]).includes(u.protocol) || u.username || u.password || /\/email-events\/pixel\//.test(u.pathname)) return "";
-        out.push(key2 + '="' + escape(u.toString()) + '"');
-      } catch {
-        return "";
-      }
-      if (name === "a") out.push('rel="noopener noreferrer"');
-    }
-    if (name === "img") {
-      if (Number(attrs.width) === 1 && Number(attrs.height) === 1) return "";
-      out.push('alt="' + escape(attrs.alt || "\uC11C\uBA85 \uC774\uBBF8\uC9C0") + '"');
-      for (const k of ["width", "height"]) if (/^\d{1,4}$/.test(attrs[k] || "")) out.push(k + '="' + attrs[k] + '"');
-    }
-    const styles = [];
-    for (const part of String(attrs.style || "").split(";")) {
-      const [raw, ...rest] = part.split(":"), k = raw.trim().toLowerCase(), v = rest.join(":").trim();
-      if (["color", "background-color"].includes(k) && /^(#[\da-f]{3,8}|[a-z]{3,20}|rgba?\([\d., %]+\))$/i.test(v) || ["font-size", "line-height", "padding", "margin", "width", "height"].includes(k) && /^[\d.]+(?:px|pt|em|%)?$/.test(v) || k === "font-weight" && /^(normal|bold|[1-9]00)$/.test(v) || k === "text-align" && /^(left|right|center)$/.test(v) || k === "font-family" && /^[a-zA-Z0-9 ,'-]{1,100}$/.test(v)) styles.push(k + ":" + v);
-    }
-    if (styles.length) out.push('style="' + escape(styles.join(";")) + '"');
-    return "<" + name + (out.length ? " " + out.join(" ") : "") + ">";
-  }).join("");
-  const text3 = decode(html.replace(/<img\b[^>]*>/gi, "").replace(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (_, url2, label) => label + (decode(label.replace(/<[^>]*>/g, "")).trim() === decode(url2).replace(/^(?:mailto:|tel:)/i, "").trim() ? "" : " (" + url2 + ")")).replace(/<br\s*\/?\s*>|<\/(?:div|p|tr)>/gi, "\n").replace(/<[^>]*>/g, "")).replace(/\n{3,}/g, "\n\n").trim();
-  return { html, text: text3 };
-}
-function selectGmailSignature(result, email) {
-  const row = (result.sendAs || []).find((r) => String(r.sendAsEmail || "").toLowerCase() === String(email).toLowerCase());
-  if (!row) throw Error("\uD604\uC7AC Gmail \uBC1C\uC2E0 \uC8FC\uC18C\uC758 \uC11C\uBA85\uC744 \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uB2E4\uB978 \uBCC4\uCE6D\uC758 \uC11C\uBA85\uC744 \uC790\uB3D9 \uC0AC\uC6A9\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
-  return { ...gmailSignature(String(row.signature || "")), email: row.sendAsEmail };
 }
 
 // supabase/functions/_shared/brand-auto-service.ts
