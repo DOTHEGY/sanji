@@ -69,3 +69,11 @@ test('inline HTML labels do not fuse with email addresses; extraction never gues
 });
 test('contact publication requires the exact source page, not a different homepage excerpt',()=>{const l=official();l.contacts[0].source='https://brand.co.kr/unfetched';assert.equal(api.assessMailLead(l).allowed,false);});
 test('known recruiting and market-report vendors are not food-brand recipients even with valid support contacts',()=>{for(const host of ['saramin.co.kr','coherentmarketinsights.com']){const l=official('help@'+host);l.website='https://'+host+'/';l.contacts[0].source=l.website;l.publicEvidence[0].url=l.website;assert.equal(api.assessMailLead(l).allowed,false);}});
+test('SEO product-list titles cannot become the greeting company; normal brand names stay valid',()=>{
+ const seo='PDO 실, 히알루 론산 주사, 피부 필러, 중간 요법 바늘 제조업체 및 공급 업체';
+ assert.equal(api.validBrandName(seo),false);for(const name of ['한국인삼공사','뉴트리원','정관장','OO제조사'])assert.equal(api.validBrandName(name),true,name);
+ const lead=official('asa@yasatech.cn');lead.name=seo;lead.outreach.brandName=seo;assert.equal(api.assessMailLead(lead).allowed,false);assert.equal(api.assessDispatch({targetName:seo,emails:['asa@yasatech.cn'],body:'안녕하세요, '+seo+' 담당자님.'},{name:seo},lead).allowed,false);
+});
+test('example-style username mailbox remains excluded regardless of delayed delivery',()=>{
+ const lead=official('username@network.co.kr');assert.equal(api.assessMailLead(lead).allowed,false);assert.equal(api.assessDispatch({targetName:'에스티로더',emails:['username@network.co.kr'],body:'안녕하세요, 에스티로더 담당자님.'},{name:'에스티로더'},lead).allowed,false);
+});

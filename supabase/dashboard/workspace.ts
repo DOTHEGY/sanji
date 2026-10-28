@@ -837,7 +837,7 @@ function editorialSource(url2, pages = []) {
 }
 function validBrandName(value) {
   const s = String(value || "").trim();
-  return s.length >= 2 && s.length <= 60 && !/[\n]|…|리뉴얼 출시|라인업 공개|운영 종료|신제품.{0,30}출시|^상품 |최신 뉴스|\d+주 전/.test(s) && !/(?:신문|저널|경제|뉴스|팜뉴스|매경헬스|메디칼트리뷴|헬스경향)[\s.]*$/.test(s);
+  return s.length >= 2 && s.length <= 60 && !/[\n]|…|리뉴얼 출시|라인업 공개|운영 종료|신제품.{0,30}출시|^상품 |최신 뉴스|\d+주 전/.test(s) && !/(?:신문|저널|경제|뉴스|팜뉴스|매경헬스|메디칼트리뷴|헬스경향)[\s.]*$/.test(s) && !/(?:제조업체|제조사|제조업자|manufacturer).{0,30}(?:공급업체|공급 업체|supplier)/i.test(s) && !/(?:공급업체|공급 업체|supplier).{0,30}(?:제조업체|제조사|제조업자|manufacturer)/i.test(s);
 }
 function realProductName(value) {
   const s = String(value || "").trim();
