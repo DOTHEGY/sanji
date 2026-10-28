@@ -469,13 +469,14 @@ function selectGmailSignature(result, email) {
 // supabase/functions/_shared/brand-auto-service.ts
 function brandAutoService({ sb: sb2, query: query2, env: env2, connection: connection2, emailTracking: emailTracking2, digest: digest4, uuid: uuid2, audit: audit2 }) {
   async function config(owner) {
-    return await query2(sb2.from("sanji_brand_auto_config").select("*").eq("owner", owner).maybeSingle()) || { enabled: false, enabled_at: null };
+    return await query2(sb2.from("sanji_brand_auto_config").select("*").eq("owner", owner).maybeSingle()) || { enabled: false, enabled_at: null, message_type: "unconfirmed" };
   }
-  async function setConfig(owner, enabled) {
+  async function setConfig(owner, enabled, messageType) {
     const current = await config(owner);
-    const record = { owner, enabled, enabled_at: enabled ? current.enabled ? current.enabled_at : (/* @__PURE__ */ new Date()).toISOString() : null, updated: (/* @__PURE__ */ new Date()).toISOString() };
+    if (enabled && !["non_marketing", "marketing"].includes(messageType)) throw Error("\uBA54\uC77C \uC720\uD615\uC744 \uC120\uD0DD\uD558\uC138\uC694.");
+    const record = { owner, enabled, message_type: enabled ? messageType : current.message_type || "unconfirmed", enabled_at: enabled ? current.enabled ? current.enabled_at : (/* @__PURE__ */ new Date()).toISOString() : null, updated: (/* @__PURE__ */ new Date()).toISOString() };
     await query2(sb2.from("sanji_brand_auto_config").upsert(record, { onConflict: "owner" }));
-    await audit2(owner, "brand_auto_config_changed", { enabled, enabledAt: record.enabled_at });
+    await audit2(owner, "brand_auto_config_changed", { enabled, messageType: record.message_type, enabledAt: record.enabled_at });
     return record;
   }
   async function process(owner) {
@@ -484,13 +485,15 @@ function brandAutoService({ sb: sb2, query: query2, env: env2, connection: conne
     if (env2("EMAIL_SENDING_ENABLED") !== "true") return { status: "email_disabled" };
     const gmail = await connection2(owner, "gmail");
     if (!gmail?.email) return { status: "gmail_not_connected" };
+    if (!["non_marketing", "marketing"].includes(cfg.message_type)) return { status: "message_type_required" };
+    const marketing = cfg.message_type === "marketing";
     const rows = await query2(sb2.from("sanji_discovery_leads").select("*").eq("owner", owner).eq("status", "review").gte("data->>firstEmailAt", cfg.enabled_at).order("updated", { ascending: false }).limit(500));
     if (!rows.length) return { status: "idle" };
     const ts = await query2(sb2.from("sanji_records").select("id,data,version,updated").eq("owner", owner).eq("kind", "template").order("updated", { ascending: true }).limit(20));
     const template2 = ts.find((x) => x.data.channel === "\uC774\uBA54\uC77C" && x.data.purpose !== "brand_reply" && x.data.purpose !== "creator_proposal");
     const settingsRows = await query2(sb2.from("sanji_records").select("data").eq("owner", owner).eq("kind", "settings").limit(1));
     const settings = settingsRows[0]?.data || {};
-    if (!settings.senderName || !settings.senderPhone) return { status: "sender_information_required" };
+    if (!settings.senderName || !settings.senderPhone || marketing && !settings.senderAddress) return { status: "sender_information_required" };
     let richSignature = null;
     if (settings.signatureSource === "gmail") {
       if (gmail.email.toLowerCase() !== String(settings.gmailSignatureEmail || "").toLowerCase()) return { status: "gmail_signature_account_changed" };
@@ -507,13 +510,14 @@ function brandAutoService({ sb: sb2, query: query2, env: env2, connection: conne
       if (failure && (Number(failure.attempts) >= 2 || Date.parse(failure.next_attempt || "") > Date.now())) continue;
       const plan = planAutomaticBrand({ lead, template: template2, enabledSince: cfg.enabled_at, threads, suppression });
       if (!plan.eligible) continue;
+      if (marketing && !plan.copy.subject.startsWith("(\uAD11\uACE0)")) continue;
       const data = lead.data, contact2 = plan.contacts[0], company = String(plan.copy.brandName || data.name || "").trim(), key2 = companyIdentity(data.company || company);
       if (!key2 || !contact2?.source || !contact2.checked) continue;
       if (candidates.some((r) => companyIdentity(r.data?.companyKey || r.data?.legalCompanyName || r.data?.company || "") === key2 || (r.data?.recipientEmails || []).some((e) => String(e).toLowerCase() === plan.emails[0].toLowerCase()) || String(r.data?.contact?.email || "").toLowerCase() === plan.emails[0].toLowerCase())) continue;
       const target = uuid2(), email = plan.emails[0];
       const candidate2 = { name: company, company, legalCompanyName: data.company || "", companyKey: key2, kind: "\uBE0C\uB79C\uB4DC", product: String(plan.copy.productName || "").slice(0, 200), category: "\uBBF8\uD655\uC778", classification: "\uAC1C\uBCC4 \uC81C\uD488\uC758 \uBC95\uC801 \uBD84\uB958 \uD655\uC778 \uD544\uC694", authority: "\uD310\uB9E4\xB7\uC720\uD1B5 \uAD8C\uD55C \uBCC4\uB3C4 \uD655\uC778 \uD544\uC694", website: data.website || "", channels: data.channel || "", recipientEmails: [email], contact: { email, owner: company, source: contact2.source, checked: contact2.checked.slice(0, 10), purpose: contact2.purpose === "\uC0AC\uC5C5 \uC81C\uD734" ? "\uC0AC\uC5C5 \uC81C\uD734" : "\uBE44\uC988\uB2C8\uC2A4", verified: true, verification: contact2.verification }, handle: "", profile: "", agency: "", topics: [], followers: null, metricsSource: "", metricsChecked: "", evidence: [{ url: contact2.source, checked: contact2.checked.slice(0, 10), description: contact2.context || "" }], reason: "\uACF5\uC2DD \uCD9C\uCC98 \uAC80\uC99D \uBC0F \uBE0C\uB79C\uB4DC \uC790\uB3D9 \uC608\uC57D \uC124\uC815\uC5D0 \uB530\uB978 \uC81C\uC548", status: "\uBBF8\uC811\uCD09", note: "\uC790\uB3D9 \uC608\uC57D \xB7 \uBC1C\uAD74 \uCD9C\uCC98 " + String(data.source || ""), next: "\uD68C\uC2E0 \uD655\uC778", due: "", owner: "" };
-      let body = mailContent(plan.copy.body, plan.copy.signature, settings, true, false);
-      const input = { target, dealIds: [], channel: "email", subject: plan.copy.subject, body, signature: plan.copy.signature, attachments: [], templateId: plan.templateId, templateVersion: plan.templateVersion, recipientMode: "primary", trackingRequested: void 0, trackingNoticeAcknowledged: void 0, trackingInternalTest: false, lawfulBasis: "", marketing: false };
+      let body = mailContent(plan.copy.body, plan.copy.signature, settings, true, marketing);
+      const input = { target, dealIds: [], channel: "email", subject: plan.copy.subject, body, signature: plan.copy.signature, attachments: [], templateId: plan.templateId, templateVersion: plan.templateVersion, recipientMode: "primary", trackingRequested: void 0, trackingNoticeAcknowledged: void 0, trackingInternalTest: false, lawfulBasis: "", marketing };
       const notice = await emailTracking2.withNotice(owner, input, body, "brand");
       body = notice.body;
       const tracking = await emailTracking2.preview(owner, { ...notice.input, body }, "brand");
@@ -3741,7 +3745,7 @@ Deno.serve(async (req) => {
     if (path === "/brand-auto-schedule" && req.method === "POST") {
       const b = await input();
       if (typeof b.enabled !== "boolean") fail(400, "\uC124\uC815\uAC12\uC744 \uD655\uC778\uD558\uC138\uC694.");
-      return json(await brandAuto.setConfig(u, b.enabled));
+      return json(await brandAuto.setConfig(u, b.enabled, String(b.messageType || "")));
     }
     if (path === "/discovery" || path.startsWith("/discovery/")) {
       try {

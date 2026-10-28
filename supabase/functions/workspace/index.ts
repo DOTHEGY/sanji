@@ -857,7 +857,7 @@ Deno.serve(async (req: Request) => {
       try{return json(await creatorDiscovery.handle(path,req.method,u,input));}catch(e){fail(400,String(e.message||"크리에이터 발굴 실패"));}
     }
     if(path==='/brand-auto-schedule'&&req.method==='GET')return json(await brandAuto.config(u));
-    if(path==='/brand-auto-schedule'&&req.method==='POST'){const b=await input();if(typeof b.enabled!=='boolean')fail(400,'설정값을 확인하세요.');return json(await brandAuto.setConfig(u,b.enabled));}
+    if(path==='/brand-auto-schedule'&&req.method==='POST'){const b=await input();if(typeof b.enabled!=='boolean')fail(400,'설정값을 확인하세요.');return json(await brandAuto.setConfig(u,b.enabled,String(b.messageType||'')));}
     if (path === "/discovery" || path.startsWith("/discovery/")) {
       try { return json(await discovery.handle(path,req.method,u,input)); }
       catch(e) { fail(e instanceof HttpError ? e.status : 400, String(e.message || "발굴 작업 실패")); }
