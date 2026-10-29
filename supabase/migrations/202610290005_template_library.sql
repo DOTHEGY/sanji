@@ -42,11 +42,15 @@ end $$;
 -- Profile records are immutable: changing copy always creates a new snapshot.
 create or replace function public.sanji_protect_outbound_profile() returns trigger language plpgsql security definer set search_path='' as $$
 begin
- if old.kind='template' and old.data->>'purpose'='brand_auto_profile' then raise exception '자동 발송 본문 스냅샷은 변경하거나 삭제할 수 없습니다';end if;
+ if tg_op='INSERT' then
+   if new.kind='template' and coalesce(new.data->>'purpose','')<>'brand_auto_profile' then raise exception '기존 템플릿 저장은 종료됐습니다. 화면을 새로고침하고 템플릿 라이브러리를 이용하세요';end if;
+   return new;
+ end if;
+ if old.kind='template' or (tg_op='UPDATE' and new.kind='template') then raise exception '기존 템플릿은 읽기 전용입니다. 화면을 새로고침하고 템플릿 라이브러리를 이용하세요';end if;
  if tg_op='DELETE' then return old;end if;return new;
 end $$;
 drop trigger if exists sanji_outbound_profile_immutable on public.sanji_records;
-create trigger sanji_outbound_profile_immutable before update or delete on public.sanji_records for each row execute function public.sanji_protect_outbound_profile();
+create trigger sanji_outbound_profile_immutable before insert or update or delete on public.sanji_records for each row execute function public.sanji_protect_outbound_profile();
 create or replace function public.sanji_brand_outbound_replace(p_owner uuid,p_revision integer,p_old text,p_new text) returns public.sanji_brand_outbound_profile language plpgsql security definer set search_path='' as $$
 declare p public.sanji_brand_outbound_profile;t public.sanji_records;newid uuid;original text;
 begin
