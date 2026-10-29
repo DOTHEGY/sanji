@@ -23,10 +23,11 @@ function creatorInstagramOauth({ sb: sb2, query: query2, env: env2, key: key2, d
     const token = await remote2("https://api.instagram.com/oauth/access_token", { method: "POST", body: form }, "Instagram \uACF5\uC2DD \uC778\uC99D");
     const session = await resolveSession(token, remote2, env2("META_APP_SECRET"), env2("META_GRAPH_VERSION") || "v24.0");
     if (String(session.username || "").replace(/^@/, "").toLowerCase() !== expected || !/^\d+$/.test(String(session.id || ""))) throw Error("\uC5F0\uACB0 \uB300\uC0C1\uC740 @valu_est\uC785\uB2C8\uB2E4. \uB85C\uADF8\uC778\uD55C \uACC4\uC815\uC744 \uD655\uC778\uD558\uC138\uC694.");
+    if (session.tokenMode === "short") throw Error("\uC7A5\uAE30 \uC778\uC99D\uC744 \uD655\uC778\uD558\uC9C0 \uBABB\uD574 \uAE30\uC874 \uC5F0\uACB0\uC744 \uC720\uC9C0\uD588\uC2B5\uB2C8\uB2E4.");
     const checked = await capabilities(session, remote2, env2("META_GRAPH_VERSION") || "v24.0");
     const safe = { profileVerified: checked.profileVerified === true, messagesReadable: checked.messagesReadable === true, webhookSubscribed: checked.webhookSubscribed === true, checked: checked.checked || null };
     session.capabilities = safe;
-    await query2(sb2.from("sanji_connections").upsert({ owner: row.owner, provider: "instagram:" + session.id, encrypted: await encrypt2(session), summary: { username: session.username, accountId: session.id, connected: true, apiVerified: true, capabilities: safe, profileChecked: session.profileChecked || null, webhookSetupRequested: false } }, { onConflict: "owner,provider" }));
+    await query2(sb2.from("sanji_connections").upsert({ owner: row.owner, provider: "instagram:" + session.id, encrypted: await encrypt2(session), summary: { username: session.username, accountId: session.id, connected: true, apiVerified: true, expires: session.expires || null, tokenMode: session.tokenMode || "long", warning: session.warning || "", expiryKnown: session.expiryKnown !== false, capabilities: safe, profileChecked: session.profileChecked || null, webhookSetupRequested: false } }, { onConflict: "owner,provider" }));
     await audit2(row.owner, "creator_instagram_connected", { username: expected, profileVerified: true, messagesReadable: safe.messagesReadable, webhookSetupRequested: false });
     return { username: expected, messagesReadable: safe.messagesReadable };
   }
