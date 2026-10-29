@@ -128,6 +128,9 @@ const attachment = z.object({
 });
 const draft = z.object({
   target: z.string(),
+  proposalType:z.enum(["standard","creator_product_proposal"]).optional(),
+  creatorReviewId:z.string().uuid().optional(),
+  creatorReviewVersion:z.number().int().positive().optional(),
   dealIds: z.array(z.string()).max(3).default([]),
   channel: z.enum(["email", "manual_dm", "instagram"]),
   subject: z

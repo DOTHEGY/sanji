@@ -1,3 +1,4 @@
+import {assertCreatorProposalSnapshot} from '../_shared/creator-proposal-snapshot.ts';
 import {tagbyBatchPreview,tagbyBatchHash} from '../_shared/tagby-batch.ts';
 import {creatorContactReviewService} from '../_shared/creator-contact-review.ts';
 import {isRevokedGoogleRefresh} from '../_shared/gmail-health.ts';
@@ -951,7 +952,7 @@ Deno.serve(async (req: Request) => {
     if(path==="/schedule-status"&&req.method==="GET"){
       const jobs=await query(sb.from("sanji_jobs").select("id,draft_id,status,run_at,attempts,result,approved_at").eq("owner",u).order("run_at",{ascending:false}).limit(200));
       const drafts=jobs.length?await query(sb.from("sanji_drafts").select("id,data").eq("owner",u).in("id",jobs.map((j:any)=>j.draft_id))):[];
-      return json({jobs:jobs.map((j:any)=>{const d=drafts.find((d:any)=>d.id===j.draft_id)?.data;return {...j,target:d?.target||null,email:d?.email||"",emails:d?.emails||[],subject:d?.subject||"",body:d?.body||"",snapshotAvailable:!!d};})});
+      return json({jobs:jobs.map((j:any)=>{const d=drafts.find((d:any)=>d.id===j.draft_id)?.data;return {...j,target:d?.target||null,email:d?.email||"",emails:d?.emails||[],subject:d?.subject||"",body:d?.body||"",creatorReviewId:d?.proposalType==='creator_product_proposal'?d.creatorReviewId:null,snapshotAvailable:!!d};})});
     }
     if (path === "/schedule" && req.method === "POST") {
       const b = await input();
@@ -1166,11 +1167,18 @@ Deno.serve(async (req: Request) => {
     }
     if(path==="/gmail/sync"&&req.method==="POST")return json(await gmailSync.sync(u));
     if(path==="/gmail/sync-status"&&req.method==="GET")return json(await query(sb.from("sanji_gmail_sync").select("last_checked,cursor,result").eq("owner",u).maybeSingle())||{});
+    if(path==='/creator-proposal/target'&&req.method==='POST'){const b=await input();if(!b.creatorId||!Number.isInteger(b.version))fail(400,'크리에이터 검토 정보를 확인하세요.');return json({target:await query(sb.rpc('sanji_creator_proposal_target',{p_owner:u,p_creator:b.creatorId,p_version:b.version}))});}
     if (path === "/drafts" && req.method === "POST") {
       const rawInput=await input();
       let inputData = draftSchema.parse(rawInput);
       const
         c = await owned(u, inputData.target, "candidate");
+      if(inputData.proposalType==='creator_product_proposal'){
+        if(!inputData.creatorReviewId||!inputData.creatorReviewVersion)fail(400,'크리에이터 검토 정보가 필요합니다.');
+        const review=await query(sb.from('sanji_creator_contact_review').select('owner,creator_id,version,data').eq('owner',u).eq('creator_id',inputData.creatorReviewId).maybeSingle());
+        const creator=await query(sb.from('sanji_creator_recovery').select('id,owner,handle,profile_url').eq('owner',u).eq('id',inputData.creatorReviewId).maybeSingle());
+        try{assertCreatorProposalSnapshot(u,c,review,creator,inputData);}catch(e){fail(409,String(e.message||'크리에이터 검토 정보 오류'));}
+      }
       if(inputData.templateId){const template=await owned(u,inputData.templateId,"template");if(template.version!==inputData.templateVersion)fail(409,"템플릿이 변경됐습니다. 발송 전 목록을 새로고침하세요.");}
       if (await isBlocked(u, inputData.channel==="email"?{...c,recipientEmails:[],contact:{...c.contact,email:""}}:c)) fail(403, "거절·수신 거부 대상");
       if (
@@ -1182,8 +1190,8 @@ Deno.serve(async (req: Request) => {
       const deals = await Promise.all(
         inputData.dealIds.map((id: string) => owned(u, id, "deal")),
       );
-      if (deals.some((d: any) => d.state !== "확정"))
-        fail(400, "협의 중 상품은 제안할 수 없습니다.");
+      if (deals.some((d: any) => d.state !== "확정" && !(inputData.proposalType==='creator_product_proposal' && d.state==='협의 중')))
+        fail(400, "상품의 현재 상태로는 제안할 수 없습니다.");
       if (c.kind === "크리에이터" && !inputData.replyTo && !deals.length)
         fail(400, "상품 1~3개를 선택하세요.");
       const settings = (await records(u, "settings"))[0];
@@ -1260,6 +1268,7 @@ Deno.serve(async (req: Request) => {
       const tracking=await emailTracking.preview(u,{...inputData,body},c.kind==="크리에이터"?"creator":"brand");
       const d = {
           ...inputData,
+          ...(inputData.proposalType==='creator_product_proposal'?{proposalReviewBody:inputData.body}:{}),
           tracking,
           ...(richSignature?{signatureText:richSignature.text,signatureHtml:richSignature.html}:{}),
           ...reply,
