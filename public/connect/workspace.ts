@@ -1186,24 +1186,29 @@ async function syncCreatorGmailObservations({ sb: sb2, query: query2, remote: re
     checked++;
     try {
       const msg = await remote2("https://gmail.googleapis.com/gmail/v1/users/me/messages/" + encodeURIComponent(o.providerMessageId) + "?format=full", { headers: { Authorization: "Bearer " + g.access_token } });
-      if (msg.id !== o.providerMessageId) throw Error("\uBA54\uC2DC\uC9C0 ID \uBD88\uC77C\uCE58");
+      if (msg.id !== o.providerMessageId) throw Object.assign(Error("\uBA54\uC2DC\uC9C0 ID \uBD88\uC77C\uCE58"), { code: "CREATOR_OBSERVATION_MISMATCH" });
       if (!(msg.labelIds || []).includes("SENT")) continue;
       const parsed = gmailMessages2({ messages: [msg] }, g.email, [], textBody2, hasAttachments)[0];
       const recipient = String(o.recipient || "").toLowerCase();
-      if (!recipient || !String(parsed?.to || "").toLowerCase().split(/[\s,;<>]+/).includes(recipient)) throw Error("\uC218\uC2E0\uC790 \uBD88\uC77C\uCE58");
-      let reply = false, failed = false;
+      if (!recipient || !String(parsed?.to || "").toLowerCase().split(/[\s,;<>]+/).includes(recipient)) throw Object.assign(Error("\uC218\uC2E0\uC790 \uBD88\uC77C\uCE58"), { code: "CREATOR_OBSERVATION_MISMATCH" });
+      let reply = false, failed = false, uncertain = false;
       if (msg.threadId) {
         const thread = await remote2("https://gmail.googleapis.com/gmail/v1/users/me/threads/" + encodeURIComponent(msg.threadId) + "?format=full", { headers: { Authorization: "Bearer " + g.access_token } });
-        const messages = gmailMessages2(thread, g.email, [], textBody2, hasAttachments);
-        reply = messages.some((m) => !m.out && !m.automatic && String(m.replyAddress || "").toLowerCase() === recipient && m.at >= parsed.at);
-        failed = messages.some((m) => m.bounceFailures?.some((f) => f.email === recipient && f.kind === "permanent"));
+        const messages = gmailMessages2(thread, g.email, [], textBody2, hasAttachments), original = String(parsed.messageId || "").trim(), references = (m) => !!original && [m.inReplyTo, m.references].some((v) => String(v || "").split(/\s+/).includes(original));
+        reply = messages.some((m) => !m.out && !m.automatic && String(m.replyAddress || "").toLowerCase() === recipient && m.at >= parsed.at && references(m));
+        for (const m of messages) {
+          if (m.at < parsed.at || !m.bounceFailures?.some((f) => f.email === recipient && f.kind === "permanent")) continue;
+          if (references(m)) failed = true;
+          else uncertain = true;
+        }
       }
-      const next = { ...o, status: failed ? "failed" : "sent", humanReply: reply, providerThreadId: msg.threadId || "", sentAt: parsed.at };
+      const next = { ...o, status: failed ? "failed" : uncertain ? "unknown" : "sent", humanReply: reply, providerThreadId: msg.threadId || "", sentAt: parsed.at };
       const unchanged = ["status", "humanReply", "providerThreadId", "sentAt"].every((k) => o[k] === next[k]);
       if (unchanged) continue;
       const changed = await query2(sb2.from("sanji_creator_contact_review").update({ data: { ...row.data, email: { ...email, observation: next } }, version: row.version + 1, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("creator_id", row.creator_id).eq("version", row.version).select("creator_id"));
       if (changed.length) updated++;
-    } catch {
+    } catch (e) {
+      if (e?.code !== "CREATOR_OBSERVATION_MISMATCH" && e?.status !== 404) throw e;
       errors.push({ creatorId: row.creator_id, reason: "Gmail \uBA54\uC2DC\uC9C0 \uC870\uD68C \uB610\uB294 \uB300\uC870 \uC2E4\uD328" });
     }
   }
@@ -1288,12 +1293,7 @@ function gmailSyncService({ sb: sb2, query: query2, records: records2, putRecord
           errors.push({ thread: t.id, error: String(e.message || e).slice(0, 180) });
         }
       }));
-      let creatorObservations = { checked: 0, updated: 0, errors: [] };
-      try {
-        creatorObservations = await syncCreatorGmailObservations({ sb: sb2, query: query2, remote: remote2, gmailMessages, textBody: textBody2, hasAttachments: gmailHasAttachments2 }, owner, g, Number(state.result?.creatorObservations?.nextCursor || 0));
-      } catch {
-        errors.push({ stage: "creator_observations", error: "\uD06C\uB9AC\uC5D0\uC774\uD130 Gmail \uAD00\uCC30 \uAE30\uB85D \uB3D9\uAE30\uD654 \uC2E4\uD328" });
-      }
+      const creatorObservations = await syncCreatorGmailObservations({ sb: sb2, query: query2, remote: remote2, gmailMessages, textBody: textBody2, hasAttachments: gmailHasAttachments2 }, owner, g, Number(state.result?.creatorObservations?.nextCursor || 0));
       let bounceMessages = 0;
       if (start === 0) {
         try {
@@ -1884,7 +1884,9 @@ function trackingLabel(row, includeAutomated = false) {
   if (row.tracking_result?.applied && (!row.tracking_id || Date.parse(row.expires) <= Date.now())) return "\uBCF4\uAD00\uAE30\uAC04 \uB9CC\uB8CC \xB7 \uD1B5\uACC4 \uC81C\uC678";
   if (!row.tracking_id) return "\uCD94\uC801 \uBBF8\uC801\uC6A9";
   if (row.is_test) return "\uB0B4\uBD80 \uD14C\uC2A4\uD2B8 \xB7 \uC218\uC2E0\uC790 \uD1B5\uACC4 \uC81C\uC678";
-  return (includeAutomated ? row.first_request : row.first_included) ? "\uC5F4\uB78C \uCD94\uC815" : "\uAC10\uC9C0 \uC5C6\uC74C";
+  if (row.first_included) return "\uC5F4\uB78C \uCD94\uC815";
+  if (row.first_request) return "\uC790\uB3D9 \uC694\uCCAD \uC758\uC2EC \xB7 \uC0AC\uB78C \uC5F4\uB78C \uBBF8\uD655\uC778";
+  return "\uAC10\uC9C0 \uC5C6\uC74C";
 }
 function emailTrackingService({ sb: sb2, query: query2, env: env2, audit: audit2, baseUrl }) {
   const activated = () => env2("EMAIL_TRACKING_ACTIVATION_APPROVED") === "true";

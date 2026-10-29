@@ -37,7 +37,7 @@ export function gmailSyncService({sb,query,records,putRecord,gmailToken,remote,t
 if(inbound.length){humanReplies++;const c=candidates.find((c:any)=>c.id===t.target);if(c&&!opted&&!["회신","거절","수신 거부"].includes(c.status))await putRecord(owner,"candidate",{...c,status:"회신"},c.id);}imported++;
     }catch(e){errors.push({thread:t.id,error:String(e.message||e).slice(0,180)});}
    }));
-   let creatorObservations:any={checked:0,updated:0,errors:[]};try{creatorObservations=await syncCreatorGmailObservations({sb,query,remote,gmailMessages,textBody,hasAttachments:gmailHasAttachments},owner,g,Number(state.result?.creatorObservations?.nextCursor||0));}catch{errors.push({stage:'creator_observations',error:'크리에이터 Gmail 관찰 기록 동기화 실패'});}
+   const creatorObservations=await syncCreatorGmailObservations({sb,query,remote,gmailMessages,textBody,hasAttachments:gmailHasAttachments},owner,g,Number(state.result?.creatorObservations?.nextCursor||0));
    let bounceMessages=0;
    if(start===0){
     try{const listing=await remote("https://gmail.googleapis.com/gmail/v1/users/me/messages?"+new URLSearchParams({q:"{from:mailer-daemon from:postmaster} newer_than:90d",maxResults:"30"}),{headers:{Authorization:"Bearer "+g.access_token}});
