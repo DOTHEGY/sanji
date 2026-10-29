@@ -1,3 +1,52 @@
+// supabase/functions/_shared/creator-instagram-readiness.ts
+function creatorInstagramReadiness(rows, expected = "valu_est") {
+  const match = (rows || []).find((r) => String(r.summary?.username || "").replace(/^@/, "").toLowerCase() === expected.toLowerCase());
+  return { expectedHandle: expected, accountMatched: !!match, profileVerified: match?.summary?.apiVerified === true, messagesReadable: match?.summary?.capabilities?.messagesReadable === true, webhookSubscribed: match?.summary?.capabilities?.webhookSubscribed === true, lastChecked: match?.summary?.capabilities?.checked || null, officialRoutesEnabled: false, sendEnabled: false, notice: "\uC800\uC7A5\uB41C \uC5F0\uACB0 \uC0C1\uD0DC\uC785\uB2C8\uB2E4. \uACF5\uC2DD \uBA54\uC2DC\uC9C0 \uACBD\uB85C\uAC00 \uBE44\uD65C\uC131\uD654\uB418\uC5B4 \uC788\uC73C\uBA70 \uD604\uC7AC \uAD8C\uD55C\xB7\uC2E4\uC2DC\uAC04 \uC218\uC2E0\uC744 \uD655\uC778\uD55C \uACB0\uACFC\uB294 \uC544\uB2D9\uB2C8\uB2E4." };
+}
+
+// supabase/functions/_shared/creator-manual-dm.ts
+function creatorManualDmService({ sb: sb2, query: query2, audit: audit2 }) {
+  return async (path, owner, input) => {
+    const b = await input(), id = String(b.creatorId || ""), version = Number(b.version);
+    if (!/^[0-9a-f-]{36}$/i.test(id) || !Number.isInteger(version) || version < 1) throw Error("\uD06C\uB9AC\uC5D0\uC774\uD130\uC640 \uAC80\uD1A0 \uBC84\uC804\uC744 \uD655\uC778\uD558\uC138\uC694.");
+    const row = await query2(sb2.from("sanji_creator_contact_review").select("creator_id,version,data").eq("owner", owner).eq("creator_id", id).maybeSingle()), creator = await query2(sb2.from("sanji_creator_recovery").select("id,handle,profile_url").eq("owner", owner).eq("id", id).maybeSingle());
+    if (!row || !creator) throw Error("\uD574\uB2F9 \uD06C\uB9AC\uC5D0\uC774\uD130\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+    const dm = row.data?.dm || {}, events = Array.isArray(dm.manualEvents) ? dm.manualEvents : [];
+    let next;
+    if (path === "/creator-contact-review/dm-event") {
+      const e = b.event || {}, kind = String(e.kind || ""), source = String(e.source || ""), sender = String(e.sender || "").replace(/^@/, "").toLowerCase(), body = String(e.body ?? ""), at = new Date(e.at);
+      if (!["received", "user_reported_sent"].includes(kind) || !["instagram", "tagby", "manual"].includes(source) || !/^[a-z0-9._]{1,30}$/.test(sender) || !body.trim() || body.length > 5e3 || !Number.isFinite(at.getTime()) || at.getTime() > Date.now() + 3e5) throw Error("\uBC1C\uC2E0 \uACC4\uC815\xB7\uC2DC\uAC01\xB7\uC6D0\uBB38\uC744 \uD655\uC778\uD558\uC138\uC694.");
+      if (kind === "received" && sender !== String(creator.handle).toLowerCase()) throw Error("\uB2F5\uC7A5 \uBC1C\uC2E0 \uACC4\uC815\uC774 \uD06C\uB9AC\uC5D0\uC774\uD130\uC640 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+      if (kind === "user_reported_sent" && sender === String(creator.handle).toLowerCase()) throw Error("\uC9C1\uC811 \uBCF4\uB0B8 \uBA54\uC2DC\uC9C0\uB294 \uC2E4\uC81C \uBC1C\uC2E0 \uACC4\uC815\uC744 \uC785\uB825\uD558\uC138\uC694.");
+      let sourceUrl = "";
+      if (e.sourceUrl) {
+        let u;
+        try {
+          u = new URL(e.sourceUrl);
+        } catch {
+          throw Error("\uCD9C\uCC98 URL\uC744 \uD655\uC778\uD558\uC138\uC694.");
+        }
+        if (u.protocol !== "https:" || !["instagram.com", "www.instagram.com", "tagby.io", "www.tagby.io"].includes(u.hostname) || u.username || u.password || u.search || u.hash || source === "instagram" && !["instagram.com", "www.instagram.com"].includes(u.hostname) || source === "tagby" && !["tagby.io", "www.tagby.io"].includes(u.hostname)) throw Error("\uC120\uD0DD\uD55C \uCD9C\uCC98\uC640 URL\uC744 \uD655\uC778\uD558\uC138\uC694.");
+        sourceUrl = u.toString();
+      }
+      const event = { kind, source, sender, body, at: at.toISOString(), sourceUrl, recordOrigin: "user_reported" };
+      const digest4 = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(event))), key2 = Array.from(new Uint8Array(digest4), (x) => x.toString(16).padStart(2, "0")).join("");
+      if (events.some((x) => x.key === key2)) return { ok: true, duplicate: true, version: row.version };
+      if (events.length >= 500) throw Error("\uAE30\uB85D \uD55C\uB3C4\uC5D0 \uB3C4\uB2EC\uD588\uC2B5\uB2C8\uB2E4.");
+      next = { ...dm, manualEvents: [...events, { ...event, key: key2 }] };
+    } else if (path === "/creator-contact-review/dm-draft") {
+      const text3 = String(b.text ?? "");
+      if (text3.length > 5e3) throw Error("\uB2F5\uC7A5 \uCD08\uC548\uC740 5000\uC790 \uC774\uD558\uC785\uB2C8\uB2E4.");
+      next = { ...dm, replyDraft: text3 };
+    } else throw Error("\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uC791\uC5C5");
+    if (row.version !== version) throw Error("\uB2E4\uB978 \uACF3\uC5D0\uC11C \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uBD88\uB7EC\uC624\uC138\uC694.");
+    const changed = await query2(sb2.from("sanji_creator_contact_review").update({ data: { ...row.data, dm: next }, version: row.version + 1, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("creator_id", id).eq("version", version).select("creator_id"));
+    if (!changed.length) throw Error("\uB2E4\uB978 \uACF3\uC5D0\uC11C \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uBD88\uB7EC\uC624\uC138\uC694.");
+    await audit2(owner, "creator_dm_manual_recorded", { creator: id, kind: path.endsWith("dm-event") ? b.event.kind : "reply_draft", noDispatch: true });
+    return { ok: true, duplicate: false, version: version + 1 };
+  };
+}
+
 // supabase/functions/_shared/creator-proposal-snapshot.ts
 function assertCreatorProposalSnapshot(owner, candidate2, review, creator, input) {
   if (!owner || !review || review.owner !== owner || !creator || creator.owner !== owner || review.creator_id !== creator.id || review.version !== input.creatorReviewVersion || candidate2.kind !== "\uD06C\uB9AC\uC5D0\uC774\uD130" || candidate2.channel === "manual_dm") throw Error("\uD06C\uB9AC\uC5D0\uC774\uD130 \uAC80\uD1A0 \uC18C\uC720\uC790 \uB610\uB294 \uBC84\uC804\uC774 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
@@ -217,6 +266,8 @@ function creatorContactReviewService({ sb: sb2, query: query2, audit: audit2 }) 
       if (previous?.data?.email?.observation) data.email.observation = previous.data.email.observation;
       if (b.data?.email?.productIds === void 0 && previous?.data?.email?.productIds) data.email.productIds = previous.data.email.productIds;
       if (previous?.data?.dm?.observationHistory) data.dm.observationHistory = previous.data.dm.observationHistory;
+      if (previous?.data?.dm?.manualEvents) data.dm.manualEvents = previous.data.dm.manualEvents;
+      if (previous?.data?.dm?.replyDraft !== void 0) data.dm.replyDraft = previous.data.dm.replyDraft;
       const version = (previous?.version || 0) + 1;
       if (previous) {
         const changed = await query2(sb2.from("sanji_creator_contact_review").update({ data, version, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("creator_id", id).eq("version", previous.version).select("creator_id"));
@@ -3425,6 +3476,7 @@ var creatorDiscovery = creatorDiscoveryService({ sb, query, audit, env });
 var creatorRecovery = recoveryService({ sb, query, audit });
 var creatorVisibleImport = visibleImportService({ sb, query, audit });
 var creatorContactReview = creatorContactReviewService({ sb, query, audit });
+var creatorManualDm = creatorManualDmService({ sb, query, audit });
 var creatorMeta = creatorMetaService({ sb, query, env, connection, saveConnection, audit });
 var apifyTrials = apifyTrialService({ sb, query, env, audit });
 var saveManualReply = manualReplyService({ sb, query, putRecord, audit });
@@ -4001,6 +4053,17 @@ Deno.serve(async (req) => {
       }
     }
     if (path === "/email-tracking" || path.startsWith("/email-tracking/")) return json(await emailTracking.handle(path, req.method, u, input, url2.searchParams));
+    if ((path === "/creator-contact-review/dm-event" || path === "/creator-contact-review/dm-draft") && req.method === "POST") {
+      try {
+        return json(await creatorManualDm(path, u, input));
+      } catch (e) {
+        fail(400, String(e.message || "DM \uC218\uB3D9 \uAE30\uB85D \uC2E4\uD328"));
+      }
+    }
+    if (path === "/creator-instagram/message-status" && req.method === "GET") {
+      const rows = await query(sb.from("sanji_connections").select("provider,summary").eq("owner", u).or("provider.eq.instagram,provider.like.instagram:%"));
+      return json(creatorInstagramReadiness(rows));
+    }
     if (path === "/creator-contact-review" || path === "/creator-contact-review/move" || path === "/creator-contact-review/import" || path === "/creator-contact-review/receipt") {
       try {
         return json(await creatorContactReview(path, req.method, u, input));

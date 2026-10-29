@@ -1,3 +1,5 @@
+import {creatorInstagramReadiness} from '../_shared/creator-instagram-readiness.ts';
+import {creatorManualDmService} from '../_shared/creator-manual-dm.ts';
 import {assertCreatorProposalSnapshot} from '../_shared/creator-proposal-snapshot.ts';
 import {tagbyBatchPreview,tagbyBatchHash} from '../_shared/tagby-batch.ts';
 import {creatorContactReviewService} from '../_shared/creator-contact-review.ts';
@@ -169,6 +171,7 @@ const creatorDiscovery = creatorDiscoveryService({sb,query,audit,env});
 const creatorRecovery = recoveryService({sb,query,audit});
 const creatorVisibleImport = visibleImportService({sb,query,audit});
 const creatorContactReview=creatorContactReviewService({sb,query,audit});
+const creatorManualDm=creatorManualDmService({sb,query,audit});
 const creatorMeta = creatorMetaService({sb,query,env,connection,saveConnection,audit});
 const apifyTrials=apifyTrialService({sb,query,env,audit});
 const saveManualReply=manualReplyService({sb,query,putRecord,audit});
@@ -850,6 +853,8 @@ Deno.serve(async (req: Request) => {
       try{return json(await creatorLocal.admin(path,u,await input()));}catch(e){fail(400,String(e.message||"PC 실행기 설정 실패"));}
     }
     if(path==="/email-tracking"||path.startsWith("/email-tracking/"))return json(await emailTracking.handle(path,req.method,u,input,url.searchParams));
+    if((path==='/creator-contact-review/dm-event'||path==='/creator-contact-review/dm-draft')&&req.method==='POST'){try{return json(await creatorManualDm(path,u,input));}catch(e){fail(400,String(e.message||'DM 수동 기록 실패'));}}
+    if(path==='/creator-instagram/message-status'&&req.method==='GET'){const rows=await query(sb.from('sanji_connections').select('provider,summary').eq('owner',u).or('provider.eq.instagram,provider.like.instagram:%'));return json(creatorInstagramReadiness(rows));}
     if(path==='/creator-contact-review'||path==='/creator-contact-review/move'||path==='/creator-contact-review/import'||path==='/creator-contact-review/receipt'){try{return json(await creatorContactReview(path,req.method,u,input));}catch(e){fail(400,String(e.message||'크리에이터 검토 저장 실패'));}}
     if(path==='/creator-recovery/import-visible'&&req.method==='POST'){try{return json(await creatorVisibleImport(u,await input()));}catch(e){fail(400,String(e.message||'후보 가져오기 실패'));}}
     if(path.startsWith('/creator-meta/')){try{return json(await creatorMeta.handle(path,req.method,u,input,base,url.searchParams));}catch(e){fail(400,String(e.message||'공식 API 연결 실패'));}}
