@@ -1,4 +1,3 @@
-import {creatorInstagramOauth} from '../_shared/creator-instagram-oauth.ts';
 import {creatorInstagramReadiness} from '../_shared/creator-instagram-readiness.ts';
 import {creatorManualDmService} from '../_shared/creator-manual-dm.ts';
 import {assertCreatorProposalSnapshot} from '../_shared/creator-proposal-snapshot.ts';
@@ -173,7 +172,6 @@ const creatorRecovery = recoveryService({sb,query,audit});
 const creatorVisibleImport = visibleImportService({sb,query,audit});
 const creatorContactReview=creatorContactReviewService({sb,query,audit});
 const creatorManualDm=creatorManualDmService({sb,query,audit});
-const creatorInstagramAuth=creatorInstagramOauth({sb,query,env,key,digest,encrypt,remote,resolveSession:resolveInstagramSession,capabilities:instagramCapabilities,audit,oauthStateProblem,oauthLifetimeMs});
 const creatorMeta = creatorMetaService({sb,query,env,connection,saveConnection,audit});
 const apifyTrials=apifyTrialService({sb,query,env,audit});
 const saveManualReply=manualReplyService({sb,query,putRecord,audit});
@@ -791,8 +789,7 @@ Deno.serve(async (req: Request) => {
       try{await creatorMeta.callback(url,base);return Response.redirect(frontend+'?creator_meta=connected#creators',302);}
       catch{return Response.redirect(frontend+'?creator_meta=error#creators',302);}
     }
-    if(path==='/oauth/instagram/callback'&&req.method==='GET'){try{await creatorInstagramAuth.callback(url,base);return Response.redirect(frontend+'?creator_instagram=connected#creators',302);}catch{return new Response(null,{status:302,headers:{Location:oauthErrorRedirect('Instagram 공식 연결을 완료하지 못했습니다. @valu_est 계정과 권한을 확인하세요.',frontend),'Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});}}
-    if(path.startsWith("/instagram/"))return json({error:"공식 Instagram 메시지 경로는 아직 비활성화되어 있습니다."},410);
+    if(path.startsWith("/instagram/")||path==="/oauth/instagram/callback")return json({error:"공식 Instagram API 연동은 제외됐습니다. 서버 로그인 관리를 사용하세요."},410);
     if (/^\/oauth\/(gmail|instagram)\/callback$/.test(path)) {
       try { return await callback(req, url, path.split("/")[2], base); }
       catch (e) {
@@ -857,7 +854,6 @@ Deno.serve(async (req: Request) => {
     }
     if(path==="/email-tracking"||path.startsWith("/email-tracking/"))return json(await emailTracking.handle(path,req.method,u,input,url.searchParams));
     if((path==='/creator-contact-review/dm-event'||path==='/creator-contact-review/dm-draft')&&req.method==='POST'){try{return json(await creatorManualDm(path,u,input));}catch(e){fail(400,String(e.message||'DM 수동 기록 실패'));}}
-    if(path==='/creator-instagram/oauth/prepare'&&req.method==='POST'){try{return json(await creatorInstagramAuth.prepare(u,base));}catch(e){fail(400,String(e.message||'공식 연결 준비 실패'));}}
     if(path==='/creator-instagram/message-status'&&req.method==='GET'){const rows=await query(sb.from('sanji_connections').select('provider,summary').eq('owner',u).or('provider.eq.instagram,provider.like.instagram:%'));return json(creatorInstagramReadiness(rows));}
     if(path==='/creator-contact-review'||path==='/creator-contact-review/move'||path==='/creator-contact-review/import'||path==='/creator-contact-review/receipt'){try{return json(await creatorContactReview(path,req.method,u,input));}catch(e){fail(400,String(e.message||'크리에이터 검토 저장 실패'));}}
     if(path==='/creator-recovery/import-visible'&&req.method==='POST'){try{return json(await creatorVisibleImport(u,await input()));}catch(e){fail(400,String(e.message||'후보 가져오기 실패'));}}

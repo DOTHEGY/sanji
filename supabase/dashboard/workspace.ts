@@ -1,38 +1,3 @@
-// supabase/functions/_shared/creator-instagram-oauth.ts
-function creatorInstagramOauth({ sb: sb2, query: query2, env: env2, key: key2, digest: digest4, encrypt: encrypt2, remote: remote2, resolveSession, capabilities, audit: audit2, oauthStateProblem: oauthStateProblem2, oauthLifetimeMs: oauthLifetimeMs2 }) {
-  const provider = "instagram_message_connect", expected = "valu_est";
-  async function prepare(owner, base) {
-    if (!env2("META_APP_ID") || !env2("META_APP_SECRET")) throw Error("Instagram \uACF5\uC2DD \uC571 \uC124\uC815 \uD655\uC778 \uD544\uC694");
-    await key2();
-    const state = crypto.randomUUID() + crypto.randomUUID();
-    await query2(sb2.from("sanji_oauth_states").insert({ state: await digest4(state), owner, provider, verifier: crypto.randomUUID(), expires: new Date(Date.now() + oauthLifetimeMs2).toISOString() }));
-    const params = new URLSearchParams({ enable_fb_login: "false", client_id: env2("META_APP_ID"), redirect_uri: base + "/oauth/instagram/callback", response_type: "code", scope: "instagram_business_basic,instagram_business_manage_messages", state });
-    return { url: "https://www.instagram.com/oauth/authorize?" + params, expectedHandle: expected, scopes: ["instagram_business_basic", "instagram_business_manage_messages"], notice: "Meta\uC5D0\uC11C @valu_est\uC640 \uC694\uCCAD \uAD8C\uD55C\uC744 \uD655\uC778\uD55C \uB4A4 \uC9C1\uC811 \uC2B9\uC778\uD558\uC138\uC694. \uC2B9\uC778 \uC804 \uC5F0\uACB0\uC740 \uC0DD\uC131\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4." };
-  }
-  async function callback2(url2, base) {
-    const state = url2.searchParams.get("state") || "";
-    const row = await query2(sb2.from("sanji_oauth_states").select("*").eq("state", await digest4(state)).eq("provider", provider).maybeSingle());
-    const problem = oauthStateProblem2(state, row);
-    if (problem) throw Error(problem);
-    const consumed = await query2(sb2.from("sanji_oauth_states").delete().eq("state", row.state).eq("provider", provider).select("state"));
-    if (!consumed.length) throw Error("\uC774\uBBF8 \uC0AC\uC6A9\uB41C \uC778\uC99D \uC694\uCCAD");
-    const code = url2.searchParams.get("code");
-    if (!code) throw Error("\uACF5\uC2DD \uC778\uC99D\uC774 \uCDE8\uC18C\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
-    const form = new FormData();
-    for (const [k, v] of Object.entries({ client_id: env2("META_APP_ID"), client_secret: env2("META_APP_SECRET"), code, grant_type: "authorization_code", redirect_uri: base + "/oauth/instagram/callback" })) form.set(k, String(v));
-    const token = await remote2("https://api.instagram.com/oauth/access_token", { method: "POST", body: form }, "Instagram \uACF5\uC2DD \uC778\uC99D");
-    const session = await resolveSession(token, remote2, env2("META_APP_SECRET"), env2("META_GRAPH_VERSION") || "v24.0");
-    if (String(session.username || "").replace(/^@/, "").toLowerCase() !== expected || !/^\d+$/.test(String(session.id || ""))) throw Error("\uC5F0\uACB0 \uB300\uC0C1\uC740 @valu_est\uC785\uB2C8\uB2E4. \uB85C\uADF8\uC778\uD55C \uACC4\uC815\uC744 \uD655\uC778\uD558\uC138\uC694.");
-    const checked = await capabilities(session, remote2, env2("META_GRAPH_VERSION") || "v24.0");
-    const safe = { profileVerified: checked.profileVerified === true, messagesReadable: checked.messagesReadable === true, webhookSubscribed: checked.webhookSubscribed === true, checked: checked.checked || null };
-    session.capabilities = safe;
-    await query2(sb2.from("sanji_connections").upsert({ owner: row.owner, provider: "instagram:" + session.id, encrypted: await encrypt2(session), summary: { username: session.username, accountId: session.id, connected: true, apiVerified: true, capabilities: safe, profileChecked: session.profileChecked || null, webhookSetupRequested: false } }, { onConflict: "owner,provider" }));
-    await audit2(row.owner, "creator_instagram_connected", { username: expected, profileVerified: true, messagesReadable: safe.messagesReadable, webhookSetupRequested: false });
-    return { username: expected, messagesReadable: safe.messagesReadable };
-  }
-  return { prepare, callback: callback2 };
-}
-
 // supabase/functions/_shared/creator-instagram-readiness.ts
 function creatorInstagramReadiness(rows, expected = "valu_est") {
   const match = (rows || []).find((r) => String(r.summary?.username || "").replace(/^@/, "").toLowerCase() === expected.toLowerCase());
@@ -3512,7 +3477,6 @@ var creatorRecovery = recoveryService({ sb, query, audit });
 var creatorVisibleImport = visibleImportService({ sb, query, audit });
 var creatorContactReview = creatorContactReviewService({ sb, query, audit });
 var creatorManualDm = creatorManualDmService({ sb, query, audit });
-var creatorInstagramAuth = creatorInstagramOauth({ sb, query, env, key, digest: digest3, encrypt, remote, resolveSession: resolveInstagramSession, capabilities: instagramCapabilities, audit, oauthStateProblem, oauthLifetimeMs });
 var creatorMeta = creatorMetaService({ sb, query, env, connection, saveConnection, audit });
 var apifyTrials = apifyTrialService({ sb, query, env, audit });
 var saveManualReply = manualReplyService({ sb, query, putRecord, audit });
@@ -4003,15 +3967,7 @@ Deno.serve(async (req) => {
         return Response.redirect(frontend + "?creator_meta=error#creators", 302);
       }
     }
-    if (path === "/oauth/instagram/callback" && req.method === "GET") {
-      try {
-        await creatorInstagramAuth.callback(url2, base);
-        return Response.redirect(frontend + "?creator_instagram=connected#creators", 302);
-      } catch {
-        return new Response(null, { status: 302, headers: { Location: oauthErrorRedirect("Instagram \uACF5\uC2DD \uC5F0\uACB0\uC744 \uC644\uB8CC\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. @valu_est \uACC4\uC815\uACFC \uAD8C\uD55C\uC744 \uD655\uC778\uD558\uC138\uC694.", frontend), "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
-      }
-    }
-    if (path.startsWith("/instagram/")) return json({ error: "\uACF5\uC2DD Instagram \uBA54\uC2DC\uC9C0 \uACBD\uB85C\uB294 \uC544\uC9C1 \uBE44\uD65C\uC131\uD654\uB418\uC5B4 \uC788\uC2B5\uB2C8\uB2E4." }, 410);
+    if (path.startsWith("/instagram/") || path === "/oauth/instagram/callback") return json({ error: "\uACF5\uC2DD Instagram API \uC5F0\uB3D9\uC740 \uC81C\uC678\uB410\uC2B5\uB2C8\uB2E4. \uC11C\uBC84 \uB85C\uADF8\uC778 \uAD00\uB9AC\uB97C \uC0AC\uC6A9\uD558\uC138\uC694." }, 410);
     if (/^\/oauth\/(gmail|instagram)\/callback$/.test(path)) {
       try {
         return await callback(req, url2, path.split("/")[2], base);
@@ -4102,13 +4058,6 @@ Deno.serve(async (req) => {
         return json(await creatorManualDm(path, u, input));
       } catch (e) {
         fail(400, String(e.message || "DM \uC218\uB3D9 \uAE30\uB85D \uC2E4\uD328"));
-      }
-    }
-    if (path === "/creator-instagram/oauth/prepare" && req.method === "POST") {
-      try {
-        return json(await creatorInstagramAuth.prepare(u, base));
-      } catch (e) {
-        fail(400, String(e.message || "\uACF5\uC2DD \uC5F0\uACB0 \uC900\uBE44 \uC2E4\uD328"));
       }
     }
     if (path === "/creator-instagram/message-status" && req.method === "GET") {
