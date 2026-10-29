@@ -9,9 +9,10 @@ begin
  if not found or t.data->>'kind'<>'크리에이터' then raise exception '크리에이터 제안 대상 불일치';end if;
  select * into r from public.sanji_creator_contact_review where owner=p_owner and creator_id=(p_data->>'creatorReviewId')::uuid for share;
  if not found or r.version is distinct from (p_data->>'creatorReviewVersion')::integer then raise exception '크리에이터 검토 버전 불일치';end if;
- select * into c from public.sanji_creator_recovery where owner=p_owner and id=r.creator_id;
+ select * into c from public.sanji_creator_recovery where owner=p_owner and id=r.creator_id for share;
  recipient:=lower(coalesce(r.data->'email'->>'address',''));
  if not found or lower(coalesce(c.handle,''))<>lower(coalesce(t.data->>'handle','')) or recipient='' or recipient<>lower(coalesce(p_data->>'email','')) or recipient<>lower(coalesce(t.data->'contact'->>'email','')) or coalesce(r.data->'email'->>'sourceUrl','')<>coalesce(c.profile_url,'') or coalesce(c.profile_url,'')='' then raise exception '공개 이메일 또는 계정 불일치';end if;
+ if coalesce(c.status,'')<>'new' or coalesce(c.bio_status,'')<>'email_present' or jsonb_typeof(c.emails) is distinct from 'array' or not coalesce(c.emails ? recipient,false) or position(recipient in lower(coalesce(c.bio,'')))=0 then raise exception '크리에이터 상태 또는 공개 소개란 이메일 확인 필요';end if;
  if jsonb_typeof(p_data->'emails') is distinct from 'array' or jsonb_array_length(p_data->'emails')<>1 or lower(p_data->'emails'->>0)<>recipient then raise exception '수신자 불일치';end if;
  if p_data->>'subject' is distinct from r.data->'email'->>'subject' or p_data->>'proposalReviewBody' is distinct from r.data->'email'->>'body' or position(coalesce(r.data->'email'->>'body','') in coalesce(p_data->>'body',''))<>1 or coalesce(r.data->'email'->>'body','')='' then raise exception '승인된 본문 또는 제목 불일치';end if;
  if coalesce(r.data->'email'->'observation'->>'status','') in ('scheduled','sent','unknown') then raise exception '외부 발송 이력 확인 필요';end if;
@@ -50,7 +51,7 @@ begin
  if not found or r.version<>p_version then raise exception '검토 버전이 변경되었습니다';end if;
  select * into c from public.sanji_creator_recovery where owner=p_owner and id=p_creator;
  address:=lower(coalesce(r.data->'email'->>'address',''));
- if not found or c.status<>'new' or c.bio_status<>'email_present' or address='' or not (c.emails ? address) or position(address in lower(c.bio))=0 or r.data->'email'->>'sourceUrl'<>c.profile_url then raise exception '공개 소개란 이메일 확인 필요';end if;
+ if not found or coalesce(c.status,'')<>'new' or coalesce(c.bio_status,'')<>'email_present' or address='' or jsonb_typeof(c.emails) is distinct from 'array' or not coalesce(c.emails ? address,false) or position(address in lower(coalesce(c.bio,'')))=0 or r.data->'email'->>'sourceUrl'<>c.profile_url then raise exception '공개 소개란 이메일 확인 필요';end if;
  if coalesce(r.data->'email'->'observation'->>'status','') in ('scheduled','sent','unknown') or exists(select 1 from public.sanji_suppression where owner=p_owner and identity in (address,'email:'||address)) then raise exception '기존 발송 또는 수신 거부 확인 필요';end if;
  select * into t from public.sanji_records where owner=p_owner and kind='candidate' and lower(data->>'handle')=lower(c.handle) limit 1;
  if found then if t.data->>'kind'<>'크리에이터' or lower(coalesce(t.data->'contact'->>'email',''))<>address or coalesce((t.data->'contact'->>'verified')::boolean,false)=false then raise exception '기존 크리에이터 연락처 확인 필요';end if;return t.id;end if;
