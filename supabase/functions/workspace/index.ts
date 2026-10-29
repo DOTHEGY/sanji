@@ -1,3 +1,4 @@
+import {tagbyBatchPreview,tagbyBatchHash} from '../_shared/tagby-batch.ts';
 import {creatorContactReviewService} from '../_shared/creator-contact-review.ts';
 import {isRevokedGoogleRefresh} from '../_shared/gmail-health.ts';
 import {brandAutoService} from '../_shared/brand-auto-service.ts';
@@ -857,6 +858,7 @@ Deno.serve(async (req: Request) => {
     if(path === "/creator-discovery" || path.startsWith("/creator-discovery/")){
       try{return json(await creatorDiscovery.handle(path,req.method,u,input));}catch(e){fail(400,String(e.message||"크리에이터 발굴 실패"));}
     }
+    if((path==='/tagby-observation/preview'||path==='/tagby-observation/commit')&&req.method==='POST'){const b=await input(),rows=await tagbyBatchPreview(u,b.rows,sb,query),hash=await tagbyBatchHash(u,rows);if(path.endsWith('/preview'))return json({rows,hash});if(b.hash!==hash)fail(409,'미리보기와 자료가 다릅니다. 다시 확인하세요.');const count=await query(sb.rpc('sanji_tagby_observation_commit',{p_owner:u,p_rows:rows}));return json({count,noDispatch:true});}
     if(path==='/brand-auto-schedule'&&req.method==='GET')return json(await brandAuto.config(u));
     if(path==='/brand-auto-schedule'&&req.method==='POST'){const b=await input();if(typeof b.enabled!=='boolean')fail(400,'설정값을 확인하세요.');return json(await brandAuto.setConfig(u,b.enabled,String(b.messageType||'')));}
     if (path === "/discovery" || path.startsWith("/discovery/")) {
