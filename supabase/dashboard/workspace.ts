@@ -4327,6 +4327,11 @@ Deno.serve(async (req) => {
     }
     if (path === "/gmail/sync" && req.method === "POST") return json(await gmailSync.sync(u));
     if (path === "/gmail/sync-status" && req.method === "GET") return json(await query(sb.from("sanji_gmail_sync").select("last_checked,cursor,result").eq("owner", u).maybeSingle()) || {});
+    if (path === "/creator-proposal/target" && req.method === "POST") {
+      const b = await input();
+      if (!b.creatorId || !Number.isInteger(b.version)) fail(400, "\uD06C\uB9AC\uC5D0\uC774\uD130 \uAC80\uD1A0 \uC815\uBCF4\uB97C \uD655\uC778\uD558\uC138\uC694.");
+      return json({ target: await query(sb.rpc("sanji_creator_proposal_target", { p_owner: u, p_creator: b.creatorId, p_version: b.version })) });
+    }
     if (path === "/drafts" && req.method === "POST") {
       const rawInput = await input();
       let inputData = draft.parse(rawInput);
