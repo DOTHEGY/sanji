@@ -1,3 +1,4 @@
+import {syncCreatorGmailObservations} from './creator-gmail-observation-sync.ts';
 import {gmailFailure,gmailSyncPaused} from './gmail-health.ts';
 export function decodedPart(part:any):string{try{return part?.body?.data?new TextDecoder().decode(Uint8Array.from(atob(part.body.data.replace(/-/g,"+").replace(/_/g,"/")),x=>x.charCodeAt(0))):"";}catch{return "";}}
 export function deliveryFailures(payload:any){
@@ -36,6 +37,7 @@ export function gmailSyncService({sb,query,records,putRecord,gmailToken,remote,t
 if(inbound.length){humanReplies++;const c=candidates.find((c:any)=>c.id===t.target);if(c&&!opted&&!["회신","거절","수신 거부"].includes(c.status))await putRecord(owner,"candidate",{...c,status:"회신"},c.id);}imported++;
     }catch(e){errors.push({thread:t.id,error:String(e.message||e).slice(0,180)});}
    }));
+   const creatorObservations=await syncCreatorGmailObservations({sb,query,remote,gmailMessages,textBody,hasAttachments:gmailHasAttachments},owner,g,Number(state.result?.creatorObservations?.nextCursor||0));
    let bounceMessages=0;
    if(start===0){
     try{const listing=await remote("https://gmail.googleapis.com/gmail/v1/users/me/messages?"+new URLSearchParams({q:"{from:mailer-daemon from:postmaster} newer_than:90d",maxResults:"30"}),{headers:{Authorization:"Bearer "+g.access_token}});
@@ -49,8 +51,8 @@ if(inbound.length){humanReplies++;const c=candidates.find((c:any)=>c.id===t.targ
     }catch(e){errors.push({stage:"bounce_read",error:String(e.message||e).slice(0,180)});}
    }
    const next=start+batch.length>=threads.length?0:start+batch.length;
-   await query(sb.from("sanji_gmail_sync").update({cursor:next,last_checked:now,lease_until:null,result:{imported,humanReplies,bounceMessages,total:threads.length,remaining:Math.max(0,threads.length-start-batch.length),errors}}).eq("owner",owner));
-   return {status:"synced",imported,humanReplies,bounceMessages,total:threads.length,remaining:Math.max(0,threads.length-start-batch.length),errors};
+   await query(sb.from("sanji_gmail_sync").update({cursor:next,last_checked:now,lease_until:null,result:{imported,humanReplies,bounceMessages,creatorObservations,total:threads.length,remaining:Math.max(0,threads.length-start-batch.length),errors}}).eq("owner",owner));
+   return {status:"synced",imported,humanReplies,bounceMessages,creatorObservations,total:threads.length,remaining:Math.max(0,threads.length-start-batch.length),errors};
   }catch(e){const failure=gmailFailure(e,state.result);await query(sb.from("sanji_gmail_sync").update({lease_until:null,result:failure}).eq("owner",owner));return {status:failure.status,imported:0,retryAt:failure.retryAt};}
  }
  return {sync};

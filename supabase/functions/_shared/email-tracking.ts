@@ -18,7 +18,9 @@ export function trackingLabel(row:any,includeAutomated=false){
  if(row.tracking_result?.applied&&(!row.tracking_id||Date.parse(row.expires)<=Date.now()))return "보관기간 만료 · 통계 제외";
  if(!row.tracking_id)return "추적 미적용";
  if(row.is_test)return "내부 테스트 · 수신자 통계 제외";
- return (includeAutomated?row.first_request:row.first_included)?"열람 추정":"감지 없음";
+ if(row.first_included)return "열람 추정";
+ if(row.first_request)return "자동 요청 의심 · 사람 열람 미확인";
+ return "감지 없음";
 }
 export function emailTrackingService({sb,query,env,audit,baseUrl}:any){
  const activated=()=>env("EMAIL_TRACKING_ACTIVATION_APPROVED")==="true";
