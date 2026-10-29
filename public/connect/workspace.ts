@@ -1173,6 +1173,42 @@ function manualReplyService({ sb: sb2, query: query2, putRecord: putRecord2, aud
   };
 }
 
+// supabase/functions/_shared/creator-gmail-observation-sync.ts
+async function syncCreatorGmailObservations({ sb: sb2, query: query2, remote: remote2, gmailMessages: gmailMessages2, textBody: textBody2, hasAttachments }, owner, g) {
+  const rows = await query2(sb2.from("sanji_creator_contact_review").select("creator_id,version,data").eq("owner", owner).limit(100));
+  let checked = 0, updated = 0;
+  const errors = [];
+  for (const row of rows) {
+    const email = row.data?.email || {}, o = email.observation || {};
+    if (o.provider !== "gmail" || !o.providerMessageId || !["scheduled", "sent", "unknown", "failed"].includes(o.status)) continue;
+    if (checked >= 20) break;
+    checked++;
+    try {
+      const msg = await remote2("https://gmail.googleapis.com/gmail/v1/users/me/messages/" + encodeURIComponent(o.providerMessageId) + "?format=full", { headers: { Authorization: "Bearer " + g.access_token } });
+      if (msg.id !== o.providerMessageId) throw Error("\uBA54\uC2DC\uC9C0 ID \uBD88\uC77C\uCE58");
+      if (!(msg.labelIds || []).includes("SENT")) continue;
+      const parsed = gmailMessages2({ messages: [msg] }, g.email, [], textBody2, hasAttachments)[0];
+      const recipient = String(o.recipient || "").toLowerCase();
+      if (!recipient || !String(parsed?.to || "").toLowerCase().split(/[\s,;<>]+/).includes(recipient)) throw Error("\uC218\uC2E0\uC790 \uBD88\uC77C\uCE58");
+      let reply = false, failed = false;
+      if (msg.threadId) {
+        const thread = await remote2("https://gmail.googleapis.com/gmail/v1/users/me/threads/" + encodeURIComponent(msg.threadId) + "?format=full", { headers: { Authorization: "Bearer " + g.access_token } });
+        const messages = gmailMessages2(thread, g.email, [], textBody2, hasAttachments);
+        reply = messages.some((m) => !m.out && !m.automatic && String(m.replyAddress || "").toLowerCase() === recipient && m.at >= parsed.at);
+        failed = messages.some((m) => m.bounceFailures?.some((f) => f.email === recipient && f.kind === "permanent"));
+      }
+      const next = { ...o, status: failed ? "failed" : "sent", humanReply: reply, providerThreadId: msg.threadId || "", sentAt: parsed.at };
+      const unchanged = ["status", "humanReply", "providerThreadId", "sentAt"].every((k) => o[k] === next[k]);
+      if (unchanged) continue;
+      const changed = await query2(sb2.from("sanji_creator_contact_review").update({ data: { ...row.data, email: { ...email, observation: next } }, version: row.version + 1, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("creator_id", row.creator_id).eq("version", row.version).select("creator_id"));
+      if (changed.length) updated++;
+    } catch {
+      errors.push({ creatorId: row.creator_id, reason: "Gmail \uBA54\uC2DC\uC9C0 \uC870\uD68C \uB610\uB294 \uB300\uC870 \uC2E4\uD328" });
+    }
+  }
+  return { checked, updated, errors };
+}
+
 // supabase/functions/_shared/gmail-sync.ts
 function decodedPart(part) {
   try {
@@ -1251,6 +1287,12 @@ function gmailSyncService({ sb: sb2, query: query2, records: records2, putRecord
           errors.push({ thread: t.id, error: String(e.message || e).slice(0, 180) });
         }
       }));
+      let creatorObservations = { checked: 0, updated: 0, errors: [] };
+      try {
+        creatorObservations = await syncCreatorGmailObservations({ sb: sb2, query: query2, remote: remote2, gmailMessages, textBody: textBody2, hasAttachments: gmailHasAttachments2 }, owner, g);
+      } catch {
+        errors.push({ stage: "creator_observations", error: "\uD06C\uB9AC\uC5D0\uC774\uD130 Gmail \uAD00\uCC30 \uAE30\uB85D \uB3D9\uAE30\uD654 \uC2E4\uD328" });
+      }
       let bounceMessages = 0;
       if (start === 0) {
         try {
@@ -1271,8 +1313,8 @@ function gmailSyncService({ sb: sb2, query: query2, records: records2, putRecord
         }
       }
       const next = start + batch.length >= threads.length ? 0 : start + batch.length;
-      await query2(sb2.from("sanji_gmail_sync").update({ cursor: next, last_checked: now2, lease_until: null, result: { imported, humanReplies, bounceMessages, total: threads.length, remaining: Math.max(0, threads.length - start - batch.length), errors } }).eq("owner", owner));
-      return { status: "synced", imported, humanReplies, bounceMessages, total: threads.length, remaining: Math.max(0, threads.length - start - batch.length), errors };
+      await query2(sb2.from("sanji_gmail_sync").update({ cursor: next, last_checked: now2, lease_until: null, result: { imported, humanReplies, bounceMessages, creatorObservations, total: threads.length, remaining: Math.max(0, threads.length - start - batch.length), errors } }).eq("owner", owner));
+      return { status: "synced", imported, humanReplies, bounceMessages, creatorObservations, total: threads.length, remaining: Math.max(0, threads.length - start - batch.length), errors };
     } catch (e) {
       const failure = gmailFailure(e, state.result);
       await query2(sb2.from("sanji_gmail_sync").update({ lease_until: null, result: failure }).eq("owner", owner));
