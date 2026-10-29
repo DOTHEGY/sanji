@@ -285,7 +285,7 @@ test("Edge function compiles and denies unauthenticated/disallowed-origin reques
       assert.equal(health.status, 200);
       assert.equal((await health.json()).version, 12);
       const callback = await handler(new Request("https://project.example" + prefix + "/oauth/instagram/callback"));
-      assert.equal(callback.status,410);assert.match((await callback.json()).error,/공식 Instagram API 연동은 제외/);
+      assert.equal(callback.status,302);assert.match(callback.headers.get('location'),/oauth_error=/);assert.doesNotMatch(callback.headers.get('location'),/access_token|client_secret/);const disabled=await handler(new Request('https://project.example'+prefix+'/instagram/check'));assert.equal(disabled.status,410);
       assert.equal(
         (
           await handler(
