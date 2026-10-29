@@ -1189,8 +1189,8 @@ Deno.serve(async (req: Request) => {
       const deals = await Promise.all(
         inputData.dealIds.map((id: string) => owned(u, id, "deal")),
       );
-      if (deals.some((d: any) => d.state !== "확정"))
-        fail(400, "협의 중 상품은 제안할 수 없습니다.");
+      if (deals.some((d: any) => d.state !== "확정" && !(inputData.proposalType==='creator_product_proposal' && d.state==='협의 중')))
+        fail(400, "상품의 현재 상태로는 제안할 수 없습니다.");
       if (c.kind === "크리에이터" && !inputData.replyTo && !deals.length)
         fail(400, "상품 1~3개를 선택하세요.");
       const settings = (await records(u, "settings"))[0];
@@ -1267,6 +1267,7 @@ Deno.serve(async (req: Request) => {
       const tracking=await emailTracking.preview(u,{...inputData,body},c.kind==="크리에이터"?"creator":"brand");
       const d = {
           ...inputData,
+          ...(inputData.proposalType==='creator_product_proposal'?{proposalReviewBody:inputData.body}:{}),
           tracking,
           ...(richSignature?{signatureText:richSignature.text,signatureHtml:richSignature.html}:{}),
           ...reply,

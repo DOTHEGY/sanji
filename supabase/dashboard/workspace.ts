@@ -7,6 +7,8 @@ function assertCreatorProposalSnapshot(owner, candidate2, review, creator, input
   if (input.subject !== e.subject || input.body !== e.body || input.signature || input.templateId || input.replyTo || input.recipientMode !== "primary") throw Error("\uC2B9\uC778\uB41C \uC81C\uBAA9 \uB610\uB294 \uBCF8\uBB38\uC774 \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4.");
   if (["scheduled", "sent", "unknown"].includes(e.observation?.status)) throw Error("\uC774\uBBF8 \uC678\uBD80 \uC608\uC57D\xB7\uBC1C\uC1A1\uB410\uAC70\uB098 \uD655\uC778\uC774 \uD544\uC694\uD569\uB2C8\uB2E4.");
   if (!Array.isArray(input.dealIds) || input.dealIds.length < 1 || input.dealIds.length > 3 || new Set(input.dealIds).size !== input.dealIds.length) throw Error("\uC81C\uC548 \uC0C1\uD488 1~3\uAC1C\uB97C \uD655\uC778\uD558\uC138\uC694.");
+  const approved = e.productIds;
+  if (!Array.isArray(approved) || approved.length !== input.dealIds.length || new Set(approved).size !== approved.length || approved.some((id) => !input.dealIds.includes(id))) throw Error("\uC2B9\uC778\uD55C \uC0C1\uD488\uACFC \uC81C\uC548 \uC0C1\uD488\uC774 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
   return { creatorReviewId: creator.id, creatorReviewVersion: review.version, proposalType: "creator_product_proposal" };
 }
 
@@ -131,12 +133,14 @@ function cleanCreatorReview(input) {
   const sig = e.signatureHtml ? gmailSignature(String(e.signatureHtml)) : null;
   const body = content(e.body, 15e3);
   if (sig && (!sig.text || sig.text !== String(e.signatureText || "") || !body.includes(sig.text))) throw Error("\uC11C\uBA85\uACFC \uBCF8\uBB38\uC774 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+  const productIds = e.productIds === void 0 ? [] : e.productIds;
+  if (!Array.isArray(productIds) || productIds.length > 3 || new Set(productIds).size !== productIds.length || productIds.some((id) => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id)))) throw Error("\uC81C\uC548 \uC0C1\uD488\uC744 \uD655\uC778\uD558\uC138\uC694.");
   const email = text(e.address, 254).toLowerCase();
   if (email && !/^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(email)) throw Error("\uC774\uBA54\uC77C \uD615\uC2DD\uC744 \uD655\uC778\uD558\uC138\uC694.");
   if ((o.status || o.actualScheduledAt || o.body) && (!o.sourceUrl || !o.observedAt)) throw Error("\uD0DC\uADF8\uBC14\uC774 \uAD00\uCC30 \uCD9C\uCC98\uC640 \uD655\uC778 \uC2DC\uAC01\uC774 \uD544\uC694\uD569\uB2C8\uB2E4.");
   const statuses = ["not_prepared", "planned", "reviewed", "hold"];
   if (!statuses.includes(e.status || "not_prepared") || !statuses.includes(d.status || "not_prepared")) throw Error("\uAC80\uD1A0 \uC0C1\uD0DC\uB97C \uD655\uC778\uD558\uC138\uC694.");
-  return { email: { address: email, sourceUrl: text(e.sourceUrl, 2e3), subject: content(e.subject, 200), body, signatureHtml: sig?.html || "", signatureText: sig?.text || "", plannedAt: date(e.plannedAt), status: e.status || "not_prepared" }, dm: { body: content(d.body, 5e3), plannedAt: date(d.plannedAt), status: d.status || "not_prepared", campaignUrl: campaign(d.campaignUrl), sourceAccount: text(d.sourceAccount, 100), observation: { status: text(o.status, 100), observedAt: date(o.observedAt), sourceUrl: campaign(o.sourceUrl), actualScheduledAt: date(o.actualScheduledAt), body: content(o.body, 5e3) } } };
+  return { email: { address: email, productIds, sourceUrl: text(e.sourceUrl, 2e3), subject: content(e.subject, 200), body, signatureHtml: sig?.html || "", signatureText: sig?.text || "", plannedAt: date(e.plannedAt), status: e.status || "not_prepared" }, dm: { body: content(d.body, 5e3), plannedAt: date(d.plannedAt), status: d.status || "not_prepared", campaignUrl: campaign(d.campaignUrl), sourceAccount: text(d.sourceAccount, 100), observation: { status: text(o.status, 100), observedAt: date(o.observedAt), sourceUrl: campaign(o.sourceUrl), actualScheduledAt: date(o.actualScheduledAt), body: content(o.body, 5e3) } } };
 }
 function creatorContactReviewService({ sb: sb2, query: query2, audit: audit2 }) {
   return async (path, method, owner, input) => {
@@ -195,6 +199,10 @@ function creatorContactReviewService({ sb: sb2, query: query2, audit: audit2 }) 
       const creator = await query2(sb2.from("sanji_creator_recovery").select("id,emails,profile_url").eq("owner", owner).eq("id", id).maybeSingle());
       if (!creator) throw Error("\uD06C\uB9AC\uC5D0\uC774\uD130\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
       const data = cleanCreatorReview(b.data);
+      for (const productId of data.email.productIds) {
+        const product = await query2(sb2.from("sanji_records").select("id").eq("owner", owner).eq("kind", "deal").eq("id", productId).maybeSingle());
+        if (!product) throw Error("\uC800\uC7A5\uB41C \uC0C1\uD488\uC744 \uD655\uC778\uD558\uC138\uC694.");
+      }
       if (data.email.address) {
         let source;
         try {
@@ -207,6 +215,7 @@ function creatorContactReviewService({ sb: sb2, query: query2, audit: audit2 }) 
       const previous = await query2(sb2.from("sanji_creator_contact_review").select("version,data").eq("owner", owner).eq("creator_id", id).maybeSingle());
       if (previous && Number(b.version) !== previous.version) throw Error("\uB2E4\uB978 \uACF3\uC5D0\uC11C \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uBD88\uB7EC\uC624\uC138\uC694.");
       if (previous?.data?.email?.observation) data.email.observation = previous.data.email.observation;
+      if (b.data?.email?.productIds === void 0 && previous?.data?.email?.productIds) data.email.productIds = previous.data.email.productIds;
       if (previous?.data?.dm?.observationHistory) data.dm.observationHistory = previous.data.dm.observationHistory;
       const version = (previous?.version || 0) + 1;
       if (previous) {
@@ -4343,8 +4352,8 @@ Deno.serve(async (req) => {
       const deals = await Promise.all(
         inputData.dealIds.map((id) => owned(u, id, "deal"))
       );
-      if (deals.some((d2) => d2.state !== "\uD655\uC815"))
-        fail(400, "\uD611\uC758 \uC911 \uC0C1\uD488\uC740 \uC81C\uC548\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      if (deals.some((d2) => d2.state !== "\uD655\uC815" && !(inputData.proposalType === "creator_product_proposal" && d2.state === "\uD611\uC758 \uC911")))
+        fail(400, "\uC0C1\uD488\uC758 \uD604\uC7AC \uC0C1\uD0DC\uB85C\uB294 \uC81C\uC548\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
       if (c.kind === "\uD06C\uB9AC\uC5D0\uC774\uD130" && !inputData.replyTo && !deals.length)
         fail(400, "\uC0C1\uD488 1~3\uAC1C\uB97C \uC120\uD0DD\uD558\uC138\uC694.");
       const settings = (await records(u, "settings"))[0];
@@ -4409,6 +4418,7 @@ Deno.serve(async (req) => {
       const tracking = await emailTracking.preview(u, { ...inputData, body }, c.kind === "\uD06C\uB9AC\uC5D0\uC774\uD130" ? "creator" : "brand");
       const d = {
         ...inputData,
+        ...inputData.proposalType === "creator_product_proposal" ? { proposalReviewBody: inputData.body } : {},
         tracking,
         ...richSignature ? { signatureText: richSignature.text, signatureHtml: richSignature.html } : {},
         ...reply,

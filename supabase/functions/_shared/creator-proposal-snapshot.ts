@@ -7,5 +7,6 @@ export function assertCreatorProposalSnapshot(owner:string,candidate:any,review:
  if(input.subject!==e.subject||input.body!==e.body||input.signature||input.templateId||input.replyTo||input.recipientMode!=='primary')throw Error('승인된 제목 또는 본문이 변경됐습니다.');
  if(['scheduled','sent','unknown'].includes(e.observation?.status))throw Error('이미 외부 예약·발송됐거나 확인이 필요합니다.');
  if(!Array.isArray(input.dealIds)||input.dealIds.length<1||input.dealIds.length>3||new Set(input.dealIds).size!==input.dealIds.length)throw Error('제안 상품 1~3개를 확인하세요.');
+ const approved=e.productIds;if(!Array.isArray(approved)||approved.length!==input.dealIds.length||new Set(approved).size!==approved.length||approved.some((id:string)=>!input.dealIds.includes(id)))throw Error('승인한 상품과 제안 상품이 일치하지 않습니다.');
  return {creatorReviewId:creator.id,creatorReviewVersion:review.version,proposalType:'creator_product_proposal'};
 }
