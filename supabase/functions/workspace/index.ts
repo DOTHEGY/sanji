@@ -1,3 +1,4 @@
+import {assertCreatorProposalSnapshot} from '../_shared/creator-proposal-snapshot.ts';
 import {tagbyBatchPreview,tagbyBatchHash} from '../_shared/tagby-batch.ts';
 import {creatorContactReviewService} from '../_shared/creator-contact-review.ts';
 import {isRevokedGoogleRefresh} from '../_shared/gmail-health.ts';
@@ -1171,6 +1172,12 @@ Deno.serve(async (req: Request) => {
       let inputData = draftSchema.parse(rawInput);
       const
         c = await owned(u, inputData.target, "candidate");
+      if(inputData.proposalType==='creator_product_proposal'){
+        if(!inputData.creatorReviewId||!inputData.creatorReviewVersion)fail(400,'크리에이터 검토 정보가 필요합니다.');
+        const review=await query(sb.from('sanji_creator_contact_review').select('owner,creator_id,version,data').eq('owner',u).eq('creator_id',inputData.creatorReviewId).maybeSingle());
+        const creator=await query(sb.from('sanji_creator_recovery').select('id,owner,handle,profile_url').eq('owner',u).eq('id',inputData.creatorReviewId).maybeSingle());
+        try{assertCreatorProposalSnapshot(u,c,review,creator,inputData);}catch(e){fail(409,String(e.message||'크리에이터 검토 정보 오류'));}
+      }
       if(inputData.templateId){const template=await owned(u,inputData.templateId,"template");if(template.version!==inputData.templateVersion)fail(409,"템플릿이 변경됐습니다. 발송 전 목록을 새로고침하세요.");}
       if (await isBlocked(u, inputData.channel==="email"?{...c,recipientEmails:[],contact:{...c.contact,email:""}}:c)) fail(403, "거절·수신 거부 대상");
       if (

@@ -1,3 +1,15 @@
+// supabase/functions/_shared/creator-proposal-snapshot.ts
+function assertCreatorProposalSnapshot(owner, candidate2, review, creator, input) {
+  if (!owner || !review || review.owner !== owner || !creator || creator.owner !== owner || review.creator_id !== creator.id || review.version !== input.creatorReviewVersion || candidate2.kind !== "\uD06C\uB9AC\uC5D0\uC774\uD130" || candidate2.channel === "manual_dm") throw Error("\uD06C\uB9AC\uC5D0\uC774\uD130 \uAC80\uD1A0 \uC18C\uC720\uC790 \uB610\uB294 \uBC84\uC804\uC774 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+  if (String(candidate2.handle || "").replace(/^@/, "").toLowerCase() !== String(creator.handle || "").toLowerCase()) throw Error("\uD06C\uB9AC\uC5D0\uC774\uD130 \uACC4\uC815\uC774 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+  const e = review.data?.email || {}, address = String(e.address || "").toLowerCase();
+  if (input.channel !== "email" || !address || address !== String(candidate2.contact?.email || "").toLowerCase() || !candidate2.contact?.verified || !creator.profile_url || e.sourceUrl !== creator.profile_url) throw Error("\uACF5\uAC1C \uC774\uBA54\uC77C\uACFC \uCD9C\uCC98\uAC00 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+  if (input.subject !== e.subject || input.body !== e.body || input.signature || input.templateId || input.replyTo || input.recipientMode !== "primary") throw Error("\uC2B9\uC778\uB41C \uC81C\uBAA9 \uB610\uB294 \uBCF8\uBB38\uC774 \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4.");
+  if (["scheduled", "sent", "unknown"].includes(e.observation?.status)) throw Error("\uC774\uBBF8 \uC678\uBD80 \uC608\uC57D\xB7\uBC1C\uC1A1\uB410\uAC70\uB098 \uD655\uC778\uC774 \uD544\uC694\uD569\uB2C8\uB2E4.");
+  if (!Array.isArray(input.dealIds) || input.dealIds.length < 1 || input.dealIds.length > 3 || new Set(input.dealIds).size !== input.dealIds.length) throw Error("\uC81C\uC548 \uC0C1\uD488 1~3\uAC1C\uB97C \uD655\uC778\uD558\uC138\uC694.");
+  return { creatorReviewId: creator.id, creatorReviewVersion: review.version, proposalType: "creator_product_proposal" };
+}
+
 // supabase/functions/_shared/tagby-batch.ts
 async function tagbyBatchPreview(owner, rows, sb2, query2) {
   if (!Array.isArray(rows) || !rows.length || rows.length > 30) throw Error("\uAD00\uCC30 \uC790\uB8CC\uB294 1~30\uD589\uC774\uC5B4\uC57C \uD569\uB2C8\uB2E4.");
@@ -3259,6 +3271,9 @@ var attachment = z.object({
 });
 var draft = z.object({
   target: z.string(),
+  proposalType: z.enum(["standard", "creator_product_proposal"]).optional(),
+  creatorReviewId: z.string().uuid().optional(),
+  creatorReviewVersion: z.number().int().positive().optional(),
   dealIds: z.array(z.string()).max(3).default([]),
   channel: z.enum(["email", "manual_dm", "instagram"]),
   subject: z.string().min(1).max(200).refine((v) => !/[\r\n]/.test(v)),
@@ -4307,6 +4322,16 @@ Deno.serve(async (req) => {
       const rawInput = await input();
       let inputData = draft.parse(rawInput);
       const c = await owned(u, inputData.target, "candidate");
+      if (inputData.proposalType === "creator_product_proposal") {
+        if (!inputData.creatorReviewId || !inputData.creatorReviewVersion) fail(400, "\uD06C\uB9AC\uC5D0\uC774\uD130 \uAC80\uD1A0 \uC815\uBCF4\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.");
+        const review = await query(sb.from("sanji_creator_contact_review").select("owner,creator_id,version,data").eq("owner", u).eq("creator_id", inputData.creatorReviewId).maybeSingle());
+        const creator = await query(sb.from("sanji_creator_recovery").select("id,owner,handle,profile_url").eq("owner", u).eq("id", inputData.creatorReviewId).maybeSingle());
+        try {
+          assertCreatorProposalSnapshot(u, c, review, creator, inputData);
+        } catch (e) {
+          fail(409, String(e.message || "\uD06C\uB9AC\uC5D0\uC774\uD130 \uAC80\uD1A0 \uC815\uBCF4 \uC624\uB958"));
+        }
+      }
       if (inputData.templateId) {
         const template2 = await owned(u, inputData.templateId, "template");
         if (template2.version !== inputData.templateVersion) fail(409, "\uD15C\uD50C\uB9BF\uC774 \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4. \uBC1C\uC1A1 \uC804 \uBAA9\uB85D\uC744 \uC0C8\uB85C\uACE0\uCE68\uD558\uC138\uC694.");
