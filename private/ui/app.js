@@ -446,25 +446,22 @@ function showMatches() {
       ? button("선택한 조합으로 제안 작성", "matched-compose", "", true)
       : '<div class="empty">크리에이터와 상품을 추가하고 공개 주제를 기록하세요.</div>');
 }
-function templatesPage() {
-  $("#app").innerHTML =
-    head(
-      "직접 작성하는 제안 템플릿",
-      "여기에 공통 카피를 저장하세요. AI는 제안 작성 화면에서 앞 1~2줄만 만들고 공통 본문은 그대로 둡니다.",
-      button("＋ 템플릿 추가", "add-template", "", true),
-    ) +
-    `<div class="cards">${data.templates.map((t) => `<article class="panel">${tag(t.channel)}<h3>${esc(t.name)}</h3><p class="sub">${esc(t.subject)}</p><div class="message">${esc(t.body)}</div>${button("편집", "edit-template", t.id)} ${button("사용", "use-template", t.id)}</article>`).join("") || '<div class="panel empty">직접 작성한 메일·DM 카피를 저장하세요.</div>'}</div>`;
+let templateLibraryRows=[];
+async function templatesPage(){
+ $('#app').innerHTML=head('템플릿','저장한 카피를 수정하거나 보관할 수 있습니다. 자동 발송 설정과 기존 예약은 별도로 유지됩니다.',button('＋ 템플릿 추가','library-add','',true))+'<div class="panel">불러오는 중…</div>';
+ try{const r=await api('/template-library');templateLibraryRows=r.rows||[];const card=t=>`<article class="panel">${tag(t.data.channel)}<h3>${esc(t.data.name)}</h3><p class="sub">${esc(t.data.subject)}</p><div class="message">${esc(t.data.body)}</div>${t.archived?button('복구','library-restore',t.id):button('수정','library-edit',t.id)+' '+button('사용','library-use',t.id)+' '+button('보관','library-archive',t.id)}</article>`;const active=templateLibraryRows.filter(t=>!t.archived),archived=templateLibraryRows.filter(t=>t.archived);$('#app').innerHTML=head('템플릿','라이브러리 수정·보관은 기존 자동 발송과 예약을 바꾸지 않습니다.',button('＋ 템플릿 추가','library-add','',true))+`<div class="panel"><h2>자동 발송 본문</h2><p class="fine">저장용 템플릿과 별개로 관리합니다. 기존 예약 내용은 수정하지 않습니다.</p>${button('발송 문단 확인·변경','outbound-profile')}</div><div class="cards">${active.map(card).join('')||'<div class="panel empty">저장된 템플릿이 없습니다.</div>'}</div><details class="panel"><summary>보관된 템플릿 ${archived.length}개</summary><div class="cards">${archived.map(card).join('')||'<p class="fine">보관된 템플릿이 없습니다.</p>'}</div></details>`;}catch(e){const legacy=(data.templates||[]);$('#app').innerHTML=head('템플릿','새 라이브러리를 불러오지 못했습니다. 기존 템플릿은 읽기 전용으로 사용할 수 있습니다.')+'<p class="notice">'+esc(e.message||'템플릿을 불러오지 못했습니다.')+'</p><div class="cards">'+legacy.map(t=>'<article class="panel"><h3>'+esc(t.name)+'</h3><div class="message">'+esc(t.body)+'</div>'+button('사용','use-template',t.id)+'</article>').join('')+'</div>';}
 }
+function libraryTemplateForm(id=''){const row=templateLibraryRows.find(t=>t.id===id),t=row?.data||{channel:'이메일',purpose:'brand_proposal'};modal(`<h2>${id?'템플릿 수정':'템플릿 추가'}</h2><form id="library-template-form" data-id="${esc(id)}" data-version="${Number(row?.version||0)}">${field('name','템플릿 이름',t.name)}${field('channel','채널',t.channel,'text',['이메일','Instagram DM'])}${field('purpose','용도',t.purpose,'text',['brand_proposal','brand_reply','creator_proposal'])}${field('subject','제목',t.subject)}${field('body','본문',t.body,'textarea')}${field('signature','서명',t.signature,'textarea')}<p class="fine">저장·보관해도 자동 발송과 이미 예약된 메일은 변경되지 않습니다.</p><button class="primary" type="submit">저장</button></form>`);}
 function templateForm(id = "") {
   const t = data.templates.find((t) => t.id === id) || { channel: "이메일" };
   modal(
     `<h2>템플릿 편집</h2><form id="template-form" data-id="${esc(id)}">${field("name", "템플릿 이름", t.name)}${field("channel", "채널", t.channel, "text", ["이메일", "Instagram DM"])}${field("subject", "제목", t.subject)}<p class="fine">제목은 입력한 원문 그대로 저장하고 발송 전 업체 메일에 반영합니다.</p><p class="fine">사용 가능 변수: {{회사명}}, {{브랜드명}}, {{제품명}}, {{크리에이터명}}, {{공동구매가}}, {{일정}}. 본문에 {{개인화}}를 넣으면 그 위치에 개인화 1~2문장이 들어갑니다. 없으면 본문 앞에 붙습니다.</p>${field("body", "공통 본문 카피 · AI 수정 없음", t.body, "textarea")}${field("aiEnabled", "수신자별 AI 도입부 1~2줄 제안 사용", t.aiEnabled ?? true, "checkbox")}${field("personalizationGuide", "개인화 작성 지침 · AI에는 이 지침과 공개 근거만 전달", t.personalizationGuide || "", "textarea")}${field("signature", "서명", t.signature, "textarea")}<p class="template-sync-note">저장하면 연결된 발송 전 업체의 제목·본문·서명에 바로 반영됩니다. 업체별 개인화는 유지됩니다. 이전 미리보기와 대기 중인 예약은 재승인이 필요하며, 이미 보낸 원문은 바뀌지 않습니다.</p><button class="primary" type="submit">저장하고 발송 전 메일에 반영</button></form>`,
   );
 }
-function compose(target = "", ds = [], templateId = "", replyTo = "") {
+function compose(target = "", ds = [], templateId = "", replyTo = "", libraryTemplate = null) {
   close();
-  if (!templateId && !replyTo) templateId = data.templates.find(t => t.channel === "이메일")?.id || "";
-  const t = data.templates.find((t) => t.id === templateId) || {
+  if (!templateId && !replyTo && !libraryTemplate) templateId = data.templates.find(t => t.channel === "이메일" && !["brand_reply","creator_proposal","brand_auto_profile"].includes(t.purpose))?.id || "";
+  const t = libraryTemplate || data.templates.find((t) => t.id === templateId) || {
     subject: replyTo
       ? "Re: " + data.threads.find((t) => t.id === replyTo).subject
       : "",
@@ -978,6 +975,10 @@ const listText = (v) =>
     .filter(Boolean);
 let tagbyBatchDraft=null;
 document.addEventListener("submit", async (e) => {
+  if(e.target.id==='outbound-profile-form'){e.preventDefault();const form=e.target,f=new FormData(form);try{await api('/brand-outbound-profile','POST',{revision:Number(form.dataset.revision),oldParagraph:String(f.get('oldParagraph')||''),newParagraph:String(f.get('newParagraph')||'')});close();toast('이후 자동 발송 본문을 변경했습니다. 기존 예약은 유지됩니다.');}catch(err){toast(err.message);}return;}
+
+  if(e.target.id==='library-template-form'){e.preventDefault();const form=e.target,f=new FormData(form),id=form.dataset.id;try{await api('/template-library','POST',{action:id?'edit':'create',id,version:Number(form.dataset.version),data:{name:f.get('name'),channel:f.get('channel'),purpose:f.get('purpose'),subject:f.get('subject'),body:f.get('body'),signature:f.get('signature')}});close();await templatesPage();toast('템플릿을 저장했습니다. 기존 예약은 유지됩니다.');}catch(err){toast(err.message);}return;}
+
   if(e.target.id==='tagby-batch-preview'){e.preventDefault();tagbyBatchDraft=null;const target=$('#tagby-batch-result');try{const parsed=JSON.parse(new FormData(e.target).get('rows')),rows=Array.isArray(parsed)?parsed:parsed.rows,r=await api('/tagby-observation/preview','POST',{rows});tagbyBatchDraft={rows,hash:r.hash};target.innerHTML='<p>직접 확인한 '+r.rows.length+'건 · 실제 발송 없음</p><pre class="mail-letter">'+esc(JSON.stringify(r.rows,null,2))+'</pre><button type="button" data-action="tagby-batch-commit">관찰 결과 저장</button>'; }catch(err){target.textContent=err.message;}return;}
 
   if(e.target.id==='brand-auto-settings'){e.preventDefault();try{const f=new FormData(e.target),enabled=f.has('enabled');await api('/brand-auto-schedule','POST',{enabled,messageType:f.get('messageType')||''});toast(enabled?'신규 검증 브랜드 자동 예약을 켰습니다.':'브랜드 자동 예약을 껐습니다.');await discoveryPage();}catch(err){toast(err.message);}return;}
@@ -1191,6 +1192,12 @@ const actions = {
       ? dealForm()
       : toast("브랜드·공급사를 먼저 추가하세요."),
   "edit-deal": (id) => dealForm(id),
+  "outbound-profile":async()=>{const p=await api('/brand-outbound-profile');if(!p.configured)return toast('현재 자동 발송 본문을 확인할 수 없습니다.');const replacement='귀사의 브랜드와 크리에이터 공동구매 협업을 진행해보고 싶습니다. 공구 가능 조건을 간단히 공유 부탁드립니다. 저희가 적합한 크리에이터 후보와 채널 자료, 구체적인 진행안을 정리해 제안드리겠습니다.';modal(`<h2>자동 발송 본문</h2><p class="fine">새 본문은 이후 작성분에만 적용됩니다. 기존 예약과 라이브러리는 바뀌지 않습니다.</p><p>제목: ${esc(p.subject||'')}</p><div class="mail-letter">${esc(p.body||'')}</div><form id="outbound-profile-form" data-revision="${Number(p.revision)}"><label>바꿀 기존 문단<textarea name="oldParagraph" required></textarea></label><label>새 문단<textarea name="newParagraph" required>${esc(replacement)}</textarea></label><button type="submit">문단 변경 저장</button></form>`);},
+  "library-add":()=>libraryTemplateForm(),
+  "library-edit":id=>libraryTemplateForm(id),
+  "library-use":id=>{const row=templateLibraryRows.find(t=>t.id===id&&!t.archived);if(row)compose('',[],'','',row.data);},
+  "library-archive":async id=>{const row=templateLibraryRows.find(t=>t.id===id&&!t.archived);if(!row)return;await api('/template-library','POST',{action:'archive',id,version:row.version});await templatesPage();},
+  "library-restore":async id=>{const row=templateLibraryRows.find(t=>t.id===id&&t.archived);if(!row)return;await api('/template-library','POST',{action:'restore',id,version:row.version});await templatesPage();},
   "add-template": () => templateForm(),
   "edit-template": (id) => templateForm(id),
   "use-template": (id) => compose("", [], id),

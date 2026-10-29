@@ -1,3 +1,4 @@
+import {templateLibraryService} from '../_shared/template-library.ts';
 import {assertCreatorProposalSnapshot} from '../_shared/creator-proposal-snapshot.ts';
 import {tagbyBatchPreview,tagbyBatchHash} from '../_shared/tagby-batch.ts';
 import {creatorContactReviewService} from '../_shared/creator-contact-review.ts';
@@ -169,6 +170,7 @@ const creatorDiscovery = creatorDiscoveryService({sb,query,audit,env});
 const creatorRecovery = recoveryService({sb,query,audit});
 const creatorVisibleImport = visibleImportService({sb,query,audit});
 const creatorContactReview=creatorContactReviewService({sb,query,audit});
+const templateLibrary=templateLibraryService({sb,query,audit});
 const creatorMeta = creatorMetaService({sb,query,env,connection,saveConnection,audit});
 const apifyTrials=apifyTrialService({sb,query,env,audit});
 const saveManualReply=manualReplyService({sb,query,putRecord,audit});
@@ -850,6 +852,9 @@ Deno.serve(async (req: Request) => {
       try{return json(await creatorLocal.admin(path,u,await input()));}catch(e){fail(400,String(e.message||"PC 실행기 설정 실패"));}
     }
     if(path==="/email-tracking"||path.startsWith("/email-tracking/"))return json(await emailTracking.handle(path,req.method,u,input,url.searchParams));
+    if(path==='/brand-outbound-profile'&&req.method==='GET'){const p=await query(sb.from('sanji_brand_outbound_profile').select('*').eq('owner',u).maybeSingle());if(!p)return json({configured:false});const t=await owned(u,p.template_id,'template');return json({configured:true,revision:p.revision,templateVersion:p.template_version,currentVersion:t.version,subject:t.subject,body:t.body,signature:t.signature});}
+    if(path==='/brand-outbound-profile'&&req.method==='POST'){const b=await input();if(!Number.isInteger(b.revision)||typeof b.oldParagraph!=='string'||typeof b.newParagraph!=='string')fail(400,'자동 발송 문단과 버전을 확인하세요.');const result=await query(sb.rpc('sanji_brand_outbound_replace',{p_owner:u,p_revision:b.revision,p_old:b.oldParagraph,p_new:b.newParagraph})),p=Array.isArray(result)?result[0]:result;await audit(u,'brand_outbound_profile_revised',{revision:p.revision,existingSchedulesUnchanged:true});return json({revision:p.revision});}
+    if(path==='/template-library'){try{return json(await templateLibrary(req.method,u,input));}catch(e){fail(400,String(e.message||'템플릿 저장 오류'));}}
     if(path==='/creator-contact-review'||path==='/creator-contact-review/move'||path==='/creator-contact-review/import'||path==='/creator-contact-review/receipt'){try{return json(await creatorContactReview(path,req.method,u,input));}catch(e){fail(400,String(e.message||'크리에이터 검토 저장 실패'));}}
     if(path==='/creator-recovery/import-visible'&&req.method==='POST'){try{return json(await creatorVisibleImport(u,await input()));}catch(e){fail(400,String(e.message||'후보 가져오기 실패'));}}
     if(path.startsWith('/creator-meta/')){try{return json(await creatorMeta.handle(path,req.method,u,input,base,url.searchParams));}catch(e){fail(400,String(e.message||'공식 API 연결 실패'));}}

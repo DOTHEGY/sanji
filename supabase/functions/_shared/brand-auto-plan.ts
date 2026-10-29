@@ -9,7 +9,7 @@ export function planAutomaticBrand({lead,template,enabledSince,now=new Date(),th
  if(!discovered||!Number.isFinite(Date.parse(discovered))||Date.parse(discovered)<Date.parse(enabledSince))return {eligible:false,reason:'활성화 이전 또는 발견 시각 미확인'};
  if(Date.parse(discovered)>new Date(now).getTime())return {eligible:false,reason:'발견 시각이 미래입니다.'};
  if(lead?.status==='blocked'||data.duplicateNote)return {eligible:false,reason:'중복 또는 차단된 업체'};
- if(!template?.id||!template?.version||template?.data?.channel!=='이메일'||!['brand_proposal',undefined].includes(template.data.purpose))return {eligible:false,reason:'브랜드 이메일 템플릿이 없습니다.'};
+ if(!template?.id||!template?.version||template?.data?.channel!=='이메일'||!['brand_proposal','brand_auto_profile',undefined].includes(template.data.purpose))return {eligible:false,reason:'브랜드 이메일 템플릿이 없습니다.'};
  const refreshed=leadOutreach(template,data,new Date(now).toISOString());
  const enriched={...data,outreach:refreshed},review=assessMailLead(enriched,permanentFailureEmails(threads,suppression));
  if(!review.allowed)return {eligible:false,reason:'검토 대기: '+review.reasons.join(' / ')};

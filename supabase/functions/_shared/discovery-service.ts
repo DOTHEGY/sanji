@@ -1,3 +1,4 @@
+import {selectedBrandTemplate} from './outbound-profile.ts';
 import {assessMailLead,assessDispatch,contactResearchState,editorialSource,validBrandName,permanentFailureEmails} from "./mail-integrity.ts";
 import {searchProduct} from "./product-search.ts";
 import { researchBrand } from "./brand-research.ts";
@@ -187,7 +188,7 @@ export function discoveryService(deps:any){
      emails=duplicate?0:data.contacts.filter((c:any)=>!c.excluded&&!c.excludeFromOutreach&&!known.has(c.email.toLowerCase())&&!priorContacts.some((p:any)=>p.email.toLowerCase()===c.email.toLowerCase())).length;
      companies=!duplicate&&!priorContacts.length&&emails>0?1:0;
      if(duplicate){data.duplicateNote="기존 업체와 이메일 중복 · 별도 신규 제안 차단";}
-     if(companies){data.firstEmailAt=data.firstEmailAt||new Date().toISOString();data.discoveredDay=day();const ts=await query(sb.from("sanji_records").select("id,data,version,updated").eq("owner",u).eq("kind","template").order("updated",{ascending:true}).limit(20));const t=ts.find((t:any)=>t.data.channel==="이메일"&&t.data.purpose!=="brand_reply"&&t.data.purpose!=="creator_proposal");if(t){const researched=researchBrand(data,t);data.outreach=researched.outreach;data.research=researched.research;}}
+     if(companies){data.firstEmailAt=data.firstEmailAt||new Date().toISOString();data.discoveredDay=day();const t=await selectedBrandTemplate(sb,query,u);if(t){const researched=researchBrand(data,t);data.outreach=researched.outreach;data.research=researched.research;}}
      data.error=crawled.error||"";
     }catch(e){data.error=String(e.message||"수집 실패").slice(0,400);error=data.error;data.contacts=data.contacts||[];data.checked=new Date().toISOString();}
     await query(sb.from("sanji_discovery_leads").update({data,status:duplicate?"blocked":"review",updated:new Date().toISOString()}).eq("owner",u).eq("id",lead.id));processed=1;
@@ -248,8 +249,7 @@ export function discoveryService(deps:any){
    const found=await searchProduct(data.outreach?.brandName||data.name,publicFetch);
    data.marketProductEvidence=found.products;data.productLookup={...found,attempts:Number(data.productLookup?.attempts||0)+1};
   }
-  const ts=await query(sb.from("sanji_records").select("id,data,version,updated").eq("owner",u).eq("kind","template").order("updated").limit(20));
-  const t=ts.find((t:any)=>t.data.channel==="이메일"&&t.data.purpose!=="brand_reply"&&t.data.purpose!=="creator_proposal"),result=researchBrand(data,t);
+  const t=await selectedBrandTemplate(sb,query,u),result=researchBrand(data,t);
   result.research.attempts=Number(data.research?.attempts||0)+1;
   if(data.outreach?.sendBlockedReason){result.outreach.sendBlockedReason=data.outreach.sendBlockedReason;result.research.ownership="research_pending";result.research.reason=data.outreach.sendBlockedReason;}
   const excluded=!!data.outreach?.sendBlockedReason&&result.research.attempts>=3;
