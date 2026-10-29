@@ -46,6 +46,7 @@ function creatorManualDmService({ sb: sb2, query: query2, audit: audit2 }) {
     if (!/^[0-9a-f-]{36}$/i.test(id) || !Number.isInteger(version) || version < 1) throw Error("\uD06C\uB9AC\uC5D0\uC774\uD130\uC640 \uAC80\uD1A0 \uBC84\uC804\uC744 \uD655\uC778\uD558\uC138\uC694.");
     const row = await query2(sb2.from("sanji_creator_contact_review").select("creator_id,version,data").eq("owner", owner).eq("creator_id", id).maybeSingle()), creator = await query2(sb2.from("sanji_creator_recovery").select("id,handle,profile_url").eq("owner", owner).eq("id", id).maybeSingle());
     if (!row || !creator) throw Error("\uD574\uB2F9 \uD06C\uB9AC\uC5D0\uC774\uD130\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+    if (row.version !== version) throw Error("\uB2E4\uB978 \uACF3\uC5D0\uC11C \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uBD88\uB7EC\uC624\uC138\uC694.");
     const dm = row.data?.dm || {}, events = Array.isArray(dm.manualEvents) ? dm.manualEvents : [];
     let next;
     if (path === "/creator-contact-review/dm-event") {
@@ -74,7 +75,6 @@ function creatorManualDmService({ sb: sb2, query: query2, audit: audit2 }) {
       if (text3.length > 5e3) throw Error("\uB2F5\uC7A5 \uCD08\uC548\uC740 5000\uC790 \uC774\uD558\uC785\uB2C8\uB2E4.");
       next = { ...dm, replyDraft: text3 };
     } else throw Error("\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uC791\uC5C5");
-    if (row.version !== version) throw Error("\uB2E4\uB978 \uACF3\uC5D0\uC11C \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uBD88\uB7EC\uC624\uC138\uC694.");
     const changed = await query2(sb2.from("sanji_creator_contact_review").update({ data: { ...row.data, dm: next }, version: row.version + 1, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("creator_id", id).eq("version", version).select("creator_id"));
     if (!changed.length) throw Error("\uB2E4\uB978 \uACF3\uC5D0\uC11C \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uBD88\uB7EC\uC624\uC138\uC694.");
     await audit2(owner, "creator_dm_manual_recorded", { creator: id, kind: path.endsWith("dm-event") ? b.event.kind : "reply_draft", noDispatch: true });
