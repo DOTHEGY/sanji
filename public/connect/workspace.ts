@@ -1841,7 +1841,9 @@ function trackingLabel(row, includeAutomated = false) {
   if (row.tracking_result?.applied && (!row.tracking_id || Date.parse(row.expires) <= Date.now())) return "\uBCF4\uAD00\uAE30\uAC04 \uB9CC\uB8CC \xB7 \uD1B5\uACC4 \uC81C\uC678";
   if (!row.tracking_id) return "\uCD94\uC801 \uBBF8\uC801\uC6A9";
   if (row.is_test) return "\uB0B4\uBD80 \uD14C\uC2A4\uD2B8 \xB7 \uC218\uC2E0\uC790 \uD1B5\uACC4 \uC81C\uC678";
-  return (includeAutomated ? row.first_request : row.first_included) ? "\uC5F4\uB78C \uCD94\uC815" : "\uAC10\uC9C0 \uC5C6\uC74C";
+  if (row.first_included) return "\uC5F4\uB78C \uCD94\uC815";
+  if (row.first_request) return "\uC790\uB3D9 \uC694\uCCAD \uC758\uC2EC \xB7 \uC0AC\uB78C \uC5F4\uB78C \uBBF8\uD655\uC778";
+  return "\uAC10\uC9C0 \uC5C6\uC74C";
 }
 function emailTrackingService({ sb: sb2, query: query2, env: env2, audit: audit2, baseUrl }) {
   const activated = () => env2("EMAIL_TRACKING_ACTIVATION_APPROVED") === "true";
