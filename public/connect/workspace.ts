@@ -1,3 +1,27 @@
+// supabase/functions/_shared/template-library.ts
+function templateLibraryService({ sb: sb2, query: query2, audit: audit2 }) {
+  return async (method, owner, input) => {
+    if (method === "GET") {
+      const rows = await query2(sb2.from("sanji_template_library").select("id,data,version,archived,updated").eq("owner", owner).order("updated", { ascending: false }));
+      return { rows };
+    }
+    if (method !== "POST") throw Error("\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uC791\uC5C5");
+    const b = await input(), action = String(b.action || "");
+    if (!["create", "edit", "archive", "restore"].includes(action)) throw Error("\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uC791\uC5C5");
+    let data = null;
+    if (["create", "edit"].includes(action)) {
+      const x = b.data || {}, name = String(x.name || "").trim(), channel = String(x.channel || ""), subject = String(x.subject ?? ""), body = String(x.body ?? ""), signature = String(x.signature ?? "");
+      if (!name || name.length > 200 || !["\uC774\uBA54\uC77C", "Instagram DM"].includes(channel) || subject.length > 200 || /[\r\n]/.test(subject) || !body.trim() || body.length > 15e3 || signature.length > 5e3) throw Error("\uD15C\uD50C\uB9BF \uC774\uB984\xB7\uCC44\uB110\xB7\uB0B4\uC6A9\uC744 \uD655\uC778\uD558\uC138\uC694");
+      data = { name, channel, subject, body, signature, purpose: ["brand_proposal", "brand_reply", "creator_proposal"].includes(x.purpose) ? x.purpose : "brand_proposal" };
+    }
+    if (action !== "create" && (!/^[0-9a-f-]{36}$/i.test(String(b.id || "")) || !Number.isInteger(b.version) || b.version < 1)) throw Error("\uD15C\uD50C\uB9BF \uBC84\uC804\uC744 \uD655\uC778\uD558\uC138\uC694");
+    const result = await query2(sb2.rpc("sanji_template_library_change", { p_owner: owner, p_action: action, p_id: action === "create" ? null : b.id, p_version: action === "create" ? null : b.version, p_data: data }));
+    const row = Array.isArray(result) ? result[0] : result;
+    await audit2(owner, "template_library_changed", { id: row.id, version: row.version, action, noOutboundChange: true });
+    return { row };
+  };
+}
+
 // supabase/functions/_shared/creator-proposal-snapshot.ts
 function assertCreatorProposalSnapshot(owner, candidate2, review, creator, input) {
   if (!owner || !review || review.owner !== owner || !creator || creator.owner !== owner || review.creator_id !== creator.id || review.version !== input.creatorReviewVersion || candidate2.kind !== "\uD06C\uB9AC\uC5D0\uC774\uD130" || candidate2.channel === "manual_dm") throw Error("\uD06C\uB9AC\uC5D0\uC774\uD130 \uAC80\uD1A0 \uC18C\uC720\uC790 \uB610\uB294 \uBC84\uC804\uC774 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
@@ -246,6 +270,18 @@ function gmailSyncPaused(result, now2 = Date.now()) {
 }
 function isRevokedGoogleRefresh(url2, body, response) {
   return url2 === "https://oauth2.googleapis.com/token" && body instanceof URLSearchParams && body.get("grant_type") === "refresh_token" && response?.error === "invalid_grant";
+}
+
+// supabase/functions/_shared/outbound-profile.ts
+async function selectedBrandTemplate(sb2, query2, owner) {
+  const result = await query2(sb2.from("sanji_brand_outbound_profile").select("template_id,template_version,revision").eq("owner", owner).maybeSingle()), profile = Array.isArray(result) ? result[0] || null : result;
+  if (profile) {
+    const t = await query2(sb2.from("sanji_records").select("id,data,version,updated").eq("owner", owner).eq("kind", "template").eq("id", profile.template_id).maybeSingle());
+    if (!t || t.version !== profile.template_version) throw Error("\uC790\uB3D9 \uBC1C\uC1A1 \uBCF8\uBB38 \uC124\uC815\uC774 \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4. \uD655\uC778\uC774 \uD544\uC694\uD569\uB2C8\uB2E4.");
+    return t;
+  }
+  const rows = await query2(sb2.from("sanji_records").select("id,data,version,updated").eq("owner", owner).eq("kind", "template").order("updated", { ascending: true }).limit(20));
+  return rows.find((x) => x.data.channel === "\uC774\uBA54\uC77C" && !["brand_reply", "creator_proposal", "brand_auto_profile"].includes(x.data.purpose)) || null;
 }
 
 // supabase/functions/_shared/contact-safety.ts
@@ -585,8 +621,12 @@ function renderLeadText(text3, brand, product, intro = "") {
   return body.includes("{{\uAC1C\uC778\uD654}}") ? body.split("{{\uAC1C\uC778\uD654}}").join(intro) : (intro ? intro + "\n\n" : "") + body;
 }
 function leadOutreach(template2, lead, time = (/* @__PURE__ */ new Date()).toISOString()) {
-  const old = lead.outreach || {}, brand = old.brandName || lead.name || lead.company || "\uC5C5\uCCB4", product = old.productName || lead.product || "\uACF5\uB3D9\uAD6C\uB9E4 \uD611\uC758 \uAC00\uB2A5\uD55C \uC0C1\uD488", intro = template2.data.copyFlow === "product_interest_v1" && old.proposalType !== "manufacturer_supply" ? productInterestIntro(product, old.intro || "") : old.intro || "";
-  const readyIntro = intro || "\uADC0\uC0AC\uC758 \uBE0C\uB79C\uB4DC\uC640 \uD06C\uB9AC\uC5D0\uC774\uD130 \uACF5\uB3D9\uAD6C\uB9E4 \uD611\uC5C5\uC744 \uC9C4\uD589\uD574\uBCF4\uACE0 \uC2F6\uC2B5\uB2C8\uB2E4. \uACF5\uB3D9\uAD6C\uB9E4 \uB2F4\uB2F9\uC790\uBD84\uC744 \uD3B8\uD558\uAC8C \uC5F0\uACB0\uD574\uC8FC\uC2DC\uBA74 \uAC10\uC0AC\uD558\uACA0\uC2B5\uB2C8\uB2E4. \uC800\uD76C\uAC00 \uC801\uD569\uD55C \uD06C\uB9AC\uC5D0\uC774\uD130 \uD6C4\uBCF4\uC640 \uCC44\uB110 \uC790\uB8CC, \uAD6C\uCCB4\uC801\uC778 \uC9C4\uD589\uC548\uC744 \uC815\uB9AC\uD574 \uC81C\uC548\uB4DC\uB9AC\uACA0\uC2B5\uB2C8\uB2E4.";
+  const old = lead.outreach || {}, brand = old.brandName || lead.name || lead.company || "\uC5C5\uCCB4", product = old.productName || lead.product || "\uACF5\uB3D9\uAD6C\uB9E4 \uD611\uC758 \uAC00\uB2A5\uD55C \uC0C1\uD488", legacyFallback = "\uADC0\uC0AC\uC758 \uBE0C\uB79C\uB4DC\uC640 \uD06C\uB9AC\uC5D0\uC774\uD130 \uACF5\uB3D9\uAD6C\uB9E4 \uD611\uC5C5\uC744 \uC9C4\uD589\uD574\uBCF4\uACE0 \uC2F6\uC2B5\uB2C8\uB2E4. \uACF5\uB3D9\uAD6C\uB9E4 \uB2F4\uB2F9\uC790\uBD84\uC744 \uD3B8\uD558\uAC8C \uC5F0\uACB0\uD574\uC8FC\uC2DC\uBA74 \uAC10\uC0AC\uD558\uACA0\uC2B5\uB2C8\uB2E4. \uC800\uD76C\uAC00 \uC801\uD569\uD55C \uD06C\uB9AC\uC5D0\uC774\uD130 \uD6C4\uBCF4\uC640 \uCC44\uB110 \uC790\uB8CC, \uAD6C\uCCB4\uC801\uC778 \uC9C4\uD589\uC548\uC744 \uC815\uB9AC\uD574 \uC81C\uC548\uB4DC\uB9AC\uACA0\uC2B5\uB2C8\uB2E4.", profile = template2.data.purpose === "brand_auto_profile";
+  let source = old.intro || "";
+  if (profile && source.includes(legacyFallback)) source = source.replace(legacyFallback, "").trim();
+  let intro = template2.data.copyFlow === "product_interest_v1" && old.proposalType !== "manufacturer_supply" ? productInterestIntro(product, source) : source;
+  if (profile) intro = intro.replace(/공동구매 담당자분을 편하게 연결해주시면 감사하겠습니다[.!]?/g, "").replace(/저희가 적합한 크리에이터 후보와 채널 자료,?\s*구체적인 진행안을 정리해 제안드리겠습니다[.!]?/g, "").trim();
+  const readyIntro = intro || (profile ? "" : legacyFallback);
   return { ...old, brandName: brand, companyName: brand, productName: product, intro: readyIntro, draftMode: intro ? old.draftMode || "product" : "brand_first", subject: renderLeadText(template2.data.subject, brand, product), body: dedupeProposal(renderLeadText(template2.data.body, brand, product, readyIntro)), signature: renderLeadText(template2.data.signature, brand, product), templateId: template2.id, templateVersion: template2.version, templateUpdated: template2.updated, approved: false, needsPersonalization: false, updated: time };
 }
 function productInterestIntro(product, intro) {
@@ -632,7 +672,7 @@ function planAutomaticBrand({ lead, template: template2, enabledSince, now: now2
   if (!discovered || !Number.isFinite(Date.parse(discovered)) || Date.parse(discovered) < Date.parse(enabledSince)) return { eligible: false, reason: "\uD65C\uC131\uD654 \uC774\uC804 \uB610\uB294 \uBC1C\uACAC \uC2DC\uAC01 \uBBF8\uD655\uC778" };
   if (Date.parse(discovered) > new Date(now2).getTime()) return { eligible: false, reason: "\uBC1C\uACAC \uC2DC\uAC01\uC774 \uBBF8\uB798\uC785\uB2C8\uB2E4." };
   if (lead?.status === "blocked" || data.duplicateNote) return { eligible: false, reason: "\uC911\uBCF5 \uB610\uB294 \uCC28\uB2E8\uB41C \uC5C5\uCCB4" };
-  if (!template2?.id || !template2?.version || template2?.data?.channel !== "\uC774\uBA54\uC77C" || !["brand_proposal", void 0].includes(template2.data.purpose)) return { eligible: false, reason: "\uBE0C\uB79C\uB4DC \uC774\uBA54\uC77C \uD15C\uD50C\uB9BF\uC774 \uC5C6\uC2B5\uB2C8\uB2E4." };
+  if (!template2?.id || !template2?.version || template2?.data?.channel !== "\uC774\uBA54\uC77C" || !["brand_proposal", "brand_auto_profile", void 0].includes(template2.data.purpose)) return { eligible: false, reason: "\uBE0C\uB79C\uB4DC \uC774\uBA54\uC77C \uD15C\uD50C\uB9BF\uC774 \uC5C6\uC2B5\uB2C8\uB2E4." };
   const refreshed = leadOutreach(template2, data, new Date(now2).toISOString());
   const enriched = { ...data, outreach: refreshed }, review = assessMailLead(enriched, permanentFailureEmails(threads, suppression));
   if (!review.allowed) return { eligible: false, reason: "\uAC80\uD1A0 \uB300\uAE30: " + review.reasons.join(" / ") };
@@ -689,8 +729,7 @@ function brandAutoService({ sb: sb2, query: query2, env: env2, connection: conne
     const marketing = cfg.message_type === "marketing";
     const rows = await query2(sb2.from("sanji_discovery_leads").select("*").eq("owner", owner).eq("status", "review").gte("data->>firstEmailAt", cfg.enabled_at).order("updated", { ascending: false }).limit(500));
     if (!rows.length) return { status: "idle" };
-    const ts = await query2(sb2.from("sanji_records").select("id,data,version,updated").eq("owner", owner).eq("kind", "template").order("updated", { ascending: true }).limit(20));
-    const template2 = ts.find((x) => x.data.channel === "\uC774\uBA54\uC77C" && x.data.purpose !== "brand_reply" && x.data.purpose !== "creator_proposal");
+    const template2 = await selectedBrandTemplate(sb2, query2, owner);
     const settingsRows = await query2(sb2.from("sanji_records").select("data").eq("owner", owner).eq("kind", "settings").limit(1));
     const settings = settingsRows[0]?.data || {};
     if (!settings.senderName || !settings.senderPhone || marketing && !settings.senderAddress) return { status: "sender_information_required" };
@@ -2726,8 +2765,7 @@ function discoveryService(deps) {
           if (companies) {
             data.firstEmailAt = data.firstEmailAt || (/* @__PURE__ */ new Date()).toISOString();
             data.discoveredDay = day2();
-            const ts = await query2(sb2.from("sanji_records").select("id,data,version,updated").eq("owner", u).eq("kind", "template").order("updated", { ascending: true }).limit(20));
-            const t = ts.find((t2) => t2.data.channel === "\uC774\uBA54\uC77C" && t2.data.purpose !== "brand_reply" && t2.data.purpose !== "creator_proposal");
+            const t = await selectedBrandTemplate(sb2, query2, u);
             if (t) {
               const researched = researchBrand(data, t);
               data.outreach = researched.outreach;
@@ -2827,8 +2865,7 @@ function discoveryService(deps) {
       data.marketProductEvidence = found.products;
       data.productLookup = { ...found, attempts: Number(data.productLookup?.attempts || 0) + 1 };
     }
-    const ts = await query2(sb2.from("sanji_records").select("id,data,version,updated").eq("owner", u).eq("kind", "template").order("updated").limit(20));
-    const t = ts.find((t2) => t2.data.channel === "\uC774\uBA54\uC77C" && t2.data.purpose !== "brand_reply" && t2.data.purpose !== "creator_proposal"), result = researchBrand(data, t);
+    const t = await selectedBrandTemplate(sb2, query2, u), result = researchBrand(data, t);
     result.research.attempts = Number(data.research?.attempts || 0) + 1;
     if (data.outreach?.sendBlockedReason) {
       result.outreach.sendBlockedReason = data.outreach.sendBlockedReason;
@@ -3425,6 +3462,7 @@ var creatorDiscovery = creatorDiscoveryService({ sb, query, audit, env });
 var creatorRecovery = recoveryService({ sb, query, audit });
 var creatorVisibleImport = visibleImportService({ sb, query, audit });
 var creatorContactReview = creatorContactReviewService({ sb, query, audit });
+var templateLibrary = templateLibraryService({ sb, query, audit });
 var creatorMeta = creatorMetaService({ sb, query, env, connection, saveConnection, audit });
 var apifyTrials = apifyTrialService({ sb, query, env, audit });
 var saveManualReply = manualReplyService({ sb, query, putRecord, audit });
@@ -4001,6 +4039,26 @@ Deno.serve(async (req) => {
       }
     }
     if (path === "/email-tracking" || path.startsWith("/email-tracking/")) return json(await emailTracking.handle(path, req.method, u, input, url2.searchParams));
+    if (path === "/brand-outbound-profile" && req.method === "GET") {
+      const p = await query(sb.from("sanji_brand_outbound_profile").select("*").eq("owner", u).maybeSingle());
+      if (!p) return json({ configured: false });
+      const t = await owned(u, p.template_id, "template");
+      return json({ configured: true, revision: p.revision, templateVersion: p.template_version, currentVersion: t.version, subject: t.subject, body: t.body, signature: t.signature });
+    }
+    if (path === "/brand-outbound-profile" && req.method === "POST") {
+      const b = await input();
+      if (!Number.isInteger(b.revision) || typeof b.oldParagraph !== "string" || typeof b.newParagraph !== "string") fail(400, "\uC790\uB3D9 \uBC1C\uC1A1 \uBB38\uB2E8\uACFC \uBC84\uC804\uC744 \uD655\uC778\uD558\uC138\uC694.");
+      const result = await query(sb.rpc("sanji_brand_outbound_replace", { p_owner: u, p_revision: b.revision, p_old: b.oldParagraph, p_new: b.newParagraph })), p = Array.isArray(result) ? result[0] : result;
+      await audit(u, "brand_outbound_profile_revised", { revision: p.revision, existingSchedulesUnchanged: true });
+      return json({ revision: p.revision });
+    }
+    if (path === "/template-library") {
+      try {
+        return json(await templateLibrary(req.method, u, input));
+      } catch (e) {
+        fail(400, String(e.message || "\uD15C\uD50C\uB9BF \uC800\uC7A5 \uC624\uB958"));
+      }
+    }
     if (path === "/creator-contact-review" || path === "/creator-contact-review/move" || path === "/creator-contact-review/import" || path === "/creator-contact-review/receipt") {
       try {
         return json(await creatorContactReview(path, req.method, u, input));

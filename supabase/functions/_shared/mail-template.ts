@@ -4,8 +4,11 @@ export function renderLeadText(text:string,brand:string,product:string,intro="")
  return body.includes("{{개인화}}")?body.split("{{개인화}}").join(intro):(intro?intro+"\n\n":"")+body;
 }
 export function leadOutreach(template:any,lead:any,time=new Date().toISOString()){
- const old=lead.outreach||{},brand=old.brandName||lead.name||lead.company||"업체",product=old.productName||lead.product||"공동구매 협의 가능한 상품",intro=template.data.copyFlow==="product_interest_v1"&&old.proposalType!=="manufacturer_supply"?productInterestIntro(product,old.intro||""):old.intro||"";
- const readyIntro=intro||"귀사의 브랜드와 크리에이터 공동구매 협업을 진행해보고 싶습니다. 공동구매 담당자분을 편하게 연결해주시면 감사하겠습니다. 저희가 적합한 크리에이터 후보와 채널 자료, 구체적인 진행안을 정리해 제안드리겠습니다.";
+ const old=lead.outreach||{},brand=old.brandName||lead.name||lead.company||"업체",product=old.productName||lead.product||"공동구매 협의 가능한 상품",legacyFallback="귀사의 브랜드와 크리에이터 공동구매 협업을 진행해보고 싶습니다. 공동구매 담당자분을 편하게 연결해주시면 감사하겠습니다. 저희가 적합한 크리에이터 후보와 채널 자료, 구체적인 진행안을 정리해 제안드리겠습니다.",profile=template.data.purpose==='brand_auto_profile';
+ let source=old.intro||"";if(profile&&source.includes(legacyFallback))source=source.replace(legacyFallback,'').trim();
+ let intro=template.data.copyFlow==="product_interest_v1"&&old.proposalType!=="manufacturer_supply"?productInterestIntro(product,source):source;
+ if(profile)intro=intro.replace(/공동구매 담당자분을 편하게 연결해주시면 감사하겠습니다[.!]?/g,'').replace(/저희가 적합한 크리에이터 후보와 채널 자료,?\s*구체적인 진행안을 정리해 제안드리겠습니다[.!]?/g,'').trim();
+ const readyIntro=intro||(profile?'':legacyFallback);
  return {...old,brandName:brand,companyName:brand,productName:product,intro:readyIntro,draftMode:intro?old.draftMode||"product":"brand_first",subject:renderLeadText(template.data.subject,brand,product),body:dedupeProposal(renderLeadText(template.data.body,brand,product,readyIntro)),signature:renderLeadText(template.data.signature,brand,product),templateId:template.id,templateVersion:template.version,templateUpdated:template.updated,approved:false,needsPersonalization:false,updated:time};
 }
 

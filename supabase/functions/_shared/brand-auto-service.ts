@@ -1,3 +1,4 @@
+import {selectedBrandTemplate} from './outbound-profile.ts';
 import {planAutomaticBrand} from './brand-auto-plan.ts';
 import {assessDispatch,permanentFailureEmails} from './mail-integrity.ts';
 import {companyIdentity} from './discovery.ts';
@@ -12,7 +13,7 @@ export function brandAutoService({sb,query,env,connection,emailTracking,digest,u
   const gmail=await connection(owner,'gmail');if(!gmail?.email)return {status:'gmail_not_connected'};const gmailStatus=await query(sb.from('sanji_connections').select('summary').eq('owner',owner).eq('provider','gmail').maybeSingle());if(gmailStatus?.summary?.reauthRequired)return {status:'gmail_reauth_required'};if(!['non_marketing','marketing'].includes(cfg.message_type))return {status:'message_type_required'};const marketing=cfg.message_type==='marketing';
   const rows=await query(sb.from('sanji_discovery_leads').select('*').eq('owner',owner).eq('status','review').gte('data->>firstEmailAt',cfg.enabled_at).order('updated',{ascending:false}).limit(500));
   if(!rows.length)return {status:'idle'};
-  const ts=await query(sb.from('sanji_records').select('id,data,version,updated').eq('owner',owner).eq('kind','template').order('updated',{ascending:true}).limit(20));const template=ts.find((x:any)=>x.data.channel==='이메일'&&x.data.purpose!=='brand_reply'&&x.data.purpose!=='creator_proposal');
+  const template=await selectedBrandTemplate(sb,query,owner);
   const settingsRows=await query(sb.from('sanji_records').select('data').eq('owner',owner).eq('kind','settings').limit(1));const settings=settingsRows[0]?.data||{};
   if(!settings.senderName||!settings.senderPhone||(marketing&&!settings.senderAddress))return {status:'sender_information_required'};let richSignature:any=null;if(settings.signatureSource==='gmail'){if(gmail.email.toLowerCase()!==String(settings.gmailSignatureEmail||'').toLowerCase())return {status:'gmail_signature_account_changed'};const sig=gmailSignature(settings.gmailSignatureHtml||'');if(sig.text===String(settings.emailSignature||'').trim())richSignature=sig;}
   if(template?.data?.attachments?.length)return {status:'template_attachments_need_review'};
