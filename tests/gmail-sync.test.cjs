@@ -7,7 +7,7 @@ test('Gmail directly sent replies and aliases are outbound and preserved in prov
 });
 test('Gmail sync persists exact permanent DSN addresses even without a matching candidate and never overwrites opt-outs',async()=>{
  const {gmailSyncService}=require(dir+'/sync.cjs'),writes=[];let remoteCalls=0;
- const sb={rpc:async()=>({data:{owner:'owner',cursor:0}}),from:table=>({upsert:(row,options)=>{writes.push({table,row,options});return Promise.resolve({data:null});},update:()=>({eq:async()=>({data:null})})})};
+ const sb={rpc:async()=>({data:{owner:'owner',cursor:0}}),from:table=>({select:()=>({eq:()=>({limit:async()=>({data:[]})})}),upsert:(row,options)=>{writes.push({table,row,options});return Promise.resolve({data:null});},update:()=>({eq:async()=>({data:null})})})};
  const body=Buffer.from('Final-Recipient: rfc822; jumpit_id01@email.com\r\nAction: failed\r\nStatus: 5.7.0\r\n').toString('base64url');
  const service=gmailSyncService({sb,query:async p=>(await p).data,records:async()=>[],putRecord:async()=>assert.fail('unrelated bounce must not attach to a guessed company'),gmailToken:async()=>({access_token:'fake',email:'owner@gmail.com'}),remote:async()=>++remoteCalls===1?{messages:[{id:'dsn'}]}:{payload:{mimeType:'message/delivery-status',body:{data:body}}},textBody:()=>'',gmailHasAttachments:()=>false});
  const result=await service.sync('owner');assert.equal(result.errors.length,0);assert.equal(writes.length,1);assert.equal(writes[0].row.identity,'email:jumpit_id01@email.com');assert.equal(writes[0].options.ignoreDuplicates,true);assert.match(writes[0].row.reason,/5.7.0/);

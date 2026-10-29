@@ -1,0 +1,11 @@
+// Observes existing Gmail message IDs only; never creates drafts, jobs or sends.
+export async function syncCreatorGmailObservations({sb,query,remote,gmailMessages,textBody,hasAttachments}:any,owner:string,g:any){
+ const rows=await query(sb.from('sanji_creator_contact_review').select('creator_id,version,data').eq('owner',owner).limit(100));let checked=0,updated=0;const errors:any[]=[];
+ for(const row of rows){const email=row.data?.email||{},o=email.observation||{};if(o.provider!=='gmail'||!o.providerMessageId||!['scheduled','sent','unknown','failed'].includes(o.status))continue;if(checked>=20)break;checked++;
+ try{const msg=await remote('https://gmail.googleapis.com/gmail/v1/users/me/messages/'+encodeURIComponent(o.providerMessageId)+'?format=full',{headers:{Authorization:'Bearer '+g.access_token}});if(msg.id!==o.providerMessageId)throw Error('메시지 ID 불일치');if(!(msg.labelIds||[]).includes('SENT'))continue;
+ const parsed=gmailMessages({messages:[msg]},g.email,[],textBody,hasAttachments)[0];const recipient=String(o.recipient||'').toLowerCase();if(!recipient||!String(parsed?.to||'').toLowerCase().split(/[\s,;<>]+/).includes(recipient))throw Error('수신자 불일치');
+ let reply=false,failed=false;if(msg.threadId){const thread=await remote('https://gmail.googleapis.com/gmail/v1/users/me/threads/'+encodeURIComponent(msg.threadId)+'?format=full',{headers:{Authorization:'Bearer '+g.access_token}});const messages=gmailMessages(thread,g.email,[],textBody,hasAttachments);reply=messages.some((m:any)=>!m.out&&!m.automatic&&String(m.replyAddress||'').toLowerCase()===recipient&&m.at>=parsed.at);failed=messages.some((m:any)=>m.bounceFailures?.some((f:any)=>f.email===recipient&&f.kind==='permanent'));}
+ const next={...o,status:failed?'failed':'sent',humanReply:reply,providerThreadId:msg.threadId||'',sentAt:parsed.at};const unchanged=['status','humanReply','providerThreadId','sentAt'].every(k=>o[k]===next[k]);if(unchanged)continue;const changed=await query(sb.from('sanji_creator_contact_review').update({data:{...row.data,email:{...email,observation:next}},version:row.version+1,updated:new Date().toISOString()}).eq('owner',owner).eq('creator_id',row.creator_id).eq('version',row.version).select('creator_id'));if(changed.length)updated++;
+ }catch{errors.push({creatorId:row.creator_id,reason:'Gmail 메시지 조회 또는 대조 실패'});}}
+ return {checked,updated,errors};
+}
