@@ -1,3 +1,41 @@
+// supabase/functions/_shared/tagby-batch.ts
+async function tagbyBatchPreview(owner, rows, sb2, query2) {
+  if (!Array.isArray(rows) || !rows.length || rows.length > 30) throw Error("\uAD00\uCC30 \uC790\uB8CC\uB294 1~30\uD589\uC774\uC5B4\uC57C \uD569\uB2C8\uB2E4.");
+  const normalized = [], seen = /* @__PURE__ */ new Set();
+  for (const x of rows) {
+    const id = String(x.creatorId || ""), handle2 = String(x.handle || "").replace(/^@/, "").toLowerCase(), version = Number(x.version), o = x.observation || {}, counts = x.deliveryCounts || {}, reason = String(x.failureError || "").trim(), account = String(x.sourceAccount || "").replace(/^@/, "").toLowerCase(), sender = String(x.senderAccount || "").replace(/^@/, "").toLowerCase();
+    if (!/^[0-9a-f-]{36}$/i.test(id) || !/^[a-z0-9._]{1,30}$/.test(handle2) || !Number.isInteger(version) || version < 1 || !account || !sender || !/^[a-z0-9._]{1,30}$/.test(sender) || seen.has(id)) throw Error("\uC544\uC774\uB514\xB7\uBC84\uC804\xB7\uBC1C\uC2E0 \uACC4\uC815 \uB610\uB294 \uC911\uBCF5\uC744 \uD655\uC778\uD558\uC138\uC694.");
+    seen.add(id);
+    const review = await query2(sb2.from("sanji_creator_contact_review").select("creator_id,version,data").eq("owner", owner).eq("creator_id", id).maybeSingle()), creator = await query2(sb2.from("sanji_creator_recovery").select("id,handle").eq("owner", owner).eq("id", id).maybeSingle());
+    if (!review || !creator || review.version !== version || creator.handle.toLowerCase() !== handle2 || review.data?.dm?.campaignUrl !== x.campaignUrl || String(review.data?.dm?.sourceAccount || "").replace(/^@/, "").toLowerCase() !== account) throw Error("\uC800\uC7A5\uB41C \uACC4\uC815\xB7\uCEA0\uD398\uC778\xB7\uBC84\uC804\uC774 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+    let u;
+    try {
+      u = new URL(String(o.sourceUrl));
+    } catch {
+      throw Error("\uAD00\uCC30 \uCD9C\uCC98 URL\uC744 \uD655\uC778\uD558\uC138\uC694.");
+    }
+    if (u.protocol !== "https:" || !["tagby.io", "www.tagby.io"].includes(u.hostname) || u.username || u.password || u.search || u.hash || u.toString() !== x.campaignUrl) throw Error("\uAD00\uCC30 \uCD9C\uCC98\uC640 \uCEA0\uD398\uC778 \uB9C1\uD06C\uAC00 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+    if (!Number.isFinite(Date.parse(o.observedAt))) throw Error("\uAD00\uCC30 \uC2DC\uAC01\uC774 \uD544\uC694\uD569\uB2C8\uB2E4.");
+    const actual = o.actualScheduledAt ? new Date(o.actualScheduledAt) : null;
+    if (actual && !Number.isFinite(actual.getTime())) throw Error("\uC2E4\uC81C \uC608\uC57D \uC2DC\uAC01 \uC624\uB958");
+    const n = (v) => {
+      if (v === null || v === void 0 || v === "") return null;
+      const num = Number(v);
+      if (!Number.isInteger(num) || num < 0 || num > 1e6) throw Error("\uC9D1\uACC4\uB97C \uD655\uC778\uD558\uC138\uC694.");
+      return num;
+    };
+    const count = { success: n(counts.success), failed: n(counts.failed), waiting: n(counts.waiting) }, raw = String(o.status || "").trim();
+    if (!raw || raw.length > 120 || reason.length > 500 || String(o.body || "").length > 5e3) throw Error("\uC6D0\uBCF8 \uC0C1\uD0DC \uB610\uB294 \uC2E4\uD328 \uC0AC\uC720\uB97C \uD655\uC778\uD558\uC138\uC694.");
+    const state = /발송\s*여부.{0,15}확인.{0,10}(?:없|불가)/.test(reason + " " + raw) ? "delivery_unknown" : /대상\s*계정.{0,20}(?:찾지|없)/.test(reason + " " + raw) ? "failed" : reason && /^(?:FAIL|실패)$/i.test(raw) ? "failed" : /^(?:대기|pending)$/i.test(raw) ? "pending" : /^(?:수신자 발송 성공|recipient_sent)$/i.test(raw) && count.success === 1 && count.failed === 0 && count.waiting === 0 ? "success" : "delivery_unknown";
+    normalized.push({ creatorId: id, version, handle: handle2, campaignUrl: x.campaignUrl, sourceAccount: account, senderAccount: sender, observation: { status: raw, observedAt: new Date(o.observedAt).toISOString(), sourceUrl: u.toString(), body: String(o.body || ""), actualScheduledAt: actual?.toISOString() || null }, deliveryCounts: count, failureError: reason, deliveryState: state, source: "operator_observation" });
+  }
+  return normalized;
+}
+async function tagbyBatchHash(owner, rows) {
+  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify({ owner, rows })));
+  return Array.from(new Uint8Array(bytes), (x) => x.toString(16).padStart(2, "0")).join("");
+}
+
 // supabase/functions/_shared/gmail-signature.ts
 var decode = (s) => s.replace(/&#(x[0-9a-f]+|\d+);?/gi, (_, v) => {
   const n = v[0].toLowerCase() === "x" ? parseInt(v.slice(1), 16) : Number(v);
@@ -157,6 +195,7 @@ function creatorContactReviewService({ sb: sb2, query: query2, audit: audit2 }) 
       const previous = await query2(sb2.from("sanji_creator_contact_review").select("version,data").eq("owner", owner).eq("creator_id", id).maybeSingle());
       if (previous && Number(b.version) !== previous.version) throw Error("\uB2E4\uB978 \uACF3\uC5D0\uC11C \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uBD88\uB7EC\uC624\uC138\uC694.");
       if (previous?.data?.email?.observation) data.email.observation = previous.data.email.observation;
+      if (previous?.data?.dm?.observationHistory) data.dm.observationHistory = previous.data.dm.observationHistory;
       const version = (previous?.version || 0) + 1;
       if (previous) {
         const changed = await query2(sb2.from("sanji_creator_contact_review").update({ data, version, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("creator_id", id).eq("version", previous.version).select("creator_id"));
@@ -3971,6 +4010,13 @@ Deno.serve(async (req) => {
       } catch (e) {
         fail(400, String(e.message || "\uD06C\uB9AC\uC5D0\uC774\uD130 \uBC1C\uAD74 \uC2E4\uD328"));
       }
+    }
+    if ((path === "/tagby-observation/preview" || path === "/tagby-observation/commit") && req.method === "POST") {
+      const b = await input(), rows = await tagbyBatchPreview(u, b.rows, sb, query), hash3 = await tagbyBatchHash(u, rows);
+      if (path.endsWith("/preview")) return json({ rows, hash: hash3 });
+      if (b.hash !== hash3) fail(409, "\uBBF8\uB9AC\uBCF4\uAE30\uC640 \uC790\uB8CC\uAC00 \uB2E4\uB985\uB2C8\uB2E4. \uB2E4\uC2DC \uD655\uC778\uD558\uC138\uC694.");
+      const count = await query(sb.rpc("sanji_tagby_observation_commit", { p_owner: u, p_rows: rows }));
+      return json({ count, noDispatch: true });
     }
     if (path === "/brand-auto-schedule" && req.method === "GET") return json(await brandAuto.config(u));
     if (path === "/brand-auto-schedule" && req.method === "POST") {
