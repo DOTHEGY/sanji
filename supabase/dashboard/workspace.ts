@@ -1244,6 +1244,7 @@ async function syncCreatorGmailObservations({ sb: sb2, query: query2, remote: re
       const next = { ...o, status: failed ? "failed" : uncertain ? "unknown" : "sent", humanReply: reply, providerThreadId: msg.threadId || "", sentAt: parsed.at };
       const unchanged = ["status", "humanReply", "providerThreadId", "sentAt"].every((k) => o[k] === next[k]);
       if (unchanged) continue;
+      next.statusUpdatedAt = (/* @__PURE__ */ new Date()).toISOString();
       const changed = await query2(sb2.from("sanji_creator_contact_review").update({ data: { ...row.data, email: { ...email, observation: next } }, version: row.version + 1, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("creator_id", row.creator_id).eq("version", row.version).select("creator_id"));
       if (changed.length) updated++;
     } catch (e) {
