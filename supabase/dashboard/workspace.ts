@@ -4146,6 +4146,7 @@ Deno.serve(async (req) => {
     if (image) return await emailTracking.pixel(req, image[1]);
     if (req.headers.get("origin") && req.headers.get("origin") !== origin)
       fail(403, "\uD5C8\uC6A9\uB418\uC9C0 \uC54A\uC740 \uCD9C\uCC98");
+    if (path === "/oauth/instagram/callback" && req.method !== "GET") return json({ error: "\uD5C8\uC6A9\uB418\uC9C0 \uC54A\uC740 \uC694\uCCAD \uBC29\uC2DD" }, 405);
     if (req.method === "OPTIONS")
       return new Response(null, { status: 204, headers: cors });
     if (path === "/creator-meta/callback" && req.method === "GET") {

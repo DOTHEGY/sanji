@@ -790,6 +790,7 @@ Deno.serve(async (req: Request) => {
     if(image)return await emailTracking.pixel(req,image[1]);
     if (req.headers.get("origin") && req.headers.get("origin") !== origin)
       fail(403, "허용되지 않은 출처");
+    if(path==='/oauth/instagram/callback'&&req.method!=='GET')return json({error:'허용되지 않은 요청 방식'},405);
     if (req.method === "OPTIONS")
       return new Response(null, { status: 204, headers: cors });
     if(path==='/creator-meta/callback'&&req.method==='GET'){
