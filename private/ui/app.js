@@ -550,8 +550,9 @@ function filterThreads() {
   if($('#thread-detail').dataset.threadId!==next)showThread(next);
 
 }
-function meetingEditor(t){if(!t.meeting||!t.manual||t.providerId)return '';return `<form id="meeting-form" data-id="${esc(t.id)}" data-version="${Number(t.version)}" class="form-grid"><h3>미팅 기록 · 한국시간</h3>${field('meetingAt','일시 (한국시간)',meetingKstInput(t.meeting.at),'datetime-local')}${field('meetingMode','방식',t.meeting.mode||'미확인','text',['비대면','대면','미확인'])}${field('meetingStatus','상태',t.meeting.status||'미확인','text',['예정','변경','완료','취소','미확인'])}${field('meetingResult','결과·메모',t.meeting.result||'','textarea')}<p class="fine">출처: 사용자 확인 · 기존 메모와 대화 원문은 유지됩니다.</p><button type="submit">미팅 저장</button>${button('수정 취소','meeting-cancel',t.id)}</form><details><summary>미팅 변경 이력</summary><pre>${esc(JSON.stringify(t.meetingHistory||[],null,2))}</pre></details>`;}
+function meetingEditor(t){if(!t.target||t.creatorHandle)return '';const meeting=t.meeting||{};return `<form id="meeting-form" data-id="${esc(t.id)}" data-version="${Number(t.version)}" class="form-grid"><h3>미팅 기록 · 한국시간</h3>${field('meetingAt','일시 (한국시간)',meetingKstInput(meeting.at),'datetime-local')}${field('meetingMode','방식',meeting.mode||'미확인','text',['비대면','대면','미확인'])}${field('meetingStatus','상태',meeting.status||'미확인','text',['예정','변경','완료','취소','미확인'])}${field('meetingResult','결과·메모',meeting.result||'','textarea')}<p class="fine">출처: 사용자 확인 · 기존 메모와 대화 원문은 유지됩니다.</p><button type="submit">미팅 저장</button>${button('수정 취소','meeting-cancel',t.id)}</form><details><summary>미팅 변경 이력</summary><pre>${esc(JSON.stringify(t.meetingHistory||[],null,2))}</pre></details>`;}
 function showThread(id) {
+  if(id===selectedThread&&inboxEdited)return;
   if(id!==selectedThread&&!allowInboxChange())return;
   if(id!==selectedThread){inboxEdited=false;inboxDirtyForms.clear();}
   const t = [...data.threads,...creatorInboxThreads].find((t) => t.id === id);

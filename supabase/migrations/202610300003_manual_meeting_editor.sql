@@ -12,9 +12,9 @@ begin
  if found then foreach ident in array public.sanji_identities(c.data) loop insert into public.sanji_suppression values(auth.uid(),ident,p_data->>'classification') on conflict(owner,identity) do update set reason=excluded.reason;end loop;
  update public.sanji_records set data=jsonb_set(data,'{status}',p_data->'classification'),version=version+1,updated=now() where id=c.id;end if;end if;
  if p_data ? 'meeting' then
-  if coalesce((t.data->>'manual')::boolean,false) is not true or coalesce(t.data->>'providerId','')<>'' then raise exception '수동 미팅 기록만 수정할 수 있습니다.';end if;
+  if not exists(select 1 from public.sanji_records where owner=auth.uid() and kind='candidate' and id::text=t.data->>'target') then raise exception '연결된 업체를 확인하세요.';end if;
   meeting:=p_data->'meeting';
-  if jsonb_typeof(meeting)<>'object' or coalesce(meeting->>'at','') !~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$' or meeting->>'mode' not in ('비대면','대면','미확인') or meeting->>'status' not in ('예정','변경','완료','취소','미확인') or length(coalesce(meeting->>'result',''))>5000 then raise exception '미팅 날짜와 내용을 확인하세요.';end if;
+  if jsonb_typeof(meeting)<>'object' or coalesce(meeting->>'at','') !~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$' or coalesce(meeting->>'mode','') not in ('비대면','대면','미확인') or coalesce(meeting->>'status','') not in ('예정','변경','완료','취소','미확인') or length(coalesce(meeting->>'result',''))>5000 then raise exception '미팅 날짜와 내용을 확인하세요.';end if;
   perform (meeting->>'at')::timestamptz;
   prior:=coalesce(t.data->'meeting','{}'::jsonb);
   meeting:=prior||jsonb_build_object('at',meeting->>'at','mode',meeting->>'mode','status',meeting->>'status','result',coalesce(meeting->>'result',''),'timezone','Asia/Seoul','source','operator_reported');
