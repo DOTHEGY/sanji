@@ -362,7 +362,7 @@ function dealsPage() {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(d);
   }
-  $("#app").innerHTML = head("상품 딜", "업체별 상품과 구성별 공동구매 조건을 비교하세요.", button("＋ 딜 추가", "add-deal", "", true)) +
+  $("#app").innerHTML = head("상품 딜", "업체별 상품과 구성별 공동구매 조건을 비교하세요. 브랜드 직접 등록은 업체 정보만 저장하며 검색이나 메일 발송을 실행하지 않습니다.", button("브랜드 직접 등록", "add-brand") + button("＋ 딜 추가", "add-deal", "", true)) +
     `<div class="cards deal-company-list" style="grid-template-columns:1fr">${[...groups.values()].map(items => {
       const products = new Map();
       for (const d of items) { const key = dealProductKey(d); if (!products.has(key)) products.set(key, []); products.get(key).push(d); }
