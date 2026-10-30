@@ -161,6 +161,7 @@ async function boot() {
   }
 }
 async function authPage() {
+  inboxRequestGeneration++;
   me = null;
   csrf = "";
   $("#nav").innerHTML = "";
@@ -170,6 +171,7 @@ async function authPage() {
     `<div class="panel auth"><div class="eyebrow">PRIVATE WORKSPACE</div><h1>${status.setupRequired ? "관리자 계정 만들기" : "다시 만나 반갑습니다"}</h1><p class="login-note">실제 회사·크리에이터·대화 자료는 로그인 후에만 조회됩니다. 가상 데이터는 포함하지 않습니다.</p><form id="auth-form" data-type="${status.setupRequired ? "setup" : "login"}">${status.setupRequired ? field("token", "서버 초기 설정 토큰|서버 환경 변수 SANJI_SETUP_TOKEN 값입니다. 메일·Instagram 비밀번호가 아닙니다.", "", "password") : ""}${field("email", "관리자 이메일", "", "email")}${field("password", "서비스 로그인 비밀번호|초기 생성 시 12자 이상. 외부 이메일 계정 비밀번호를 입력하지 마세요.", "", "password")}<button class="primary" type="submit">${status.setupRequired ? "관리자 계정 생성" : "로그인"}</button><div id="auth-error" class="login-note"></div></form></div>`;
 }
 function render() {
+  inboxRequestGeneration++;
   if (!me) return;
   const rawKey = location.hash.slice(1) || "dashboard";
   const key = rawKey === "discovery" ? "brands" : rawKey;
@@ -516,28 +518,35 @@ function inboundHumanReply(m){
  if(/(?:^|[_-])(read|seen|open|tracking|bounce|delivery_status|auto_reply|autoresponder)(?:$|[_-])/.test(kind))return false;
  return !!(String(m.text||'').trim()||m.hasAttachments||m.source==='operator_reported');
 }
-function visibleInboxThreads(threads,q,type,mode){const needle=String(q||'').toLowerCase();return threads.filter(t=>{const name=targetName(t.target);return String(name+' '+(t.subject||'')+' '+(t.owner||'')+' '+(t.next||'')).toLowerCase().includes(needle)&&(!type||(type==='creator'?candidate(t.target)?.kind==='크리에이터':candidate(t.target)?.kind!=='크리에이터'))&&(mode==='all'||(t.messages||[]).some(inboundHumanReply));});}
-function inboxPage() {
+let creatorInboxThreads=[], inboxRequestGeneration=0, inboxFolder='';
+function inboxThreadName(t){return t.creatorHandle?'@'+t.creatorHandle:targetName(t.target);}
+function visibleInboxThreads(threads,q,type,mode){const needle=String(q||'').toLowerCase();return threads.filter(t=>{const name=inboxThreadName(t);return String(name+' '+(t.subject||'')+' '+(t.owner||'')+' '+(t.next||'')).toLowerCase().includes(needle)&&(!type||(type==='creator'?(t.creatorHandle||candidate(t.target)?.kind==='크리에이터'):(!t.creatorHandle&&['브랜드','제조사','공식 유통사'].includes(candidate(t.target)?.kind))))&&(mode==='all'||(t.messages||[]).some(inboundHumanReply));});}
+async function inboxPage() {
+  const generation=++inboxRequestGeneration, account=me, stillCurrent=()=>generation===inboxRequestGeneration&&me===account&&!!me&&(location.hash.slice(1)==='inbox');
+  let loaded=[];
+  try{const r=await api('/creator-inbox');if(!stillCurrent())return;const groups=new Map();for(const item of r.items||[]){const id='creator:'+item.creator_id+':'+item.provider_thread_id;if(!groups.has(id))groups.set(id,{id,creatorHandle:item.handle,channel:'email',providerId:item.provider_thread_id,subject:item.data?.subject||'크리에이터 답장',classification:'수신',messages:[]});groups.get(id).messages.push(item.data);}loaded=[...groups.values()];for(const t of loaded)t.messages.sort((a,b)=>String(a.at||'').localeCompare(String(b.at||''))||String(a.id||'').localeCompare(String(b.id||'')));}catch(e){if(!stillCurrent())return;toast('크리에이터 답장을 불러오지 못했습니다: '+e.message);}
+  if(!stillCurrent())return;creatorInboxThreads=loaded;
   $("#app").innerHTML =
     head(
       "통합 대화함",
       "실제 동기화된 대화와 직접 작성한 회신을 관리합니다.",
       button("Gmail 답장 동기화", "sync-mail"),
     ) +
-    `<div class="toolbar"><input id="thread-filter" class="search" placeholder="이름·제목·담당자·메모 검색" aria-label="대화 검색"><select id="thread-mode" aria-label="대화 범위"><option value="replies">답장 온 대화</option><option value="all">전체 대화 기록</option></select><select id="thread-type"><option value="">전체 대상</option><option value="brand">브랜드</option><option value="creator">크리에이터</option></select></div><div class="panel conversation"><div class="thread-list" id="thread-list"></div><div class="thread-content" id="thread-detail"></div></div>`;
+    `<p class="fine">산지에서 브랜드·크리에이터 답장을 나눠 봅니다. Gmail 라벨 자동 분류는 권한 확인 전 꺼져 있습니다.</p>` +
+    `<div class="toolbar"><input id="thread-filter" class="search" placeholder="이름·제목·담당자·메모 검색" aria-label="대화 검색"><select id="thread-mode" aria-label="대화 범위"><option value="replies">답장 온 대화</option><option value="all">전체 대화 기록</option></select><div class="actions" role="group" aria-label="답장 폴더">${[['','전체'],['brand','브랜드'],['creator','크리에이터']].map(([value,label])=>`<button type="button" data-action="inbox-folder" data-id="${value}" aria-pressed="${inboxFolder===value}">${label}</button>`).join('')}</div><input type="hidden" id="thread-type" value="${esc(inboxFolder)}"></div><div class="panel conversation"><div class="thread-list" id="thread-list"></div><div class="thread-content" id="thread-detail"></div></div>`;
   filterThreads();
 }
 function filterThreads() {
   if (!$("#thread-list")) return;
   const q = $("#thread-filter").value, type = $("#thread-type").value, mode = $("#thread-mode").value;
-  const visible=visibleInboxThreads(data.threads,q,type,mode);
-  $("#thread-list").innerHTML=visible.map(t=>`<div class="thread"><button data-action="thread" data-id="${esc(t.id)}" style="text-align:left;width:100%;border:0;background:none"><strong>${esc(targetName(t.target))}</strong><p>${esc(t.subject)}</p>${tag(t.channel)} ${tag(t.classification)} ${(t.messages||[]).some(m=>m.out===false&&m.source==='operator_reported')?tag('수동 확인'):''}</button></div>`).join('')||'<div class="empty">조건에 맞는 대화가 없습니다.</div>';
+  const visible=visibleInboxThreads([...data.threads,...creatorInboxThreads],q,type,mode);
+  $("#thread-list").innerHTML=visible.map(t=>`<div class="thread"><button data-action="thread" data-id="${esc(t.id)}" style="text-align:left;width:100%;border:0;background:none"><strong>${esc(inboxThreadName(t))}</strong><p>${esc(t.subject)}</p>${tag(t.channel)} ${tag(t.classification)} ${(t.messages||[]).some(m=>m.out===false&&m.source==='operator_reported')?tag('수동 확인'):''}</button></div>`).join('')||'<div class="empty">조건에 맞는 대화가 없습니다.</div>';
   const next=visible.some(t=>t.id===selectedThread)?selectedThread:(visible[0]?.id||'');
   if($('#thread-detail').dataset.threadId!==next)showThread(next);
 
 }
 function showThread(id) {
-  const t = data.threads.find((t) => t.id === id);
+  const t = [...data.threads,...creatorInboxThreads].find((t) => t.id === id);
   if (!t) {
     selectedThread = "";
     $("#thread-detail").dataset.threadId = "";
@@ -548,7 +557,7 @@ function showThread(id) {
   selectedThread = id;
   $("#thread-detail").dataset.threadId = id;
   $("#thread-detail").innerHTML =
-    `${tag(t.channel)}${t.channel === "email" && t.providerId ? `<a href="https://mail.google.com/mail/?authuser=${encodeURIComponent(connections.gmail.email || "")}#all/${encodeURIComponent(t.providerId)}" target="_blank" rel="noopener">원본 Gmail 열기 ↗</a>` : ""}<h2 style="margin-top:15px">${esc(t.subject)}</h2><p class="fine">${esc(targetName(t.target))} · ${esc(t.synced || "수동·발송 기록")}${t.accountUsername ? " · 수신·회신 계정 @" + esc(t.accountUsername) : ""}</p>${
+    `${tag(t.channel)}${t.channel === "email" && t.providerId ? `<a href="https://mail.google.com/mail/?authuser=${encodeURIComponent(connections.gmail.email || "")}#all/${encodeURIComponent(t.providerId)}" target="_blank" rel="noopener">원본 Gmail 열기 ↗</a>` : ""}<h2 style="margin-top:15px">${esc(t.subject)}</h2><p class="fine">${esc(inboxThreadName(t))} · ${esc(t.creatorHandle?"Gmail 확인 답장":t.synced || "수동·발송 기록")}${t.accountUsername ? " · 수신·회신 계정 @" + esc(t.accountUsername) : ""}</p>${
       !t.target && t.channel === "instagram"
         ? `<form id="link-instagram-form" data-id="${t.id}"><label class="field">공식 수신 계정과 후보의 관계를 직접 확인한 뒤 연결<select name="target">${data.candidates
             .filter((c) => c.kind === "크리에이터")
@@ -557,7 +566,7 @@ function showThread(id) {
               "",
             )}</select></label><button type="submit">확인한 후보에 연결</button></form>`
         : ""
-    }${t.meeting?'<div class="notice">미팅 · '+esc(t.meeting.mode)+' · '+esc(new Date(t.meeting.at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))+' KST · 장소/접속 링크 '+esc(t.meeting.location||'미정')+'</div>':''}${t.channel==="email"?'<div id="thread-email-tracking"></div>':""}<form id="thread-form" data-id="${t.id}" class="form-grid">${field("owner", "담당자", t.owner)}${field("due", "후속 연락일", t.due, "date")}${field("next", "다음 행동·메모", t.next)}${field("classification", "회신 분류", t.classification, "text", ["미분류", "자동 응답", "관심 회신", "단순 안내", "거절", "수신 거부", "수락", "공동구매 확정"])}<button type="submit">관리 정보 저장</button></form>${t.messages.map((m) => `<div class="message ${m.out ? "out" : ""}">${tag(m.out ? (m.recordOrigin==="gmail_sync"?"발신 · Gmail 동기화":"발신") : m.automatic ? "자동 응답" : (t.manual || m.source==="operator_reported") ? (t.channel==="phone"?"전화 회신 · 수동 기록":t.channel==="sms"?"문자 회신 · 수동 기록":"운영자 보고 · 수동 기록") : "사람 회신 / 직접 확인 필요")}<small class="fine">${esc(m.at)}</small><br>${esc(m.text)}${m.hasAttachments ? '<p class="fine">첨부가 있습니다. 원본 Gmail에서 확인하세요.</p>' : ""}</div>`).join("")}${t.target ? (["phone","sms","manual"].includes(t.channel)?button("문자·전화 회신 추가","manual-reply",t.target,true):button("직접 회신 작성", "reply", t.id, true)) : '<div class="notice">수신 계정을 후보와 연결한 후 답장할 수 있습니다.</div>'}`;
+    }${t.meeting?'<div class="notice">미팅 · '+esc(t.meeting.mode)+' · '+esc(new Date(t.meeting.at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))+' KST · 장소/접속 링크 '+esc(t.meeting.location||'미정')+'</div>':''}${t.channel==="email"?'<div id="thread-email-tracking"></div>':""}${t.creatorHandle?'':`<form id="thread-form" data-id="${t.id}" class="form-grid">${field("owner", "담당자", t.owner)}${field("due", "후속 연락일", t.due, "date")}${field("next", "다음 행동·메모", t.next)}${field("classification", "회신 분류", t.classification, "text", ["미분류", "자동 응답", "관심 회신", "단순 안내", "거절", "수신 거부", "수락", "공동구매 확정"])}<button type="submit">관리 정보 저장</button></form>`}${t.messages.map((m) => `<div class="message ${m.out ? "out" : ""}">${tag(m.out ? (m.recordOrigin==="gmail_sync"?"발신 · Gmail 동기화":"발신") : m.automatic ? "자동 응답" : (t.manual || m.source==="operator_reported") ? (t.channel==="phone"?"전화 회신 · 수동 기록":t.channel==="sms"?"문자 회신 · 수동 기록":"운영자 보고 · 수동 기록") : "사람 회신 / 직접 확인 필요")}<small class="fine">${esc(m.at)}</small><br>${esc(m.text)}${m.hasAttachments ? '<p class="fine">첨부가 있습니다. 원본 Gmail에서 확인하세요.</p>' : ""}</div>`).join("")}${t.target ? (["phone","sms","manual"].includes(t.channel)?button("문자·전화 회신 추가","manual-reply",t.target,true):button("직접 회신 작성", "reply", t.id, true)) : t.creatorHandle?'<div class="notice">Gmail 원본에서 회신할 수 있습니다.</div>':'<div class="notice">수신 계정을 후보와 연결한 후 답장할 수 있습니다.</div>'}`;
   if(t.channel==="email"&&$("#thread-email-tracking"))$("#thread-email-tracking").innerHTML=data.outbox.filter(o=>o.target===t.target&&o.channel==="email"&&(o.data.providerThread===t.providerId||t.messages.some(m=>m.outboxId===o.id||m.messageId==="<"+o.data.messageId+"@sanji.local>"))).map(o=>button("발송 "+localTime(o.created)+" · 열람 추정/메일 상세","tracking-detail",o.id)).join("");
 }
 function jobTable() {
@@ -1144,6 +1153,7 @@ const actions = {
   "creator-meta-connect-page":async()=>{try{const id=($('#creator-meta-page-id')?.value||'').trim();if(!/^[0-9]{5,30}$/.test(id))throw Error('페이지 ID는 숫자로 입력하세요.');const r=await api('/creator-meta/connect-page','POST',{pageId:id});toast('@'+r.account.username+' 연결됨');await creatorDiscoveryPage();}catch(e){toast(e.message);}},
   "creator-meta-connect":async()=>{try{const r=await api('/creator-meta/start','POST',{});location.href=r.url;}catch(e){toast(e.message);}},
   "creator-meta-disconnect":async()=>{try{await api('/creator-meta/disconnect','POST',{});await creatorDiscoveryPage();}catch(e){toast(e.message);}},
+  "inbox-folder":value=>{inboxFolder=['','brand','creator'].includes(value)?value:'';$('#thread-type').value=inboxFolder;document.querySelectorAll('[data-action="inbox-folder"]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.id===inboxFolder)));filterThreads();},
   "recovery-preview":async()=>{recoveryPreviewMode=true;await creatorDiscoveryPage();},
   "recovery-recommend":async()=>{try{await api('/creator-recovery/recommend','POST',{});recoveryPreviewMode=false;recoveryHistoryDay='';await creatorDiscoveryPage();}catch(e){toast(e.message);}},
   "recovery-copy-all":async()=>{await navigator.clipboard.writeText(recoverySelected().map(x=>'@'+x.handle).join('\n'));toast('추천 아이디를 복사했습니다.');},
