@@ -510,9 +510,9 @@ async function preparePreview(form) {
   $("#preview-area").scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 function inboundHumanReply(m){
- if(!m||m.out||m.automatic||(m.bounceFailures||[]).length)return false;
+ if(!m||m.out!==false||m.automatic||(m.bounceFailures||[]).length)return false;
  const kind=String(m.type||m.kind||m.event||'').toLowerCase();
- if(/^(read|seen|open|tracking|bounce|delivery_status|auto_reply|autoresponder)(?:$|[_-])/.test(kind))return false;
+ if(/(?:^|[_-])(read|seen|open|tracking|bounce|delivery_status|auto_reply|autoresponder)(?:$|[_-])/.test(kind))return false;
  return !!(String(m.text||'').trim()||m.hasAttachments||m.source==='operator_reported');
 }
 function visibleInboxThreads(threads,q,type,mode){const needle=String(q||'').toLowerCase();return threads.filter(t=>{const name=targetName(t.target);return String(name+' '+(t.subject||'')+' '+(t.owner||'')+' '+(t.next||'')).toLowerCase().includes(needle)&&(!type||(type==='creator'?candidate(t.target)?.kind==='크리에이터':candidate(t.target)?.kind!=='크리에이터'))&&(mode==='all'||(t.messages||[]).some(inboundHumanReply));});}
@@ -530,19 +530,22 @@ function filterThreads() {
   if (!$("#thread-list")) return;
   const q = $("#thread-filter").value, type = $("#thread-type").value, mode = $("#thread-mode").value;
   const visible=visibleInboxThreads(data.threads,q,type,mode);
-  $("#thread-list").innerHTML=visible.map(t=>`<div class="thread"><button data-action="thread" data-id="${esc(t.id)}" style="text-align:left;width:100%;border:0;background:none"><strong>${esc(targetName(t.target))}</strong><p>${esc(t.subject)}</p>${tag(t.channel)} ${tag(t.classification)} ${(t.messages||[]).some(m=>!m.out&&m.source==='operator_reported')?tag('수동 확인'):''}</button></div>`).join('')||'<div class="empty">조건에 맞는 대화가 없습니다.</div>';
-  showThread(visible.some(t=>t.id===selectedThread)?selectedThread:visible[0]?.id);
+  $("#thread-list").innerHTML=visible.map(t=>`<div class="thread"><button data-action="thread" data-id="${esc(t.id)}" style="text-align:left;width:100%;border:0;background:none"><strong>${esc(targetName(t.target))}</strong><p>${esc(t.subject)}</p>${tag(t.channel)} ${tag(t.classification)} ${(t.messages||[]).some(m=>m.out===false&&m.source==='operator_reported')?tag('수동 확인'):''}</button></div>`).join('')||'<div class="empty">조건에 맞는 대화가 없습니다.</div>';
+  const next=visible.some(t=>t.id===selectedThread)?selectedThread:(visible[0]?.id||'');
+  if($('#thread-detail').dataset.threadId!==next)showThread(next);
 
 }
 function showThread(id) {
   const t = data.threads.find((t) => t.id === id);
   if (!t) {
     selectedThread = "";
+    $("#thread-detail").dataset.threadId = "";
     $("#thread-detail").innerHTML =
       '<div class="empty">대화를 선택하세요. 실제 수신 메일은 Gmail을 연결한 후 동기화할 수 있습니다.</div>';
     return;
   }
   selectedThread = id;
+  $("#thread-detail").dataset.threadId = id;
   $("#thread-detail").innerHTML =
     `${tag(t.channel)}${t.channel === "email" && t.providerId ? `<a href="https://mail.google.com/mail/?authuser=${encodeURIComponent(connections.gmail.email || "")}#all/${encodeURIComponent(t.providerId)}" target="_blank" rel="noopener">원본 Gmail 열기 ↗</a>` : ""}<h2 style="margin-top:15px">${esc(t.subject)}</h2><p class="fine">${esc(targetName(t.target))} · ${esc(t.synced || "수동·발송 기록")}${t.accountUsername ? " · 수신·회신 계정 @" + esc(t.accountUsername) : ""}</p>${
       !t.target && t.channel === "instagram"
