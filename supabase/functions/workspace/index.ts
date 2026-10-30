@@ -1,4 +1,5 @@
 import {templateLibraryService} from '../_shared/template-library.ts';
+import {creatorInstagramOauth} from '../_shared/creator-instagram-oauth.ts';
 import {creatorInstagramReadiness} from '../_shared/creator-instagram-readiness.ts';
 import {creatorManualDmService} from '../_shared/creator-manual-dm.ts';
 import {assertCreatorProposalSnapshot} from '../_shared/creator-proposal-snapshot.ts';
@@ -174,6 +175,7 @@ const creatorVisibleImport = visibleImportService({sb,query,audit});
 const creatorContactReview=creatorContactReviewService({sb,query,audit});
 const templateLibrary=templateLibraryService({sb,query,audit});
 const creatorManualDm=creatorManualDmService({sb,query,audit});
+const creatorInstagramAuth=creatorInstagramOauth({sb,query,env,key,digest,encrypt,remote,resolveSession:resolveInstagramSession,capabilities:instagramCapabilities,audit,oauthStateProblem,oauthLifetimeMs});
 const creatorMeta = creatorMetaService({sb,query,env,connection,saveConnection,audit});
 const apifyTrials=apifyTrialService({sb,query,env,audit});
 const saveManualReply=manualReplyService({sb,query,putRecord,audit});
@@ -792,7 +794,8 @@ Deno.serve(async (req: Request) => {
       try{await creatorMeta.callback(url,base);return Response.redirect(frontend+'?creator_meta=connected#creators',302);}
       catch{return Response.redirect(frontend+'?creator_meta=error#creators',302);}
     }
-    if(path.startsWith("/instagram/")||path==="/oauth/instagram/callback")return json({error:"공식 Instagram API 연동은 제외됐습니다. 서버 로그인 관리를 사용하세요."},410);
+    if(path==='/oauth/instagram/callback'&&req.method==='GET'){const state=url.searchParams.get('state')||'',code=url.searchParams.get('code')||'';if(!state||!code||state.length>256||code.length>4096)return new Response(null,{status:302,headers:{Location:oauthErrorRedirect('Instagram 공식 연결이 취소되었거나 만료되었습니다.',frontend),'Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});const redirect=new URL(frontend);redirect.hash='instagram-connect?'+new URLSearchParams({state,code}).toString();return new Response(null,{status:302,headers:{Location:redirect.toString(),'Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});}
+    if(path.startsWith("/instagram/"))return json({error:"공식 Instagram 메시지 경로는 아직 비활성화되어 있습니다."},410);
     if (/^\/oauth\/(gmail|instagram)\/callback$/.test(path)) {
       try { return await callback(req, url, path.split("/")[2], base); }
       catch (e) {
@@ -861,6 +864,8 @@ Deno.serve(async (req: Request) => {
     if(path==='/template-library'){try{return json(await templateLibrary(req.method,u,input));}catch(e){fail(400,String(e.message||'템플릿 저장 오류'));}}
     if(path==='/creator-inbox'&&req.method==='GET'){const connection=await query(sb.from('sanji_connections').select('summary').eq('owner',u).eq('provider','gmail').maybeSingle());const mailbox=String(connection?.summary?.email||'').trim().toLowerCase();if(!mailbox)return json({items:[]});const items=await query(sb.from('sanji_creator_inbound_messages').select('creator_id,provider_thread_id,data').eq('owner',u).eq('mailbox',mailbox).order('created',{ascending:false}).limit(500));const ids=[...new Set(items.map((x:any)=>x.creator_id))];const creators:any[]=[];for(let i=0;i<ids.length;i+=100)creators.push(...await query(sb.from('sanji_creator_recovery').select('id,handle').eq('owner',u).in('id',ids.slice(i,i+100))));return json({items:items.filter((x:any)=>creators.some(c=>c.id===x.creator_id)).map((x:any)=>({...x,handle:creators.find(c=>c.id===x.creator_id)?.handle}))});}
     if((path==='/creator-contact-review/dm-event'||path==='/creator-contact-review/dm-draft')&&req.method==='POST'){try{return json(await creatorManualDm(path,u,input));}catch(e){fail(400,String(e.message||'DM 수동 기록 실패'));}}
+    if(path==='/creator-instagram/oauth/complete'&&req.method==='POST'){const b=await input();if(typeof b.state!=='string'||typeof b.code!=='string'||!b.state||!b.code||b.state.length>256||b.code.length>4096)fail(400,'인증 요청을 확인하세요.');const handoff=new URL(base+'/oauth/instagram/callback');handoff.searchParams.set('state',b.state);handoff.searchParams.set('code',b.code);try{return json(await creatorInstagramAuth.callback(handoff,base,u));}catch{fail(400,'Instagram 연결을 완료하지 못했습니다. 로그인 계정과 인증 요청을 확인하세요.');}}
+    if(path==='/creator-instagram/oauth/prepare'&&req.method==='POST'){try{return json(await creatorInstagramAuth.prepare(u,base));}catch(e){fail(400,String(e.message||'공식 연결 준비 실패'));}}
     if(path==='/creator-instagram/message-status'&&req.method==='GET'){const rows=await query(sb.from('sanji_connections').select('provider,summary').eq('owner',u).or('provider.eq.instagram,provider.like.instagram:%'));return json(creatorInstagramReadiness(rows));}
     if(path==='/creator-contact-review'||path==='/creator-contact-review/move'||path==='/creator-contact-review/import'||path==='/creator-contact-review/receipt'){try{return json(await creatorContactReview(path,req.method,u,input));}catch(e){fail(400,String(e.message||'크리에이터 검토 저장 실패'));}}
     if(path==='/creator-recovery/import-visible'&&req.method==='POST'){try{return json(await creatorVisibleImport(u,await input()));}catch(e){fail(400,String(e.message||'후보 가져오기 실패'));}}
