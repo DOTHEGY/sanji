@@ -1715,8 +1715,8 @@ function recoveryService({ sb: sb2, query: query2, audit: audit2 }) {
   }
   async function handle2(path, method, owner, input, params = new URLSearchParams()) {
     if (path === "/creator-recovery" && method === "GET") {
-      const c = await config(owner), today = day(), requested = params.get("day") || today, pool = await query2(sb2.rpc("sanji_creator_pool_counts", { p_owner: owner })), selectedDay = /^\d{4}-\d{2}-\d{2}$/.test(requested) && requested <= new Date(Date.now() + 9 * 36e5 + 864e5).toISOString().slice(0, 10) ? requested : today, target = params.has("target") ? targetValue(params.get("target")) : c.target, rec = await query2(sb2.from("sanji_creator_recommendations").select("creator_id").eq("owner", owner).eq("day", selectedDay));
-      const ids = rec.map((r) => r.creator_id), rows = [];
+      const c = await config(owner), today = day(), requested = params.get("day") || today, pool = await query2(sb2.rpc("sanji_creator_pool_counts", { p_owner: owner })), selectedDay = /^\d{4}-\d{2}-\d{2}$/.test(requested) && requested <= new Date(Date.now() + 9 * 36e5 + 864e5).toISOString().slice(0, 10) ? requested : today, requestedTarget = params.has("target") ? targetValue(params.get("target")) : null, rec = await query2(sb2.from("sanji_creator_recommendations").select("creator_id").eq("owner", owner).eq("day", selectedDay));
+      const ids = rec.map((r) => r.creator_id), target = requestedTarget ?? (selectedDay === today ? Math.max(c.target, ids.length) : c.target), rows = [];
       for (let i = 0; i < ids.length; i += 100) rows.push(...await query2(sb2.from("sanji_creator_recovery").select("*").eq("owner", owner).in("id", ids.slice(i, i + 100))));
       const needed = selectedDay === today ? Math.max(0, target - ids.length) : target, preview = needed ? await query2(sb2.rpc("sanji_creator_preview", { p_owner: owner, p_target: needed })) : [];
       const offset = Math.min(1e5, Math.max(0, Number.parseInt(params.get("reviewOffset") || "0", 10) || 0));
