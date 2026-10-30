@@ -124,7 +124,7 @@ export async function workspaceApi(path, method = "GET", body) {
   }
   if (path === "/me") {
     const s = await member();
-    return { email: s.user.email, csrf: "" };
+    return { id:s.user.id, email: s.user.email, csrf: "" };
   }
   if (path === "/connections") {
     await member();
