@@ -1,3 +1,103 @@
+// supabase/functions/_shared/creator-instagram-events.ts
+async function verifyInstagramSignature(raw, header, secret) {
+  if (!secret || !/^sha256=[a-f0-9]{64}$/i.test(header)) return false;
+  const key2 = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+  const bytes = Uint8Array.from(header.slice(7).match(/../g).map((x) => parseInt(x, 16)));
+  return crypto.subtle.verify("HMAC", key2, bytes, raw);
+}
+function instagramInboundEvents(payload, now2 = Date.now()) {
+  const result = [];
+  if (payload?.object !== "instagram" || !Array.isArray(payload.entry)) return result;
+  for (const entry of payload.entry) {
+    const account = String(entry?.id || "");
+    if (!/^\d+$/.test(account) || !Array.isArray(entry.messaging)) continue;
+    for (const e of entry.messaging) {
+      const peer = String(e?.sender?.id || ""), recipient = String(e?.recipient?.id || ""), mid = e?.message?.mid, text3 = e?.message?.text, at = Number(e?.timestamp);
+      if (recipient !== account || !/^\d+$/.test(peer) || peer === account || e?.message?.is_echo === true || typeof mid !== "string" || !mid || mid.length > 500 || typeof text3 !== "string" || !text3.trim() || text3.length > 1e4 || !Number.isFinite(at) || at <= 0 || at > now2 + 3e5) continue;
+      result.push({ accountId: account, peerId: peer, messageId: mid, text: text3, receivedAt: new Date(at).toISOString() });
+    }
+  }
+  return result;
+}
+
+// supabase/functions/_shared/creator-instagram-inbox.ts
+function creatorInstagramInbox({ sb: sb2, query: query2, connection: connection2, remote: remote2, env: env2 }) {
+  async function account(owner) {
+    const rows = await query2(sb2.from("sanji_connections").select("provider,summary").eq("owner", owner).like("provider", "instagram:%"));
+    const valid = rows.filter((r) => r.summary?.connected === true && r.summary?.apiVerified === true && String(r.summary?.username || "").toLowerCase() === "valu_est" && r.provider === "instagram:" + r.summary?.accountId && /^\d+$/.test(String(r.summary?.accountId)));
+    if (valid.length !== 1) throw Error("@valu_est \uACF5\uC2DD \uC5F0\uACB0\uC744 \uD655\uC778\uD558\uC138\uC694");
+    const id = String(valid[0].summary.accountId), session = await connection2(owner, valid[0].provider);
+    if (!session?.access_token || String(session.id) !== id || String(session.username || "").toLowerCase() !== "valu_est" || !Number.isFinite(Number(session.expires)) || Number(session.expires) <= Date.now()) throw Error("Instagram \uC5F0\uACB0\uC774 \uB9CC\uB8CC\uB410\uAC70\uB098 \uACC4\uC815\uC774 \uB2E4\uB985\uB2C8\uB2E4");
+    return { id, token: session.access_token };
+  }
+  async function capture(owner, e) {
+    return query2(sb2.rpc("sanji_instagram_capture", { p_owner: owner, p_account: e.accountId, p_peer: e.peerId, p_mid: e.messageId, p_at: e.receivedAt, p_body: e.text }));
+  }
+  async function webhook(req) {
+    const raw = new Uint8Array(await req.arrayBuffer());
+    if (raw.length > 1048576 || !await verifyInstagramSignature(raw, req.headers.get("x-hub-signature-256") || "", env2("META_APP_SECRET"))) throw Error("\uC11C\uBA85 \uAC80\uC99D \uC2E4\uD328");
+    let payload;
+    try {
+      payload = JSON.parse(new TextDecoder().decode(raw));
+    } catch {
+      throw Error("invalid event");
+    }
+    const events = instagramInboundEvents(payload);
+    for (const e of events) {
+      const rows = await query2(sb2.from("sanji_connections").select("owner,provider,summary").eq("provider", "instagram:" + e.accountId));
+      const matches = rows.filter((r) => r.summary?.connected === true && r.summary?.apiVerified === true && r.summary?.accountId === e.accountId && String(r.summary?.username || "").toLowerCase() === "valu_est");
+      if (matches.length !== 1) continue;
+      await capture(matches[0].owner, e);
+    }
+    return { ok: true };
+  }
+  async function list(owner) {
+    const a = await account(owner);
+    const items = await query2(sb2.from("sanji_instagram_inbound").select("account_id,peer_id,message_id,received_at,body").eq("owner", owner).eq("account_id", a.id).order("received_at", { ascending: true }).limit(500));
+    const attempts = await query2(sb2.from("sanji_instagram_reply_attempts").select("account_id,peer_id,inbound_id,body,status,created_at").eq("owner", owner).eq("account_id", a.id).order("created_at", { ascending: true }).limit(500));
+    return { items, attempts, account: "valu_est", sendingEnabled: env2("INSTAGRAM_SENDING_ENABLED") === "true" };
+  }
+  async function sync(owner) {
+    const a = await account(owner), version = env2("META_GRAPH_VERSION") || "v24.0";
+    if (!/^v\d+\.\d+$/.test(version)) throw Error("invalid version");
+    const get = async (path, fields) => remote2("https://graph.instagram.com/" + version + "/" + path.split("/").map(encodeURIComponent).join("/") + "?" + fields, { headers: { Authorization: "Bearer " + a.token } }, "Instagram \uB300\uD654 \uC870\uD68C");
+    const conversations = await get("me/conversations", "platform=instagram&limit=10");
+    let inserted = 0;
+    for (const c of (conversations.data || []).slice(0, 10)) {
+      if (typeof c.id !== "string" || c.id.length > 500) continue;
+      const thread = await get(c.id, "fields=messages");
+      for (const m of (thread.messages?.data || []).slice(0, 10)) {
+        if (typeof m.id !== "string" || m.id.length > 500) continue;
+        const detail = await get(m.id, "fields=id,created_time,from,to,message");
+        const peer = String(detail.from?.id || ""), at = Date.parse(detail.created_time);
+        if (detail.id !== m.id || !/^\d+$/.test(peer) || peer === a.id || !detail.to?.data?.some((x) => String(x.id) === a.id) || typeof detail.message !== "string" || !detail.message.trim() || !Number.isFinite(at) || at > Date.now() + 3e5) continue;
+        if (await capture(owner, { accountId: a.id, peerId: peer, messageId: detail.id, text: detail.message, receivedAt: new Date(at).toISOString() })) inserted++;
+      }
+    }
+    return { inserted };
+  }
+  async function reply(owner, b) {
+    if (env2("INSTAGRAM_SENDING_ENABLED") !== "true") throw Error("Instagram \uB2F5\uC7A5 \uBC1C\uC1A1\uC774 \uBE44\uD65C\uC131\uD654\uB418\uC5B4 \uC788\uC2B5\uB2C8\uB2E4.");
+    if (typeof b.messageId !== "string" || !b.messageId || typeof b.body !== "string" || !b.body.trim() || b.body.length > 1e3 || typeof b.requestId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(b.requestId)) throw Error("\uB2F5\uC7A5 \uB0B4\uC6A9\uC744 \uD655\uC778\uD558\uC138\uC694.");
+    const a = await account(owner), r = await query2(sb2.rpc("sanji_instagram_reserve_reply", { p_owner: owner, p_account: a.id, p_mid: b.messageId, p_request: b.requestId, p_body: b.body }));
+    if (!r.reserved) return { status: r.status, duplicate: true };
+    let status = "outcome_unknown", providerId = null;
+    try {
+      const version = env2("META_GRAPH_VERSION") || "v24.0";
+      if (!/^v\d+\.\d+$/.test(version)) throw Error("invalid version");
+      const res = await remote2("https://graph.instagram.com/" + version + "/" + a.id + "/messages", { method: "POST", headers: { Authorization: "Bearer " + a.token, "Content-Type": "application/json" }, body: JSON.stringify({ recipient: { id: r.peerId }, message: { text: b.body } }) }, "Instagram \uB2F5\uC7A5");
+      if (typeof res?.message_id === "string" && res.message_id) {
+        status = "accepted";
+        providerId = res.message_id;
+      }
+    } catch {
+    }
+    await query2(sb2.rpc("sanji_instagram_finish_reply", { p_owner: owner, p_request: b.requestId, p_status: status, p_provider_id: providerId }));
+    return { status };
+  }
+  return { webhook, list, sync, reply };
+}
+
 // supabase/functions/_shared/template-library.ts
 function templateLibraryService({ sb: sb2, query: query2, audit: audit2 }) {
   return async (method, owner, input) => {
@@ -3563,6 +3663,7 @@ var creatorVisibleImport = visibleImportService({ sb, query, audit });
 var creatorContactReview = creatorContactReviewService({ sb, query, audit });
 var templateLibrary = templateLibraryService({ sb, query, audit });
 var creatorManualDm = creatorManualDmService({ sb, query, audit });
+var instagramInbox = creatorInstagramInbox({ sb, query, connection, remote, env });
 var creatorInstagramAuth = creatorInstagramOauth({ sb, query, env, key, digest: digest3, encrypt, remote, resolveSession: resolveInstagramSession, capabilities: instagramCapabilities, audit, oauthStateProblem, oauthLifetimeMs });
 var creatorMeta = creatorMetaService({ sb, query, env, connection, saveConnection, audit });
 var apifyTrials = apifyTrialService({ sb, query, env, audit });
@@ -4062,6 +4163,17 @@ Deno.serve(async (req) => {
       redirect.hash = "instagram-connect?" + new URLSearchParams({ state, code }).toString();
       return new Response(null, { status: 302, headers: { Location: redirect.toString(), "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
     }
+    if (path === "/creator-instagram/webhook" && req.method === "GET") {
+      if (env("META_VERIFY_TOKEN") && url2.searchParams.get("hub.mode") === "subscribe" && url2.searchParams.get("hub.verify_token") === env("META_VERIFY_TOKEN")) return new Response(url2.searchParams.get("hub.challenge") || "", { status: 200 });
+      return new Response("Forbidden", { status: 403 });
+    }
+    if (path === "/creator-instagram/webhook" && req.method === "POST") {
+      try {
+        return json(await instagramInbox.webhook(req));
+      } catch {
+        return json({ error: "\uC6F9\uD6C5 \uAC80\uC99D \uB610\uB294 \uC800\uC7A5 \uC2E4\uD328" }, 400);
+      }
+    }
     if (path.startsWith("/instagram/")) return json({ error: "\uACF5\uC2DD Instagram \uBA54\uC2DC\uC9C0 \uACBD\uB85C\uB294 \uC544\uC9C1 \uBE44\uD65C\uC131\uD654\uB418\uC5B4 \uC788\uC2B5\uB2C8\uB2E4." }, 410);
     if (/^\/oauth\/(gmail|instagram)\/callback$/.test(path)) {
       try {
@@ -4202,6 +4314,27 @@ Deno.serve(async (req) => {
         return json(await creatorInstagramAuth.prepare(u, base));
       } catch (e) {
         fail(400, String(e.message || "\uACF5\uC2DD \uC5F0\uACB0 \uC900\uBE44 \uC2E4\uD328"));
+      }
+    }
+    if (path === "/creator-instagram/inbox" && req.method === "GET") {
+      try {
+        return json(await instagramInbox.list(u));
+      } catch {
+        return json({ error: "@valu_est \uC5F0\uACB0\uC744 \uD655\uC778\uD558\uC138\uC694." }, 409);
+      }
+    }
+    if (path === "/creator-instagram/sync" && req.method === "POST") {
+      try {
+        return json(await instagramInbox.sync(u));
+      } catch {
+        return json({ error: "Instagram \uB300\uD654 \uC870\uD68C\uC5D0 \uC2E4\uD328\uD588\uC2B5\uB2C8\uB2E4. \uC5F0\uACB0\uACFC \uAD8C\uD55C\uC744 \uD655\uC778\uD558\uC138\uC694." }, 409);
+      }
+    }
+    if (path === "/creator-instagram/reply" && req.method === "POST") {
+      try {
+        return json(await instagramInbox.reply(u, await input()));
+      } catch {
+        return json({ error: "\uB2F5\uC7A5\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uC5F0\uACB0, \uC218\uC2E0 \uC2DC\uAC01\uACFC \uC774\uC804 \uBC1C\uC1A1 \uACB0\uACFC\uB97C \uD655\uC778\uD558\uC138\uC694." }, 409);
       }
     }
     if (path === "/creator-instagram/message-status" && req.method === "GET") {

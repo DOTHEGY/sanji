@@ -536,18 +536,19 @@ function allowInboxChange(){return !inboxEdited||window.confirm('저장하지 �
 function meetingKstInput(v){const d=new Date(v);return Number.isNaN(d.getTime())?'':new Date(d.getTime()+9*3600000).toISOString().slice(0,16);}
 function meetingKstUtc(v){if(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(v))throw Error('미팅 일시를 입력하세요.');const d=new Date(v+':00+09:00');if(Number.isNaN(d.getTime())||meetingKstInput(d.toISOString())!==v)throw Error('미팅 일시를 확인하세요.');return d.toISOString();}
 function groupInboxThreads(threads){const groups=new Map();for(const t of threads){const key=t.target?'target:'+t.target:t.creatorHandle?'recovery:'+t.id:'unlinked:'+t.id;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(t);}return [...groups.values()];}
-function inboxThreadName(t){return t.creatorHandle?'@'+t.creatorHandle:targetName(t.target);}
-function visibleInboxThreads(threads,q,type,mode){const needle=String(q||'').toLowerCase();return threads.filter(t=>{const name=inboxThreadName(t);return String(name+' '+(t.subject||'')+' '+(t.owner||'')+' '+(t.next||'')).toLowerCase().includes(needle)&&(!type||(type==='creator'?(t.creatorHandle||candidate(t.target)?.kind==='크리에이터'):(!t.creatorHandle&&['브랜드','제조사','공식 유통사'].includes(candidate(t.target)?.kind))))&&(mode==='all'||(t.messages||[]).some(inboundHumanReply));});}
+function inboxThreadName(t){if(t.instagramOfficial)return 'Instagram 사용자';return t.creatorHandle?'@'+t.creatorHandle:targetName(t.target);}
+function visibleInboxThreads(threads,q,type,mode){const needle=String(q||'').toLowerCase();return threads.filter(t=>{const name=inboxThreadName(t);return String(name+' '+(t.subject||'')+' '+(t.owner||'')+' '+(t.next||'')).toLowerCase().includes(needle)&&(!type||(type==='creator'?(t.instagramOfficial||t.creatorHandle||candidate(t.target)?.kind==='크리에이터'):(!t.creatorHandle&&['브랜드','제조사','공식 유통사'].includes(candidate(t.target)?.kind))))&&(mode==='all'||(t.messages||[]).some(inboundHumanReply));});}
 async function inboxPage() {
   const generation=++inboxRequestGeneration, account=me, stillCurrent=()=>generation===inboxRequestGeneration&&me===account&&!!me&&(location.hash.slice(1)==='inbox');
   let loaded=[];
   try{const r=await api('/creator-inbox');if(!stillCurrent())return;const groups=new Map();for(const item of r.items||[]){const id='creator:'+item.creator_id+':'+item.provider_thread_id;if(!groups.has(id))groups.set(id,{id,creatorHandle:item.handle,channel:'email',providerId:item.provider_thread_id,subject:item.data?.subject||'크리에이터 답장',classification:'수신',messages:[]});groups.get(id).messages.push(item.data);}loaded=[...groups.values()];for(const t of loaded)t.messages.sort((a,b)=>String(a.at||'').localeCompare(String(b.at||''))||String(a.id||'').localeCompare(String(b.id||'')));}catch(e){if(!stillCurrent())return;toast('크리에이터 답장을 불러오지 못했습니다: '+e.message);}
+  try{const ig=await api('/creator-instagram/inbox');if(!stillCurrent())return;const groups=new Map();for(const m of ig.items||[]){const id='instagram-official:'+m.peer_id;if(!groups.has(id))groups.set(id,{id,instagramOfficial:true,channel:'instagram',accountUsername:'valu_est',subject:'Instagram 수신 대화',classification:'수신',messages:[],sendingEnabled:ig.sendingEnabled});groups.get(id).messages.push({id:m.message_id,out:false,text:m.body,at:m.received_at});}for(const a of ig.attempts||[]){const t=groups.get('instagram-official:'+a.peer_id);if(t)t.messages.push({out:true,text:a.body,at:a.created_at,replyStatus:a.status});}for(const t of groups.values()){t.messages.sort((a,b)=>String(a.at).localeCompare(String(b.at)));loaded.push(t);}}catch{if(!stillCurrent())return;}
   if(!stillCurrent()||inboxEdited)return;creatorInboxThreads=loaded;
   $("#app").innerHTML =
     head(
       "통합 대화함",
       "실제 동기화된 대화와 직접 작성한 회신을 관리합니다.",
-      button("Gmail 답장 동기화", "sync-mail"),
+      button("Gmail 답장 동기화", "sync-mail") + button("Instagram 수신 확인", "instagram-sync"),
     ) +
     `<p class="fine">산지에서 브랜드·크리에이터 답장을 나눠 봅니다. Gmail 라벨 자동 분류는 권한 확인 전 꺼져 있습니다.</p>` +
     `<div class="toolbar"><input id="thread-filter" class="search" placeholder="이름·제목·담당자·메모 검색" aria-label="대화 검색"><select id="thread-mode" aria-label="대화 범위"><option value="replies">답장 온 대화</option><option value="all">전체 대화 기록</option></select><div class="actions" role="group" aria-label="답장 폴더">${[['','전체'],['brand','브랜드'],['creator','크리에이터']].map(([value,label])=>`<button type="button" data-action="inbox-folder" data-id="${value}" aria-pressed="${inboxFolder===value}">${label}</button>`).join('')}</div><input type="hidden" id="thread-type" value="${esc(inboxFolder)}"></div><div class="panel conversation"><div class="thread-list" id="thread-list"></div><div class="thread-content" id="thread-detail"></div></div>`;
@@ -578,6 +579,7 @@ function showThread(id) {
   }
   selectedThread = id;
   $("#thread-detail").dataset.threadId = id;
+  if(t.instagramOfficial){const last=[...t.messages].reverse().find(m=>m.out===false),within=last&&Date.now()-Date.parse(last.at)<86400000&&Date.parse(last.at)<=Date.now();$('#thread-detail').innerHTML='<h2>Instagram 수신 대화 · @valu_est</h2><p class="fine">상대가 먼저 보낸 대화만 표시합니다. 접수는 전달이나 열람을 뜻하지 않습니다.</p>'+t.messages.map(m=>'<div class="message '+(m.out?'out':'')+'">'+tag(m.out?({'accepted':'Meta 접수','pending':'처리 중 · 재전송 금지','outcome_unknown':'전송 결과 확인 필요 · 재전송 금지'}[m.replyStatus]||'확인 필요'):'Instagram 수신')+' <small>'+esc(m.at)+'</small><br>'+esc(m.text)+'</div>').join('')+(within&&t.sendingEnabled?'<form id="instagram-reply-form" data-id="'+esc(last.id)+'"><label>수동 답장<textarea name="body" maxlength="1000" required></textarea></label><button type="submit">확인 후 답장 보내기</button></form>':'<p class="notice">'+(!within?'마지막 수신 후 24시간이 지나 답장할 수 없습니다.':'공식 연결 또는 발송 설정을 확인해야 합니다.')+'</p>');return;}
   $("#thread-detail").innerHTML =
     `${tag(t.channel)}${t.channel === "email" && t.providerId ? `<a href="https://mail.google.com/mail/?authuser=${encodeURIComponent(connections.gmail.email || "")}#all/${encodeURIComponent(t.providerId)}" target="_blank" rel="noopener">원본 Gmail 열기 ↗</a>` : ""}<h2 style="margin-top:15px">${esc(t.subject)}</h2><p class="fine">${esc(inboxThreadName(t))} · ${esc(t.creatorHandle?"Gmail 확인 답장":t.synced || "수동·발송 기록")}${t.accountUsername ? " · 수신·회신 계정 @" + esc(t.accountUsername) : ""}</p>${
       !t.target && t.channel === "instagram"
@@ -1132,6 +1134,9 @@ document.addEventListener("submit", async (e) => {
       await reload();
       toast("운영 설정을 저장했습니다.");
       return;
+    } else if (form.id === "instagram-reply-form") {
+      if(!window.confirm('이 수신 대화에 작성한 답장을 실제 전송할까요?'))return;
+      const result=await api('/creator-instagram/reply','POST',{messageId:form.dataset.id,body:f.body,requestId:crypto.randomUUID()});inboxEdited=false;inboxDirtyForms.clear();toast(result.status==='accepted'?'Meta에 접수됐습니다. 전달 여부는 확인되지 않았습니다.':'전송 결과 확인 필요 · 다시 보내지 마세요.');await inboxPage();return;
     } else if (form.id === "meeting-form") {
       const t=data.threads.find(x=>x.id===form.dataset.id);if(!t)throw Error('대화가 없습니다.');const management=inboxDirtyForms.has('thread-form')?formObject($('#thread-form')):{owner:t.owner||'',next:t.next||'',due:t.due||'',classification:t.classification||'미분류'};await api('/thread/'+t.id,'PUT',{...management,version:Number(form.dataset.version),meeting:{at:meetingKstUtc(f.meetingAt),mode:f.meetingMode,status:f.meetingStatus,result:f.meetingResult||''}});inboxEdited=false;inboxDirtyForms.clear();await reload();toast('미팅 기록을 저장했습니다.');return;
     } else if (form.id === "thread-form") {
@@ -1184,6 +1189,7 @@ const actions = {
   "creator-meta-connect":async()=>{try{const r=await api('/creator-meta/start','POST',{});location.href=r.url;}catch(e){toast(e.message);}},
   "creator-meta-disconnect":async()=>{try{await api('/creator-meta/disconnect','POST',{});await creatorDiscoveryPage();}catch(e){toast(e.message);}},
   "meeting-cancel":id=>{if(!allowInboxChange())return;inboxEdited=false;inboxDirtyForms.clear();showThread(id);},
+  "instagram-sync":async()=>{if(!allowInboxChange())return;try{await api('/creator-instagram/sync','POST',{});inboxEdited=false;inboxDirtyForms.clear();await inboxPage();toast('Instagram 수신 기록을 확인했습니다.');}catch(e){toast(e.message);}},
   "inbox-folder":value=>{if(!allowInboxChange())return;if(inboxEdited){inboxEdited=false;inboxDirtyForms.clear();$('#thread-detail').dataset.threadId='__refresh__';}inboxFolder=['','brand','creator'].includes(value)?value:'';$('#thread-type').value=inboxFolder;document.querySelectorAll('[data-action="inbox-folder"]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.id===inboxFolder)));filterThreads();},
 
 
@@ -1407,7 +1413,7 @@ function invalidatePreview() {
 }
 document.addEventListener("input", (e) => {
   if(e.target.id==='recovery-target'){saveRecommendationTarget(recoveryView?.day||recommendationDay(),e.target.value);const note=$('#recovery-target-status');if(note)note.textContent=Number(e.target.value)===Number(recoveryView?.target)&&e.target.value?'':'인원이 변경됐습니다. 복사하려면 미리보기를 다시 확인하세요.';}
-  {const changed=e.target.closest('#thread-form, #meeting-form');if(changed){inboxEdited=true;inboxDirtyForms.add(changed.id);}}
+  {const changed=e.target.closest('#thread-form, #meeting-form, #instagram-reply-form');if(changed){inboxEdited=true;inboxDirtyForms.add(changed.id);}}
   if(e.target.id==="thread-filter"&&inboxEdited&&!allowInboxChange()){e.target.value=inboxFilterSnapshot.q;return;}
   if(e.target.id==="thread-filter"&&inboxEdited){inboxEdited=false;inboxDirtyForms.clear();$('#thread-detail').dataset.threadId='__refresh__';}
   if(e.target.matches('#settings-form [name="emailSignature"]')){const p=$('#email-signature-preview');if(p)p.textContent=e.target.value||'공통 서명 미설정 · 템플릿에 저장한 서명을 사용합니다.';}
@@ -1425,7 +1431,7 @@ document.addEventListener("input", (e) => {
 });
 document.addEventListener("change", (e) => {
   if(e.target.id==='recovery-history-day'){recoveryHistoryDay=e.target.value;recoveryTarget=readRecommendationTarget(recoveryHistoryDay||recommendationDay());recoveryPreviewMode=false;creatorDiscoveryPage();return;}
-  {const changed=e.target.closest('#thread-form, #meeting-form');if(changed){inboxEdited=true;inboxDirtyForms.add(changed.id);}}
+  {const changed=e.target.closest('#thread-form, #meeting-form, #instagram-reply-form');if(changed){inboxEdited=true;inboxDirtyForms.add(changed.id);}}
   if(e.target.id==="thread-mode"&&inboxEdited&&!allowInboxChange()){e.target.value=inboxFilterSnapshot.mode;return;}
   if(e.target.id==="thread-mode"&&inboxEdited){inboxEdited=false;inboxDirtyForms.clear();$('#thread-detail').dataset.threadId='__refresh__';}
 

@@ -1,3 +1,4 @@
+import {creatorInstagramInbox} from '../_shared/creator-instagram-inbox.ts';
 import {templateLibraryService} from '../_shared/template-library.ts';
 import {creatorInstagramOauth} from '../_shared/creator-instagram-oauth.ts';
 import {creatorInstagramReadiness} from '../_shared/creator-instagram-readiness.ts';
@@ -175,6 +176,7 @@ const creatorVisibleImport = visibleImportService({sb,query,audit});
 const creatorContactReview=creatorContactReviewService({sb,query,audit});
 const templateLibrary=templateLibraryService({sb,query,audit});
 const creatorManualDm=creatorManualDmService({sb,query,audit});
+const instagramInbox=creatorInstagramInbox({sb,query,connection,remote,env});
 const creatorInstagramAuth=creatorInstagramOauth({sb,query,env,key,digest,encrypt,remote,resolveSession:resolveInstagramSession,capabilities:instagramCapabilities,audit,oauthStateProblem,oauthLifetimeMs});
 const creatorMeta = creatorMetaService({sb,query,env,connection,saveConnection,audit});
 const apifyTrials=apifyTrialService({sb,query,env,audit});
@@ -795,6 +797,13 @@ Deno.serve(async (req: Request) => {
       catch{return Response.redirect(frontend+'?creator_meta=error#creators',302);}
     }
     if(path==='/oauth/instagram/callback'&&req.method==='GET'){const state=url.searchParams.get('state')||'',code=url.searchParams.get('code')||'';if(!state||!code||state.length>256||code.length>4096)return new Response(null,{status:302,headers:{Location:oauthErrorRedirect('Instagram 공식 연결이 취소되었거나 만료되었습니다.',frontend),'Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});const redirect=new URL(frontend);redirect.hash='instagram-connect?'+new URLSearchParams({state,code}).toString();return new Response(null,{status:302,headers:{Location:redirect.toString(),'Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});}
+    if(path==='/creator-instagram/webhook'&&req.method==='GET'){
+      if(env('META_VERIFY_TOKEN')&&url.searchParams.get('hub.mode')==='subscribe'&&url.searchParams.get('hub.verify_token')===env('META_VERIFY_TOKEN'))return new Response(url.searchParams.get('hub.challenge')||'',{status:200});
+      return new Response('Forbidden',{status:403});
+    }
+    if(path==='/creator-instagram/webhook'&&req.method==='POST'){
+      try{return json(await instagramInbox.webhook(req));}catch{return json({error:'웹훅 검증 또는 저장 실패'},400);}
+    }
     if(path.startsWith("/instagram/"))return json({error:"공식 Instagram 메시지 경로는 아직 비활성화되어 있습니다."},410);
     if (/^\/oauth\/(gmail|instagram)\/callback$/.test(path)) {
       try { return await callback(req, url, path.split("/")[2], base); }
@@ -866,6 +875,9 @@ Deno.serve(async (req: Request) => {
     if((path==='/creator-contact-review/dm-event'||path==='/creator-contact-review/dm-draft')&&req.method==='POST'){try{return json(await creatorManualDm(path,u,input));}catch(e){fail(400,String(e.message||'DM 수동 기록 실패'));}}
     if(path==='/creator-instagram/oauth/complete'&&req.method==='POST'){const b=await input();if(typeof b.state!=='string'||typeof b.code!=='string'||!b.state||!b.code||b.state.length>256||b.code.length>4096)fail(400,'인증 요청을 확인하세요.');const handoff=new URL(base+'/oauth/instagram/callback');handoff.searchParams.set('state',b.state);handoff.searchParams.set('code',b.code);try{return json(await creatorInstagramAuth.callback(handoff,base,u));}catch{fail(400,'Instagram 연결을 완료하지 못했습니다. 로그인 계정과 인증 요청을 확인하세요.');}}
     if(path==='/creator-instagram/oauth/prepare'&&req.method==='POST'){try{return json(await creatorInstagramAuth.prepare(u,base));}catch(e){fail(400,String(e.message||'공식 연결 준비 실패'));}}
+    if(path==='/creator-instagram/inbox'&&req.method==='GET'){try{return json(await instagramInbox.list(u));}catch{return json({error:'@valu_est 연결을 확인하세요.'},409);}}
+    if(path==='/creator-instagram/sync'&&req.method==='POST'){try{return json(await instagramInbox.sync(u));}catch{return json({error:'Instagram 대화 조회에 실패했습니다. 연결과 권한을 확인하세요.'},409);}}
+    if(path==='/creator-instagram/reply'&&req.method==='POST'){try{return json(await instagramInbox.reply(u,await input()));}catch{return json({error:'답장할 수 없습니다. 연결, 수신 시각과 이전 발송 결과를 확인하세요.'},409);}}
     if(path==='/creator-instagram/message-status'&&req.method==='GET'){const rows=await query(sb.from('sanji_connections').select('provider,summary').eq('owner',u).or('provider.eq.instagram,provider.like.instagram:%'));return json(creatorInstagramReadiness(rows));}
     if(path==='/creator-contact-review'||path==='/creator-contact-review/move'||path==='/creator-contact-review/import'||path==='/creator-contact-review/receipt'){try{return json(await creatorContactReview(path,req.method,u,input));}catch(e){fail(400,String(e.message||'크리에이터 검토 저장 실패'));}}
     if(path==='/creator-recovery/import-visible'&&req.method==='POST'){try{return json(await creatorVisibleImport(u,await input()));}catch(e){fail(400,String(e.message||'후보 가져오기 실패'));}}
