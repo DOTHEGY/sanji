@@ -1294,7 +1294,9 @@ async function syncCreatorGmailObservations({ sb: sb2, query: query2, remote: re
       if (msg.threadId) {
         const thread = await remote2("https://gmail.googleapis.com/gmail/v1/users/me/threads/" + encodeURIComponent(msg.threadId) + "?format=full", { headers: { Authorization: "Bearer " + g.access_token } });
         const messages = gmailMessages2(thread, g.email, [], textBody2, hasAttachments), original = String(parsed.messageId || "").trim(), references = (m) => !!original && [m.inReplyTo, m.references].some((v) => String(v || "").split(/\s+/).includes(original));
-        reply = messages.some((m) => !m.out && !m.automatic && String(m.replyAddress || "").toLowerCase() === recipient && m.at >= parsed.at && references(m));
+        const inbound = messages.filter((m) => m.out === false && !m.automatic && !(m.bounceFailures || []).length && String(m.replyAddress || "").toLowerCase() === recipient && m.at >= parsed.at && references(m));
+        reply = inbound.length > 0;
+        for (let i = 0; i < inbound.length; i += 100) await query2(sb2.rpc("sanji_creator_inbound_store", { p_owner: owner, p_creator: row.creator_id, p_version: row.version, p_sent: o.providerMessageId, p_thread: msg.threadId, p_messages: inbound.slice(i, i + 100) }));
         for (const m of messages) {
           if (m.at < parsed.at || !m.bounceFailures?.some((f) => f.email === recipient && f.kind === "permanent")) continue;
           if (references(m)) failed = true;
@@ -4058,6 +4060,13 @@ Deno.serve(async (req) => {
       } catch (e) {
         fail(400, String(e.message || "\uD15C\uD50C\uB9BF \uC800\uC7A5 \uC624\uB958"));
       }
+    }
+    if (path === "/creator-inbox" && req.method === "GET") {
+      const items = await query(sb.from("sanji_creator_inbound_messages").select("creator_id,provider_thread_id,data").eq("owner", u).order("created", { ascending: false }).limit(500));
+      const ids = [...new Set(items.map((x) => x.creator_id))];
+      const creators = [];
+      for (let i = 0; i < ids.length; i += 100) creators.push(...await query(sb.from("sanji_creator_recovery").select("id,handle").eq("owner", u).in("id", ids.slice(i, i + 100))));
+      return json({ items: items.filter((x) => creators.some((c) => c.id === x.creator_id)).map((x) => ({ ...x, handle: creators.find((c) => c.id === x.creator_id)?.handle })) });
     }
     if (path === "/creator-contact-review" || path === "/creator-contact-review/move" || path === "/creator-contact-review/import" || path === "/creator-contact-review/receipt") {
       try {
