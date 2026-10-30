@@ -1377,7 +1377,7 @@ function gmailSyncService({ sb: sb2, query: query2, records: records2, putRecord
           const rt = await remote2("https://gmail.googleapis.com/gmail/v1/users/me/threads/" + encodeURIComponent(t.providerId) + "?format=full", { headers: { Authorization: "Bearer " + g.access_token } }), messages = gmailMessages(rt, g.email, t.messages || [], textBody2, gmailHasAttachments2), inbound = messages.filter((m) => !m.out && !m.automatic);
           await rememberFailures(owner, messages);
           const opted = inbound.some((m) => /수신\s*거부(합니다|할게|해\s*주세요|요청합니다)|^\s*수신\s*거부[.!]?\s*$|unsubscribe\s+me|please\s+(unsubscribe|stop)|연락.{0,8}(중단해|그만해|하지\s*마)/im.test(m.text));
-          if (JSON.stringify(t.messages || []) !== JSON.stringify(messages) || opted && t.classification !== "\uC218\uC2E0 \uAC70\uBD80") await putRecord2(owner, "thread", { ...t, messages, classification: opted ? "\uC218\uC2E0 \uAC70\uBD80" : t.classification, synced: now2 }, t.id);
+          if (JSON.stringify(t.messages || []) !== JSON.stringify(messages) || opted && t.classification !== "\uC218\uC2E0 \uAC70\uBD80") await putRecord2(owner, "thread", { ...t, messages, classification: opted ? "\uC218\uC2E0 \uAC70\uBD80" : t.classification, synced: now2 }, t.id, t.version);
           if (opted) {
             const c = candidates.find((c2) => c2.id === t.target);
             if (c) {
@@ -1408,7 +1408,7 @@ function gmailSyncService({ sb: sb2, query: query2, records: records2, putRecord
             if (!c) continue;
             const old = (await records2(owner, "thread")).find((t) => t.channel === "email" && t.providerId === rm.threadId), messages = gmailMessages({ messages: [rm] }, g.email, old?.messages || [], textBody2, gmailHasAttachments2);
             const merged = [...(old?.messages || []).filter((m) => m.id !== rm.id), ...messages].sort((a, b) => a.at.localeCompare(b.at));
-            if (!old || JSON.stringify(old.messages || []) !== JSON.stringify(merged)) await putRecord2(owner, "thread", { ...old, target: c.id, channel: "email", providerId: rm.threadId, subject: messages[0]?.subject || "\uBC30\uB2EC \uC2E4\uD328 \uC54C\uB9BC", classification: old?.classification || "\uC790\uB3D9 \uC751\uB2F5", messages: merged, synced: now2 }, old?.id);
+            if (!old || JSON.stringify(old.messages || []) !== JSON.stringify(merged)) await putRecord2(owner, "thread", { ...old, target: c.id, channel: "email", providerId: rm.threadId, subject: messages[0]?.subject || "\uBC30\uB2EC \uC2E4\uD328 \uC54C\uB9BC", classification: old?.classification || "\uC790\uB3D9 \uC751\uB2F5", messages: merged, synced: now2 }, old?.id, old?.version);
             bounceMessages++;
           }
         } catch (e) {
@@ -1700,29 +1700,38 @@ function creatorMetaService({ sb: sb2, query: query2, env: env2, connection: con
 
 // supabase/functions/_shared/creator-recovery.ts
 var day = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" }).format(/* @__PURE__ */ new Date());
+var targetValue = (value) => {
+  const n = typeof value === "number" ? value : typeof value === "string" && /^[0-9]+$/.test(value) ? Number(value) : NaN;
+  if (!Number.isInteger(n) || n < 1 || n > 500) throw Error("\uCD94\uCC9C \uC778\uC6D0\uC740 1~500 \uC0AC\uC774\uC758 \uC815\uC218\uB85C \uC785\uB825\uD558\uC138\uC694.");
+  return n;
+};
 function recoveryService({ sb: sb2, query: query2, audit: audit2 }) {
   const config = async (owner) => await query2(sb2.from("sanji_creator_recovery_config").select("*").eq("owner", owner).maybeSingle()) || { enabled: false, target: 30, run_time: "09:00", explore_percent: 20, daily_lookup_limit: 0, retry_limit: 0, paid_limit_usd: 0 };
-  async function recommend(owner) {
+  async function recommend(owner, target) {
     const c = await config(owner), today = day();
-    const added = await query2(sb2.rpc("sanji_creator_recommend", { p_owner: owner, p_day: today, p_target: c.target }));
+    const added = await query2(sb2.rpc("sanji_creator_recommend", { p_owner: owner, p_day: today, p_target: target ?? c.target }));
     await audit2(owner, "creator_recovery_recommended", { day: today, added });
     return { day: today, added };
   }
   async function handle2(path, method, owner, input, params = new URLSearchParams()) {
     if (path === "/creator-recovery" && method === "GET") {
-      const c = await config(owner), today = day(), requested = params.get("day") || today, pool = await query2(sb2.rpc("sanji_creator_pool_counts", { p_owner: owner })), selectedDay = /^\d{4}-\d{2}-\d{2}$/.test(requested) && requested <= new Date(Date.now() + 9 * 36e5 + 864e5).toISOString().slice(0, 10) ? requested : today, preview = await query2(sb2.rpc("sanji_creator_preview", { p_owner: owner, p_target: c.target })), rec = await query2(sb2.from("sanji_creator_recommendations").select("creator_id").eq("owner", owner).eq("day", selectedDay));
-      const ids = rec.map((r) => r.creator_id), rows = [];
+      const c = await config(owner), today = day(), requested = params.get("day") || today, pool = await query2(sb2.rpc("sanji_creator_pool_counts", { p_owner: owner })), selectedDay = /^\d{4}-\d{2}-\d{2}$/.test(requested) && requested <= new Date(Date.now() + 9 * 36e5 + 864e5).toISOString().slice(0, 10) ? requested : today, requestedTarget = params.has("target") ? targetValue(params.get("target")) : null, rec = await query2(sb2.from("sanji_creator_recommendations").select("creator_id").eq("owner", owner).eq("day", selectedDay));
+      const ids = rec.map((r) => r.creator_id), target = requestedTarget ?? (selectedDay === today ? Math.max(c.target, ids.length) : c.target), rows = [];
       for (let i = 0; i < ids.length; i += 100) rows.push(...await query2(sb2.from("sanji_creator_recovery").select("*").eq("owner", owner).in("id", ids.slice(i, i + 100))));
+      const needed = selectedDay === today ? Math.max(0, target - ids.length) : 0, preview = needed ? await query2(sb2.rpc("sanji_creator_preview", { p_owner: owner, p_target: needed })) : [];
       const offset = Math.min(1e5, Math.max(0, Number.parseInt(params.get("reviewOffset") || "0", 10) || 0));
       const review = await query2(sb2.from("sanji_creator_recovery").select("id,handle,profile_url,nickname,followers,emails,bio_status,email_status,link_status,entity_type,assessment,reasons,status,source_provider,source_file,source_url,source_created_at,last_verified,followers_checked,followers_source,lookup_state,bio,category").eq("owner", owner).eq("assessment", "review").eq("status", "new").order("created").order("id").range(offset, offset + 99));
       const managed = await query2(sb2.from("sanji_creator_recovery").select("id,handle,profile_url,nickname,followers,emails,bio_status,email_status,link_status,entity_type,assessment,reasons,status,source_provider,source_file,source_url,source_created_at,last_verified,followers_checked,followers_source,lookup_state,bio,category").eq("owner", owner).in("status", ["hold", "excluded", "contacted"]).order("updated", { ascending: false }).limit(100));
       const all = [...rows, ...preview, ...review, ...managed], uniqueIds = [...new Set(all.map((x) => x.id))], evidence = [];
       for (let i = 0; i < uniqueIds.length; i += 100) evidence.push(...await query2(sb2.from("sanji_creator_evidence").select("creator_id,source_provider,source_kind,source_url,source_ref,batch_id,detail,seen_at").eq("owner", owner).in("creator_id", uniqueIds.slice(i, i + 100))));
       for (const row of all) row.sourceEvidence = evidence.filter((x) => x.creator_id === row.id);
-      return { config: c, pool, day: selectedDay, today, recommendations: rows, preview, review, managed, reviewOffset: offset, shortfall: Math.max(0, c.target - rows.filter((x) => x.status === "new").length), shortfallReason: rows.filter((x) => x.status === "new").length < c.target ? "\uC870\uAC74\uC5D0 \uB9DE\uB294 \uBBF8\uCD94\uCC9C \uD6C4\uBCF4\uAC00 \uBD80\uC871\uD558\uAC70\uB098 \uC544\uC9C1 \uCD94\uCC9C\uC744 \uC2E4\uD589\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4." : "", sourceNotice: "\uBCF5\uAD6C \uB370\uC774\uD130\uC758 \uACFC\uAC70 \uC18C\uAC1C\uB780\uACFC \uC218\uCE58\uC785\uB2C8\uB2E4. \uD604\uC7AC \uD65C\uB3D9\xB7\uAD6D\uC801\xB7\uC774\uBA54\uC77C \uC720\uD6A8\uC131\uC740 \uBBF8\uD655\uC778\uC785\uB2C8\uB2E4." };
+      return { config: c, pool, day: selectedDay, today, target, recommendations: rows, preview: selectedDay === today ? [...rows, ...preview] : preview, review, managed, reviewOffset: offset, shortfall: Math.max(0, target - (selectedDay === today ? rows.length + preview.length : rows.length)), shortfallReason: (selectedDay === today ? rows.length + preview.length : rows.length) < target ? "\uC870\uAC74\uC5D0 \uB9DE\uB294 \uBBF8\uCD94\uCC9C \uD6C4\uBCF4\uAC00 \uBD80\uC871\uD558\uAC70\uB098 \uC544\uC9C1 \uCD94\uCC9C\uC744 \uC2E4\uD589\uD558\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4." : "", sourceNotice: "\uBCF5\uAD6C \uB370\uC774\uD130\uC758 \uACFC\uAC70 \uC18C\uAC1C\uB780\uACFC \uC218\uCE58\uC785\uB2C8\uB2E4. \uD604\uC7AC \uD65C\uB3D9\xB7\uAD6D\uC801\xB7\uC774\uBA54\uC77C \uC720\uD6A8\uC131\uC740 \uBBF8\uD655\uC778\uC785\uB2C8\uB2E4." };
     }
     const b = await input();
-    if (path === "/creator-recovery/recommend" && method === "POST") return await recommend(owner);
+    if (path === "/creator-recovery/recommend" && method === "POST") {
+      if (b.day !== void 0 && b.day !== day()) throw Error("\uC624\uB298 \uB0A0\uC9DC\uB9CC \uCD94\uCC9C\uC744 \uD655\uC815\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.");
+      return await recommend(owner, b.target === void 0 ? void 0 : targetValue(b.target));
+    }
     if (path === "/creator-recovery/settings" && method === "POST") {
       const target = Number(b.target), explore = Number(b.explorePercent ?? 20), lookup = Number(b.dailyLookupLimit), retry = Number(b.retryLimit), cost = Number(b.paidLimitUsd), time = String(b.runTime || "");
       if (!Number.isInteger(target) || target < 1 || target > 500 || !Number.isInteger(explore) || explore < 0 || explore > 100 || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time) || !Number.isInteger(lookup) || lookup < 0 || lookup > 500 || !Number.isInteger(retry) || retry < 0 || retry > 5 || !Number.isFinite(cost) || cost < 0 || cost > 100) throw Error("\uC124\uC815\uAC12\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694.");
@@ -3534,12 +3543,13 @@ async function isBlocked(u, c) {
     sb.from("sanji_suppression").select("identity").eq("owner", u).in("identity", ids)
   )).length > 0;
 }
-async function putRecord(u, kind, data, id) {
+async function putRecord(u, kind, data, id, expectedVersion) {
   const clean2 = { ...data };
   delete clean2.id;
   delete clean2.version;
   delete clean2.updated;
   const row = id ? { data: clean2, version: data.version + 1, updated: now() } : { owner: u, kind, data: clean2 };
+  if (id && expectedVersion !== void 0) return await query(sb.from("sanji_records").update(row).eq("id", id).eq("owner", u).eq("kind", kind).eq("version", expectedVersion).select().maybeSingle());
   return id ? await query(
     sb.from("sanji_records").update(row).eq("id", id).eq("owner", u).select().single()
   ) : await query(sb.from("sanji_records").insert(row).select().single());

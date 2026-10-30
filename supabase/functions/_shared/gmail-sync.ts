@@ -32,7 +32,7 @@ export function gmailSyncService({sb,query,records,putRecord,gmailToken,remote,t
     try{const rt=await remote("https://gmail.googleapis.com/gmail/v1/users/me/threads/"+encodeURIComponent(t.providerId)+"?format=full",{headers:{Authorization:"Bearer "+g.access_token}}),messages=gmailMessages(rt,g.email,t.messages||[],textBody,gmailHasAttachments),inbound=messages.filter((m:any)=>!m.out&&!m.automatic);
      await rememberFailures(owner,messages);
      const opted=inbound.some((m:any)=>/수신\s*거부(합니다|할게|해\s*주세요|요청합니다)|^\s*수신\s*거부[.!]?\s*$|unsubscribe\s+me|please\s+(unsubscribe|stop)|연락.{0,8}(중단해|그만해|하지\s*마)/im.test(m.text));
-     if(JSON.stringify(t.messages||[])!==JSON.stringify(messages)||(opted&&t.classification!=="수신 거부"))await putRecord(owner,"thread",{...t,messages,classification:opted?"수신 거부":t.classification,synced:now},t.id);
+     if(JSON.stringify(t.messages||[])!==JSON.stringify(messages)||(opted&&t.classification!=="수신 거부"))await putRecord(owner,"thread",{...t,messages,classification:opted?"수신 거부":t.classification,synced:now},t.id,t.version);
      if(opted){const c=candidates.find((c:any)=>c.id===t.target);if(c){for(const email of c.recipientEmails?.length?c.recipientEmails:[c.contact?.email])if(email)await query(sb.from("sanji_suppression").upsert({owner,identity:"email:"+email.toLowerCase(),reason:"수신 메일의 수신 거부 요청"},{onConflict:"owner,identity"}));await putRecord(owner,"candidate",{...c,status:"수신 거부"},c.id);}}
 if(inbound.length){humanReplies++;const c=candidates.find((c:any)=>c.id===t.target);if(c&&!opted&&!["회신","거절","수신 거부"].includes(c.status))await putRecord(owner,"candidate",{...c,status:"회신"},c.id);}imported++;
     }catch(e){errors.push({thread:t.id,error:String(e.message||e).slice(0,180)});}
@@ -46,7 +46,7 @@ if(inbound.length){humanReplies++;const c=candidates.find((c:any)=>c.id===t.targ
       const c=candidates.find((c:any)=>failures.some((f:any)=>(c.recipientEmails||[c.contact?.email]).some((e:string)=>String(e).toLowerCase()===f.email)));if(!c)continue;
       const old=(await records(owner,"thread")).find((t:any)=>t.channel==="email"&&t.providerId===rm.threadId),messages=gmailMessages({messages:[rm]},g.email,old?.messages||[],textBody,gmailHasAttachments);
       const merged=[...(old?.messages||[]).filter((m:any)=>m.id!==rm.id),...messages].sort((a:any,b:any)=>a.at.localeCompare(b.at));
-      if(!old||JSON.stringify(old.messages||[])!==JSON.stringify(merged))await putRecord(owner,"thread",{...old,target:c.id,channel:"email",providerId:rm.threadId,subject:messages[0]?.subject||"배달 실패 알림",classification:old?.classification||"자동 응답",messages:merged,synced:now},old?.id);bounceMessages++;
+      if(!old||JSON.stringify(old.messages||[])!==JSON.stringify(merged))await putRecord(owner,"thread",{...old,target:c.id,channel:"email",providerId:rm.threadId,subject:messages[0]?.subject||"배달 실패 알림",classification:old?.classification||"자동 응답",messages:merged,synced:now},old?.id,old?.version);bounceMessages++;
      }
     }catch(e){errors.push({stage:"bounce_read",error:String(e.message||e).slice(0,180)});}
    }
