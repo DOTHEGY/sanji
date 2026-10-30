@@ -55,7 +55,7 @@ function creatorInstagramInbox({ sb: sb2, query: query2, connection: connection2
     const a = await account(owner);
     const items = await query2(sb2.from("sanji_instagram_inbound").select("account_id,peer_id,message_id,received_at,body").eq("owner", owner).eq("account_id", a.id).order("received_at", { ascending: false }).limit(500));
     const attempts = await query2(sb2.from("sanji_instagram_reply_attempts").select("account_id,peer_id,inbound_id,body,status,created_at").eq("owner", owner).eq("account_id", a.id).order("created_at", { ascending: false }).limit(500));
-    return { items, attempts, account: "valu_est", sendingEnabled: env2("INSTAGRAM_SENDING_ENABLED") === "true" };
+    return { items, attempts, account: "valu_est", sendingEnabled: env2("INSTAGRAM_MANUAL_REPLY_ENABLED") === "true" };
   }
   async function sync(owner) {
     const a = await account(owner), version = env2("META_GRAPH_VERSION") || "v24.0";
@@ -77,7 +77,7 @@ function creatorInstagramInbox({ sb: sb2, query: query2, connection: connection2
     return { inserted };
   }
   async function reply(owner, b) {
-    if (env2("INSTAGRAM_SENDING_ENABLED") !== "true") throw Error("Instagram \uB2F5\uC7A5 \uBC1C\uC1A1\uC774 \uBE44\uD65C\uC131\uD654\uB418\uC5B4 \uC788\uC2B5\uB2C8\uB2E4.");
+    if (env2("INSTAGRAM_MANUAL_REPLY_ENABLED") !== "true") throw Error("Instagram \uB2F5\uC7A5 \uBC1C\uC1A1\uC774 \uBE44\uD65C\uC131\uD654\uB418\uC5B4 \uC788\uC2B5\uB2C8\uB2E4.");
     if (typeof b.messageId !== "string" || !b.messageId || typeof b.body !== "string" || !b.body.trim() || b.body.length > 1e3 || typeof b.requestId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(b.requestId)) throw Error("\uB2F5\uC7A5 \uB0B4\uC6A9\uC744 \uD655\uC778\uD558\uC138\uC694.");
     const a = await account(owner), r = await query2(sb2.rpc("sanji_instagram_reserve_reply", { p_owner: owner, p_account: a.id, p_mid: b.messageId, p_request: b.requestId, p_body: b.body }));
     if (!r.reserved) return { status: r.status, duplicate: true, sameRequest: r.sameRequest === true };
