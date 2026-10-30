@@ -285,7 +285,8 @@ test("Edge function compiles and denies unauthenticated/disallowed-origin reques
       assert.equal(health.status, 200);
       assert.equal((await health.json()).version, 12);
       const callback = await handler(new Request("https://project.example" + prefix + "/oauth/instagram/callback"));
-      assert.equal(callback.status,410);assert.match((await callback.json()).error,/공식 Instagram API 연동은 제외/);
+      for(const method of ['POST','PUT','DELETE','OPTIONS']){const blocked=await handler(new Request('https://project.example'+prefix+'/oauth/instagram/callback?state=mock-state&code=mock-code',{method}));assert.equal(blocked.status,405);}
+      assert.equal(callback.status,302);assert.match(callback.headers.get('location'),/oauth_error=/);assert.doesNotMatch(callback.headers.get('location'),/access_token|client_secret/);const handoff=await handler(new Request('https://project.example'+prefix+'/oauth/instagram/callback?state=mock-state&code=mock-code'));assert.equal(handoff.status,302);const target=new URL(handoff.headers.get('location'));assert.equal(target.searchParams.has('code'),false);assert.match(target.hash,/^#instagram-connect\?/);assert.equal(handoff.headers.get('referrer-policy'),'no-referrer');assert.equal(handoff.headers.get('cache-control'),'no-store');const complete=await handler(new Request('https://project.example'+prefix+'/creator-instagram/oauth/complete',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({state:'mock-state',code:'mock-code'})}));assert.equal(complete.status,401);const disabled=await handler(new Request('https://project.example'+prefix+'/instagram/check'));assert.equal(disabled.status,410);
       assert.equal(
         (
           await handler(
