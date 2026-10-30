@@ -1,4 +1,6 @@
 import {templateLibraryService} from '../_shared/template-library.ts';
+import {creatorInstagramReadiness} from '../_shared/creator-instagram-readiness.ts';
+import {creatorManualDmService} from '../_shared/creator-manual-dm.ts';
 import {assertCreatorProposalSnapshot} from '../_shared/creator-proposal-snapshot.ts';
 import {tagbyBatchPreview,tagbyBatchHash} from '../_shared/tagby-batch.ts';
 import {creatorContactReviewService} from '../_shared/creator-contact-review.ts';
@@ -171,6 +173,7 @@ const creatorRecovery = recoveryService({sb,query,audit});
 const creatorVisibleImport = visibleImportService({sb,query,audit});
 const creatorContactReview=creatorContactReviewService({sb,query,audit});
 const templateLibrary=templateLibraryService({sb,query,audit});
+const creatorManualDm=creatorManualDmService({sb,query,audit});
 const creatorMeta = creatorMetaService({sb,query,env,connection,saveConnection,audit});
 const apifyTrials=apifyTrialService({sb,query,env,audit});
 const saveManualReply=manualReplyService({sb,query,putRecord,audit});
@@ -857,6 +860,8 @@ Deno.serve(async (req: Request) => {
     if(path==='/brand-outbound-profile'&&req.method==='POST'){const b=await input();if(!Number.isInteger(b.revision)||typeof b.oldParagraph!=='string'||typeof b.newParagraph!=='string')fail(400,'자동 발송 문단과 버전을 확인하세요.');const result=await query(sb.rpc('sanji_brand_outbound_replace',{p_owner:u,p_revision:b.revision,p_old:b.oldParagraph,p_new:b.newParagraph})),p=Array.isArray(result)?result[0]:result;await audit(u,'brand_outbound_profile_revised',{revision:p.revision,existingSchedulesUnchanged:true});return json({revision:p.revision});}
     if(path==='/template-library'){try{return json(await templateLibrary(req.method,u,input));}catch(e){fail(400,String(e.message||'템플릿 저장 오류'));}}
     if(path==='/creator-inbox'&&req.method==='GET'){const connection=await query(sb.from('sanji_connections').select('summary').eq('owner',u).eq('provider','gmail').maybeSingle());const mailbox=String(connection?.summary?.email||'').trim().toLowerCase();if(!mailbox)return json({items:[]});const items=await query(sb.from('sanji_creator_inbound_messages').select('creator_id,provider_thread_id,data').eq('owner',u).eq('mailbox',mailbox).order('created',{ascending:false}).limit(500));const ids=[...new Set(items.map((x:any)=>x.creator_id))];const creators:any[]=[];for(let i=0;i<ids.length;i+=100)creators.push(...await query(sb.from('sanji_creator_recovery').select('id,handle').eq('owner',u).in('id',ids.slice(i,i+100))));return json({items:items.filter((x:any)=>creators.some(c=>c.id===x.creator_id)).map((x:any)=>({...x,handle:creators.find(c=>c.id===x.creator_id)?.handle}))});}
+    if((path==='/creator-contact-review/dm-event'||path==='/creator-contact-review/dm-draft')&&req.method==='POST'){try{return json(await creatorManualDm(path,u,input));}catch(e){fail(400,String(e.message||'DM 수동 기록 실패'));}}
+    if(path==='/creator-instagram/message-status'&&req.method==='GET'){const rows=await query(sb.from('sanji_connections').select('provider,summary').eq('owner',u).or('provider.eq.instagram,provider.like.instagram:%'));return json(creatorInstagramReadiness(rows));}
     if(path==='/creator-contact-review'||path==='/creator-contact-review/move'||path==='/creator-contact-review/import'||path==='/creator-contact-review/receipt'){try{return json(await creatorContactReview(path,req.method,u,input));}catch(e){fail(400,String(e.message||'크리에이터 검토 저장 실패'));}}
     if(path==='/creator-recovery/import-visible'&&req.method==='POST'){try{return json(await creatorVisibleImport(u,await input()));}catch(e){fail(400,String(e.message||'후보 가져오기 실패'));}}
     if(path.startsWith('/creator-meta/')){try{return json(await creatorMeta.handle(path,req.method,u,input,base,url.searchParams));}catch(e){fail(400,String(e.message||'공식 API 연결 실패'));}}
