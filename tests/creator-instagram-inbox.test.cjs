@@ -26,3 +26,11 @@ test('inbox selects newest 500 inbound messages and newest attempts',async()=>{
 });
 
 test('manual reply gate defaults off and is independent of legacy send gate',async()=>{const blocked=setup({enabled:false,legacy:true});await assert.rejects(()=>blocked.service.reply('owner',{messageId:'m1',body:'reply',requestId:'33333333-3333-4333-8333-333333333333'}));assert.equal(blocked.calls.length,0);assert.equal((await blocked.service.list('owner')).sendingEnabled,false);const allowed=setup({enabled:true,legacy:false});const result=await allowed.service.reply('owner',{messageId:'m1',body:'reply',requestId:'33333333-3333-4333-8333-333333333333'});assert.equal(result.status,'accepted');assert.equal(allowed.calls.length,1);assert.equal((await allowed.service.list('owner')).sendingEnabled,true);});
+test('manual reply gate cannot enable the legacy Instagram draft send path',async()=>{
+ const fs=require('node:fs'),vm=require('node:vm'),esbuild=require('esbuild'),src=fs.readFileSync('supabase/functions/workspace/index.ts','utf8'),start=src.indexOf('async function sendDraft('),end=src.indexOf('\nasync function runJobs(',start);assert.ok(start>=0&&end>start);
+ const code=esbuild.transformSync(src.slice(start,end),{loader:'ts',format:'cjs'}).code;let mutations=0;
+ class Q{select(){return this}eq(){return this}maybeSingle(){return this}in(){return this}then(resolve){return Promise.resolve({data:[],error:null}).then(resolve)}}
+ const row={id:'draft',hash:'approved',used:false,expires:new Date(Date.now()+60000).toISOString(),data:{channel:'instagram',marketing:false}};
+ const ctx={sb:{from:()=>new Q()},query:async()=>row,env:k=>k==='INSTAGRAM_MANUAL_REPLY_ENABLED'?'true':'',fail:(status,message)=>{const e=Error(message);e.status=status;throw e},Date,Intl,owned:async()=>{mutations++;throw Error('unexpected write path')}};vm.createContext(ctx);vm.runInContext(code+';this.send=sendDraft;',ctx);
+ await assert.rejects(()=>ctx.send('owner','draft',{approved:true,hash:'approved'}),e=>e.status===403);assert.equal(mutations,0);
+});
