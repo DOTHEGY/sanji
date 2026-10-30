@@ -241,7 +241,7 @@ async function isBlocked(u: string, c: any) {
     ).length > 0
   );
 }
-async function putRecord(u: string, kind: string, data: any, id?: string) {
+async function putRecord(u: string, kind: string, data: any, id?: string, expectedVersion?: number) {
   const clean = { ...data };
   delete clean.id;
   delete clean.version;
@@ -249,6 +249,7 @@ async function putRecord(u: string, kind: string, data: any, id?: string) {
   const row = id
     ? { data: clean, version: data.version + 1, updated: now() }
     : { owner: u, kind, data: clean };
+  if(id&&expectedVersion!==undefined)return await query(sb.from("sanji_records").update(row).eq("id",id).eq("owner",u).eq("kind",kind).eq("version",expectedVersion).select().maybeSingle());
   return id
     ? await query(
         sb

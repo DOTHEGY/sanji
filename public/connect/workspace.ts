@@ -1377,7 +1377,7 @@ function gmailSyncService({ sb: sb2, query: query2, records: records2, putRecord
           const rt = await remote2("https://gmail.googleapis.com/gmail/v1/users/me/threads/" + encodeURIComponent(t.providerId) + "?format=full", { headers: { Authorization: "Bearer " + g.access_token } }), messages = gmailMessages(rt, g.email, t.messages || [], textBody2, gmailHasAttachments2), inbound = messages.filter((m) => !m.out && !m.automatic);
           await rememberFailures(owner, messages);
           const opted = inbound.some((m) => /수신\s*거부(합니다|할게|해\s*주세요|요청합니다)|^\s*수신\s*거부[.!]?\s*$|unsubscribe\s+me|please\s+(unsubscribe|stop)|연락.{0,8}(중단해|그만해|하지\s*마)/im.test(m.text));
-          if (JSON.stringify(t.messages || []) !== JSON.stringify(messages) || opted && t.classification !== "\uC218\uC2E0 \uAC70\uBD80") await putRecord2(owner, "thread", { ...t, messages, classification: opted ? "\uC218\uC2E0 \uAC70\uBD80" : t.classification, synced: now2 }, t.id);
+          if (JSON.stringify(t.messages || []) !== JSON.stringify(messages) || opted && t.classification !== "\uC218\uC2E0 \uAC70\uBD80") await putRecord2(owner, "thread", { ...t, messages, classification: opted ? "\uC218\uC2E0 \uAC70\uBD80" : t.classification, synced: now2 }, t.id, t.version);
           if (opted) {
             const c = candidates.find((c2) => c2.id === t.target);
             if (c) {
@@ -1408,7 +1408,7 @@ function gmailSyncService({ sb: sb2, query: query2, records: records2, putRecord
             if (!c) continue;
             const old = (await records2(owner, "thread")).find((t) => t.channel === "email" && t.providerId === rm.threadId), messages = gmailMessages({ messages: [rm] }, g.email, old?.messages || [], textBody2, gmailHasAttachments2);
             const merged = [...(old?.messages || []).filter((m) => m.id !== rm.id), ...messages].sort((a, b) => a.at.localeCompare(b.at));
-            if (!old || JSON.stringify(old.messages || []) !== JSON.stringify(merged)) await putRecord2(owner, "thread", { ...old, target: c.id, channel: "email", providerId: rm.threadId, subject: messages[0]?.subject || "\uBC30\uB2EC \uC2E4\uD328 \uC54C\uB9BC", classification: old?.classification || "\uC790\uB3D9 \uC751\uB2F5", messages: merged, synced: now2 }, old?.id);
+            if (!old || JSON.stringify(old.messages || []) !== JSON.stringify(merged)) await putRecord2(owner, "thread", { ...old, target: c.id, channel: "email", providerId: rm.threadId, subject: messages[0]?.subject || "\uBC30\uB2EC \uC2E4\uD328 \uC54C\uB9BC", classification: old?.classification || "\uC790\uB3D9 \uC751\uB2F5", messages: merged, synced: now2 }, old?.id, old?.version);
             bounceMessages++;
           }
         } catch (e) {
@@ -3534,12 +3534,13 @@ async function isBlocked(u, c) {
     sb.from("sanji_suppression").select("identity").eq("owner", u).in("identity", ids)
   )).length > 0;
 }
-async function putRecord(u, kind, data, id) {
+async function putRecord(u, kind, data, id, expectedVersion) {
   const clean2 = { ...data };
   delete clean2.id;
   delete clean2.version;
   delete clean2.updated;
   const row = id ? { data: clean2, version: data.version + 1, updated: now() } : { owner: u, kind, data: clean2 };
+  if (id && expectedVersion !== void 0) return await query(sb.from("sanji_records").update(row).eq("id", id).eq("owner", u).eq("kind", kind).eq("version", expectedVersion).select().maybeSingle());
   return id ? await query(
     sb.from("sanji_records").update(row).eq("id", id).eq("owner", u).select().single()
   ) : await query(sb.from("sanji_records").insert(row).select().single());
