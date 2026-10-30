@@ -22,7 +22,7 @@ export function creatorInstagramInbox({sb,query,connection,remote,env}:any){
   }
   return {ok:true};
  }
- async function list(owner:string){const a=await account(owner);const items=await query(sb.from('sanji_instagram_inbound').select('account_id,peer_id,message_id,received_at,body').eq('owner',owner).eq('account_id',a.id).order('received_at',{ascending:true}).limit(500));const attempts=await query(sb.from('sanji_instagram_reply_attempts').select('account_id,peer_id,inbound_id,body,status,created_at').eq('owner',owner).eq('account_id',a.id).order('created_at',{ascending:true}).limit(500));return {items,attempts,account:'valu_est',sendingEnabled:env('INSTAGRAM_SENDING_ENABLED')==='true'};}
+ async function list(owner:string){const a=await account(owner);const items=await query(sb.from('sanji_instagram_inbound').select('account_id,peer_id,message_id,received_at,body').eq('owner',owner).eq('account_id',a.id).order('received_at',{ascending:false}).limit(500));const attempts=await query(sb.from('sanji_instagram_reply_attempts').select('account_id,peer_id,inbound_id,body,status,created_at').eq('owner',owner).eq('account_id',a.id).order('created_at',{ascending:false}).limit(500));return {items,attempts,account:'valu_est',sendingEnabled:env('INSTAGRAM_SENDING_ENABLED')==='true'};}
  async function sync(owner:string){
   const a=await account(owner),version=env('META_GRAPH_VERSION')||'v24.0';if(!/^v\d+\.\d+$/.test(version))throw Error('invalid version');
   const get=async(path:string,fields:string)=>remote('https://graph.instagram.com/'+version+'/'+path.split('/').map(encodeURIComponent).join('/')+'?'+fields,{headers:{Authorization:'Bearer '+a.token}},'Instagram 대화 조회');
@@ -44,7 +44,7 @@ export function creatorInstagramInbox({sb,query,connection,remote,env}:any){
   if(env('INSTAGRAM_SENDING_ENABLED')!=='true')throw Error('Instagram 답장 발송이 비활성화되어 있습니다.');
   if(typeof b.messageId!=='string'||!b.messageId||typeof b.body!=='string'||!b.body.trim()||b.body.length>1000||typeof b.requestId!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(b.requestId))throw Error('답장 내용을 확인하세요.');
   const a=await account(owner),r=await query(sb.rpc('sanji_instagram_reserve_reply',{p_owner:owner,p_account:a.id,p_mid:b.messageId,p_request:b.requestId,p_body:b.body}));
-  if(!r.reserved)return {status:r.status,duplicate:true};
+  if(!r.reserved)return {status:r.status,duplicate:true,sameRequest:r.sameRequest===true};
   let status='outcome_unknown',providerId=null;
   try{const version=env('META_GRAPH_VERSION')||'v24.0';if(!/^v\d+\.\d+$/.test(version))throw Error('invalid version');const res=await remote('https://graph.instagram.com/'+version+'/'+a.id+'/messages',{method:'POST',headers:{Authorization:'Bearer '+a.token,'Content-Type':'application/json'},body:JSON.stringify({recipient:{id:r.peerId},message:{text:b.body}})},'Instagram 답장');if(typeof res?.message_id==='string'&&res.message_id){status='accepted';providerId=res.message_id;}}catch{/* Outcome is unknown; never retry automatically. */}
   await query(sb.rpc('sanji_instagram_finish_reply',{p_owner:owner,p_request:b.requestId,p_status:status,p_provider_id:providerId}));return {status};

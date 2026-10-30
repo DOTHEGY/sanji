@@ -9,7 +9,8 @@ test('owner binding, deduplication, 24h window, uncertain send and service-only 
   assert.equal((await capture(owner,'m1')).rows[0].ok,true);assert.equal((await capture(owner,'m1')).rows[0].ok,false);await assert.rejects(()=>capture(other,'m2'));
   const reserve=(o,id,r)=>db.query('select public.sanji_instagram_reserve_reply($1,$2,$3,$4,$5) result',[o,'42',id,r,'reply']);
   assert.equal((await reserve(owner,'m1',req)).rows[0].result.reserved,true);
-  assert.equal((await reserve(owner,'m1',req)).rows[0].result.reserved,false);
+  assert.equal((await reserve(owner,'m1',req)).rows[0].result.sameRequest,true);
+  const different=await db.query('select public.sanji_instagram_reserve_reply($1,$2,$3,$4,$5) result',[owner,'42','m1',req2,'different']);assert.equal(different.rows[0].result.sameRequest,false);assert.equal(different.rows[0].result.reserved,false);
   await capture(owner,'m2');await assert.rejects(()=>reserve(owner,'m2',req2));
   await db.query("select public.sanji_instagram_finish_reply($1,$2,'outcome_unknown',null)",[owner,req]);await assert.rejects(()=>reserve(owner,'m2',req2));
   await capture(owner,'old',new Date(Date.now()-25*3600000).toISOString());await assert.rejects(()=>reserve(owner,'old',req2));

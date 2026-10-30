@@ -32,7 +32,7 @@ declare m public.sanji_instagram_inbound; old public.sanji_instagram_reply_attem
 begin
  perform pg_advisory_xact_lock(hashtextextended(p_owner::text||':'||p_account,729));
  select * into old from public.sanji_instagram_reply_attempts where owner=p_owner and (request_id=p_request or (account_id=p_account and inbound_id=p_mid)) limit 1;
- if found then return jsonb_build_object('reserved',false,'status',old.status);end if;
+ if found then return jsonb_build_object('reserved',false,'status',old.status,'sameRequest',old.request_id=p_request and old.account_id=p_account and old.inbound_id=p_mid and old.body=p_body);end if;
  if not exists(select 1 from public.sanji_connections c where c.owner=p_owner and c.provider='instagram:'||p_account and c.summary->>'accountId'=p_account and lower(c.summary->>'username')='valu_est' and c.summary->'apiVerified'='true'::jsonb and c.summary->'connected'='true'::jsonb) then raise exception 'account mismatch';end if;
  select * into m from public.sanji_instagram_inbound where owner=p_owner and account_id=p_account and message_id=p_mid for update;
  if not found or m.received_at>clock_timestamp() or m.received_at<=clock_timestamp()-interval '24 hours' or coalesce(length(trim(p_body)),0)=0 or length(p_body)>1000 then raise exception 'reply not eligible';end if;
