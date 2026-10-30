@@ -528,14 +528,18 @@ function inboundHumanReply(m){
  if(/(?:^|[_-])(read|seen|open|tracking|bounce|delivery_status|auto_reply|autoresponder)(?:$|[_-])/.test(kind))return false;
  return !!(String(m.text||'').trim()||m.hasAttachments||m.source==='operator_reported');
 }
-let creatorInboxThreads=[], inboxRequestGeneration=0, inboxFolder='';
+let creatorInboxThreads=[], inboxRequestGeneration=0, inboxFolder='', inboxEdited=false, inboxDirtyForms=new Set(), inboxFilterSnapshot={q:'',mode:'replies',type:''};
+function allowInboxChange(){return !inboxEdited||window.confirm('저장하지 않은 변경을 버릴까요?');}
+function meetingKstInput(v){const d=new Date(v);return Number.isNaN(d.getTime())?'':new Date(d.getTime()+9*3600000).toISOString().slice(0,16);}
+function meetingKstUtc(v){if(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(v))throw Error('미팅 일시를 입력하세요.');const d=new Date(v+':00+09:00');if(Number.isNaN(d.getTime())||meetingKstInput(d.toISOString())!==v)throw Error('미팅 일시를 확인하세요.');return d.toISOString();}
+function groupInboxThreads(threads){const groups=new Map();for(const t of threads){const key=t.target?'target:'+t.target:t.creatorHandle?'recovery:'+t.id:'unlinked:'+t.id;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(t);}return [...groups.values()];}
 function inboxThreadName(t){return t.creatorHandle?'@'+t.creatorHandle:targetName(t.target);}
 function visibleInboxThreads(threads,q,type,mode){const needle=String(q||'').toLowerCase();return threads.filter(t=>{const name=inboxThreadName(t);return String(name+' '+(t.subject||'')+' '+(t.owner||'')+' '+(t.next||'')).toLowerCase().includes(needle)&&(!type||(type==='creator'?(t.creatorHandle||candidate(t.target)?.kind==='크리에이터'):(!t.creatorHandle&&['브랜드','제조사','공식 유통사'].includes(candidate(t.target)?.kind))))&&(mode==='all'||(t.messages||[]).some(inboundHumanReply));});}
 async function inboxPage() {
   const generation=++inboxRequestGeneration, account=me, stillCurrent=()=>generation===inboxRequestGeneration&&me===account&&!!me&&(location.hash.slice(1)==='inbox');
   let loaded=[];
   try{const r=await api('/creator-inbox');if(!stillCurrent())return;const groups=new Map();for(const item of r.items||[]){const id='creator:'+item.creator_id+':'+item.provider_thread_id;if(!groups.has(id))groups.set(id,{id,creatorHandle:item.handle,channel:'email',providerId:item.provider_thread_id,subject:item.data?.subject||'크리에이터 답장',classification:'수신',messages:[]});groups.get(id).messages.push(item.data);}loaded=[...groups.values()];for(const t of loaded)t.messages.sort((a,b)=>String(a.at||'').localeCompare(String(b.at||''))||String(a.id||'').localeCompare(String(b.id||'')));}catch(e){if(!stillCurrent())return;toast('크리에이터 답장을 불러오지 못했습니다: '+e.message);}
-  if(!stillCurrent())return;creatorInboxThreads=loaded;
+  if(!stillCurrent()||inboxEdited)return;creatorInboxThreads=loaded;
   $("#app").innerHTML =
     head(
       "통합 대화함",
@@ -550,12 +554,16 @@ function filterThreads() {
   if (!$("#thread-list")) return;
   const q = $("#thread-filter").value, type = $("#thread-type").value, mode = $("#thread-mode").value;
   const visible=visibleInboxThreads([...data.threads,...creatorInboxThreads],q,type,mode);
-  $("#thread-list").innerHTML=visible.map(t=>`<div class="thread"><button data-action="thread" data-id="${esc(t.id)}" style="text-align:left;width:100%;border:0;background:none"><strong>${esc(inboxThreadName(t))}</strong><p>${esc(t.subject)}</p>${tag(t.channel)} ${tag(t.classification)} ${(t.messages||[]).some(m=>m.out===false&&m.source==='operator_reported')?tag('수동 확인'):''}</button></div>`).join('')||'<div class="empty">조건에 맞는 대화가 없습니다.</div>';
+  $("#thread-list").innerHTML=groupInboxThreads(visible).map(group=>`<details class="thread" open><summary><strong>${esc(inboxThreadName(group[0]))}</strong> · ${group.length}개 대화</summary>${group.map(t=>`<button data-action="thread" data-id="${esc(t.id)}" style="text-align:left;width:100%;border:0;background:none"><p>${esc(t.subject)}</p>${tag(t.channel)} ${tag(t.classification)} ${(t.messages||[]).some(m=>m.out===false&&m.source==='operator_reported')?tag('수동 확인'):''}</button>`).join('')}</details>`).join('')||'<div class="empty">조건에 맞는 대화가 없습니다.</div>';
+  inboxFilterSnapshot={q,mode,type};
   const next=visible.some(t=>t.id===selectedThread)?selectedThread:(visible[0]?.id||'');
   if($('#thread-detail').dataset.threadId!==next)showThread(next);
 
 }
+function meetingEditor(t){if(!t.meeting||!t.manual||t.providerId)return '';return `<form id="meeting-form" data-id="${esc(t.id)}" data-version="${Number(t.version)}" class="form-grid"><h3>미팅 기록 · 한국시간</h3>${field('meetingAt','일시 (한국시간)',meetingKstInput(t.meeting.at),'datetime-local')}${field('meetingMode','방식',t.meeting.mode||'미확인','text',['비대면','대면','미확인'])}${field('meetingStatus','상태',t.meeting.status||'미확인','text',['예정','변경','완료','취소','미확인'])}${field('meetingResult','결과·메모',t.meeting.result||'','textarea')}<p class="fine">출처: 사용자 확인 · 기존 메모와 대화 원문은 유지됩니다.</p><button type="submit">미팅 저장</button>${button('수정 취소','meeting-cancel',t.id)}</form><details><summary>미팅 변경 이력</summary><pre>${esc(JSON.stringify(t.meetingHistory||[],null,2))}</pre></details>`;}
 function showThread(id) {
+  if(id!==selectedThread&&!allowInboxChange())return;
+  if(id!==selectedThread){inboxEdited=false;inboxDirtyForms.clear();}
   const t = [...data.threads,...creatorInboxThreads].find((t) => t.id === id);
   if (!t) {
     selectedThread = "";
@@ -576,7 +584,7 @@ function showThread(id) {
               "",
             )}</select></label><button type="submit">확인한 후보에 연결</button></form>`
         : ""
-    }${t.meeting?'<div class="notice">미팅 · '+esc(t.meeting.mode)+' · '+esc(new Date(t.meeting.at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))+' KST · 장소/접속 링크 '+esc(t.meeting.location||'미정')+'</div>':''}${t.channel==="email"?'<div id="thread-email-tracking"></div>':""}${t.creatorHandle?'':`<form id="thread-form" data-id="${t.id}" class="form-grid">${field("owner", "담당자", t.owner)}${field("due", "후속 연락일", t.due, "date")}${field("next", "다음 행동·메모", t.next)}${field("classification", "회신 분류", t.classification, "text", ["미분류", "자동 응답", "관심 회신", "단순 안내", "거절", "수신 거부", "수락", "공동구매 확정"])}<button type="submit">관리 정보 저장</button></form>`}${t.messages.map((m) => `<div class="message ${m.out ? "out" : ""}">${tag(m.out ? (m.recordOrigin==="gmail_sync"?"발신 · Gmail 동기화":"발신") : m.automatic ? "자동 응답" : (t.manual || m.source==="operator_reported") ? (t.channel==="phone"?"전화 회신 · 수동 기록":t.channel==="sms"?"문자 회신 · 수동 기록":"운영자 보고 · 수동 기록") : "사람 회신 / 직접 확인 필요")}<small class="fine">${esc(m.at)}</small><br>${esc(m.text)}${m.hasAttachments ? '<p class="fine">첨부가 있습니다. 원본 Gmail에서 확인하세요.</p>' : ""}</div>`).join("")}${t.target ? (["phone","sms","manual"].includes(t.channel)?button("문자·전화 회신 추가","manual-reply",t.target,true):button("직접 회신 작성", "reply", t.id, true)) : t.creatorHandle?'<div class="notice">Gmail 원본에서 회신할 수 있습니다.</div>':'<div class="notice">수신 계정을 후보와 연결한 후 답장할 수 있습니다.</div>'}`;
+    }${t.meeting?'<div class="notice">미팅 · '+esc(t.meeting.mode)+' · '+esc(new Date(t.meeting.at).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'}))+' KST · 장소/접속 링크 '+esc(t.meeting.location||'미정')+'</div>':''}${meetingEditor(t)}${t.channel==="email"?'<div id="thread-email-tracking"></div>':""}${t.creatorHandle?'':`<form id="thread-form" data-id="${esc(t.id)}" data-version="${Number(t.version)}" class="form-grid">${field("owner", "담당자", t.owner)}${field("due", "후속 연락일", t.due, "date")}${field("next", "다음 행동·메모", t.next)}${field("classification", "회신 분류", t.classification, "text", ["미분류", "자동 응답", "관심 회신", "단순 안내", "거절", "수신 거부", "수락", "공동구매 확정"])}<button type="submit">관리 정보 저장</button></form>`}${t.messages.map((m) => `<div class="message ${m.out ? "out" : ""}">${tag(m.out ? (m.recordOrigin==="gmail_sync"?"발신 · Gmail 동기화":"발신") : m.automatic ? "자동 응답" : (t.manual || m.source==="operator_reported") ? (t.channel==="phone"?"전화 회신 · 수동 기록":t.channel==="sms"?"문자 회신 · 수동 기록":"운영자 보고 · 수동 기록") : "사람 회신 / 직접 확인 필요")}<small class="fine">${esc(m.at)}</small><br>${esc(m.text)}${m.hasAttachments ? '<p class="fine">첨부가 있습니다. 원본 Gmail에서 확인하세요.</p>' : ""}</div>`).join("")}${t.target ? (["phone","sms","manual"].includes(t.channel)?button("문자·전화 회신 추가","manual-reply",t.target,true):button("직접 회신 작성", "reply", t.id, true)) : t.creatorHandle?'<div class="notice">Gmail 원본에서 회신할 수 있습니다.</div>':'<div class="notice">수신 계정을 후보와 연결한 후 답장할 수 있습니다.</div>'}`;
   if(t.channel==="email"&&$("#thread-email-tracking"))$("#thread-email-tracking").innerHTML=data.outbox.filter(o=>o.target===t.target&&o.channel==="email"&&(o.data.providerThread===t.providerId||t.messages.some(m=>m.outboxId===o.id||m.messageId==="<"+o.data.messageId+"@sanji.local>"))).map(o=>button("발송 "+localTime(o.created)+" · 열람 추정/메일 상세","tracking-detail",o.id)).join("");
 }
 function jobTable() {
@@ -1119,9 +1127,12 @@ document.addEventListener("submit", async (e) => {
       await reload();
       toast("운영 설정을 저장했습니다.");
       return;
+    } else if (form.id === "meeting-form") {
+      const t=data.threads.find(x=>x.id===form.dataset.id);if(!t)throw Error('대화가 없습니다.');const management=inboxDirtyForms.has('thread-form')?formObject($('#thread-form')):{owner:t.owner||'',next:t.next||'',due:t.due||'',classification:t.classification||'미분류'};await api('/thread/'+t.id,'PUT',{...management,version:Number(form.dataset.version),meeting:{at:meetingKstUtc(f.meetingAt),mode:f.meetingMode,status:f.meetingStatus,result:f.meetingResult||''}});inboxEdited=false;inboxDirtyForms.clear();await reload();toast('미팅 기록을 저장했습니다.');return;
     } else if (form.id === "thread-form") {
       const t = data.threads.find((t) => t.id === fid);
-      await api("/thread/" + fid, "PUT", { ...f, version: t.version });
+      const meetingForm=$('#meeting-form'),meetingValues=inboxDirtyForms.has('meeting-form')&&meetingForm?formObject(meetingForm):null;
+      await api("/thread/" + fid, "PUT", { ...f, version: Number(form.dataset.version), ...(meetingValues?{meeting:{at:meetingKstUtc(meetingValues.meetingAt),mode:meetingValues.meetingMode,status:meetingValues.meetingStatus,result:meetingValues.meetingResult||''}}:{}) });inboxEdited=false;inboxDirtyForms.clear();
       await reload();
       toast("대화 관리 정보를 저장했습니다.");
       return;
@@ -1163,7 +1174,9 @@ const actions = {
   "creator-meta-connect-page":async()=>{try{const id=($('#creator-meta-page-id')?.value||'').trim();if(!/^[0-9]{5,30}$/.test(id))throw Error('페이지 ID는 숫자로 입력하세요.');const r=await api('/creator-meta/connect-page','POST',{pageId:id});toast('@'+r.account.username+' 연결됨');await creatorDiscoveryPage();}catch(e){toast(e.message);}},
   "creator-meta-connect":async()=>{try{const r=await api('/creator-meta/start','POST',{});location.href=r.url;}catch(e){toast(e.message);}},
   "creator-meta-disconnect":async()=>{try{await api('/creator-meta/disconnect','POST',{});await creatorDiscoveryPage();}catch(e){toast(e.message);}},
-  "inbox-folder":value=>{inboxFolder=['','brand','creator'].includes(value)?value:'';$('#thread-type').value=inboxFolder;document.querySelectorAll('[data-action="inbox-folder"]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.id===inboxFolder)));filterThreads();},
+  "meeting-cancel":id=>{if(!allowInboxChange())return;inboxEdited=false;inboxDirtyForms.clear();showThread(id);},
+  "inbox-folder":value=>{if(!allowInboxChange())return;if(inboxEdited){inboxEdited=false;inboxDirtyForms.clear();$('#thread-detail').dataset.threadId='__refresh__';}inboxFolder=['','brand','creator'].includes(value)?value:'';$('#thread-type').value=inboxFolder;document.querySelectorAll('[data-action="inbox-folder"]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.id===inboxFolder)));filterThreads();},
+
 
   "recovery-preview":async()=>{if(recoveryView?.day!==recoveryView?.today)return toast('선택한 날짜는 기록 조회 전용입니다. 오늘만 미리볼 수 있습니다.');const n=Number($('#recovery-target').value);if(!Number.isInteger(n)||n<1||n>500)return toast('추천 인원은 1~500 사이의 정수로 입력하세요.');recoveryTarget=n;saveRecommendationTarget(recoveryView.day,n);recoveryPreviewMode=true;await creatorDiscoveryPage();},
   "recovery-recommend":async()=>{try{if(recoveryView?.day!==recoveryView?.today)throw Error('오늘 날짜만 추천을 확정할 수 있습니다.');const n=Number($('#recovery-target').value);if(!Number.isInteger(n)||n<1||n>500)throw Error('추천 인원은 1~500 사이의 정수로 입력하세요.');recoveryTarget=n;saveRecommendationTarget(recoveryView.day,n);await api('/creator-recovery/recommend','POST',{target:n,day:recoveryView.day});recoveryPreviewMode=false;await creatorDiscoveryPage();}catch(e){toast(e.message);}},
@@ -1205,6 +1218,7 @@ const actions = {
   "discovery-filter": async () => { discoveryOnlyEmails = !discoveryOnlyEmails; await discoveryPage(); },
 
   async logout() {
+    if(!allowInboxChange())return;inboxEdited=false;inboxDirtyForms.clear();
     await api("/auth/logout", "POST", {});
     location.reload();
   },
@@ -1384,6 +1398,9 @@ function invalidatePreview() {
 }
 document.addEventListener("input", (e) => {
   if(e.target.id==='recovery-target'){saveRecommendationTarget(recoveryView?.day||recommendationDay(),e.target.value);const note=$('#recovery-target-status');if(note)note.textContent=Number(e.target.value)===Number(recoveryView?.target)&&e.target.value?'':'인원이 변경됐습니다. 복사하려면 미리보기를 다시 확인하세요.';}
+  {const changed=e.target.closest('#thread-form, #meeting-form');if(changed){inboxEdited=true;inboxDirtyForms.add(changed.id);}}
+  if(e.target.id==="thread-filter"&&inboxEdited&&!allowInboxChange()){e.target.value=inboxFilterSnapshot.q;return;}
+  if(e.target.id==="thread-filter"&&inboxEdited){inboxEdited=false;inboxDirtyForms.clear();$('#thread-detail').dataset.threadId='__refresh__';}
   if(e.target.matches('#settings-form [name="emailSignature"]')){const p=$('#email-signature-preview');if(p)p.textContent=e.target.value||'공통 서명 미설정 · 템플릿에 저장한 서명을 사용합니다.';}
   if (e.target.closest("#compose-form")) invalidatePreview();
   if (e.target.closest("#mail-review-form")) invalidateMailReview();
@@ -1399,6 +1416,10 @@ document.addEventListener("input", (e) => {
 });
 document.addEventListener("change", (e) => {
   if(e.target.id==='recovery-history-day'){recoveryHistoryDay=e.target.value;recoveryTarget=readRecommendationTarget(recoveryHistoryDay||recommendationDay());recoveryPreviewMode=false;creatorDiscoveryPage();return;}
+  {const changed=e.target.closest('#thread-form, #meeting-form');if(changed){inboxEdited=true;inboxDirtyForms.add(changed.id);}}
+  if(e.target.id==="thread-mode"&&inboxEdited&&!allowInboxChange()){e.target.value=inboxFilterSnapshot.mode;return;}
+  if(e.target.id==="thread-mode"&&inboxEdited){inboxEdited=false;inboxDirtyForms.clear();$('#thread-detail').dataset.threadId='__refresh__';}
+
   if(e.target.id==='recovery-email-only'){document.querySelectorAll('[data-recovery-row]').forEach(row=>row.hidden=e.target.checked&&row.dataset.email!=='true');return;}
   if(e.target.dataset.recoveryStatus){api('/creator-recovery/status','POST',{id:e.target.dataset.recoveryStatus,status:e.target.value}).then(()=>creatorDiscoveryPage()).catch(err=>{toast(err.message);creatorDiscoveryPage();});return;}
 
@@ -1423,7 +1444,9 @@ document.addEventListener("change", (e) => {
   if (["thread-type", "thread-mode"].includes(e.target.id)) filterThreads();
   if (e.target.id === "mail-filter" && discoveryView) $("#discovery-results").innerHTML=discoveryCards(discoveryView);
 });
+window.addEventListener('beforeunload',e=>{if(inboxEdited){e.preventDefault();e.returnValue='';}});
 window.addEventListener("hashchange", () => {
-  render();
+  if(inboxEdited&&location.hash!=='#inbox'&&!allowInboxChange()){history.replaceState(null,'','#inbox');return;}
+  inboxEdited=false;inboxDirtyForms.clear();render();
 });
 boot();
