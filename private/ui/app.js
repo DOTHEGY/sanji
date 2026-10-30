@@ -346,11 +346,12 @@ function dealVariantLabel(d) {
   if (!d.sourceRowKey) return d.name;
   return d.sourceRowKey.split(":")[0] + " · " + (d.discountPercent ? d.discountPercent + "% 할인" : "할인 없음");
 }
+function feeSelect(name,label,value,options){return `<label class="field">${esc(label)}<select name="${esc(name)}">${options.map(([v,l])=>`<option value="${esc(v)}" ${v===value?'selected':''}>${esc(l)}</option>`).join('')}</select></label>`;}
 function dealProductRow(items, selected) {
   const d = items.find(d => d.id === selected) || items.find(d => d.discountPercent === 10 && d.sourceRowKey?.startsWith("BOX:")) || items[0];
-  const percent = Number.isFinite(d.commissionPercent) ? d.commissionPercent + "%" : (d.commission || "미협의");
-  const note = [d.benefits || d.shipping, ...(d.options || []).map(o => o.name + " 시 " + o.commissionPercent + "% · 세부 조건 확인 필요")].filter(Boolean).join(" / ");
-  return `<tr class="deal-product-row"><td><strong>${esc(dealProductKey(d))}</strong></td><td><select aria-label="${esc(dealProductKey(d))} 구성" data-deal-option>${items.map(o => `<option value="${esc(o.id)}" ${o.id === d.id ? "selected" : ""}>${esc(dealVariantLabel(o))}</option>`).join("")}</select></td><td>${money(d.retail)}</td><td><strong>${money(d.price)}</strong></td><td>${esc(percent)}</td><td>${money(d.commissionAmount)}</td><td style="max-width:320px;white-space:normal">${esc(note || "미확인")}<div class="fine">${esc(d.state)} · ${esc(d.checked || "확인일 미입력")}</div></td><td>${button("상세", "edit-deal", d.id)}</td></tr>`;
+  const fee=d.feeTerms||{}, percent = fee.basis==='creator_only' ? '크리에이터 '+(Number.isFinite(fee.creatorPercent)?fee.creatorPercent+'%':'미확인') : Number.isFinite(d.commissionPercent) ? '공급사 전체 '+d.commissionPercent+'%' : (d.commission || '미협의');
+  const note = [Number.isFinite(fee.creatorPercent)&&fee.basis!=='creator_only'?'크리에이터 '+fee.creatorPercent+'%': '',Number.isFinite(fee.companyPercent)?'회사 '+fee.companyPercent+'% · '+({sale_percent:'판매가 기준',vendor_fee_percent:'공급사 수수료 기준',unknown:'기준 미확인'}[fee.companyUnit]||'기준 미확인'):'',d.benefits || d.shipping, ...(d.options || []).map(o => o.name + " 시 " + o.commissionPercent + "% · 세부 조건 확인 필요")].filter(Boolean).join(" / ");
+  return `<tr class="deal-product-row"><td><strong>${esc(dealProductKey(d))}</strong></td><td><select aria-label="${esc(dealProductKey(d))} 구성" data-deal-option>${items.map(o => `<option value="${esc(o.id)}" ${o.id === d.id ? "selected" : ""}>${esc(dealVariantLabel(o))}</option>`).join("")}</select></td><td>${money(d.retail)}</td><td><strong>${money(d.price)}</strong></td><td>${esc(percent)}</td><td>${money(fee.basis==='creator_only'?null:d.commissionAmount)}</td><td style="max-width:320px;white-space:normal">${esc(note || "미확인")}<div class="fine">${esc(d.state)} · ${esc(d.checked || "확인일 미입력")}</div></td><td>${button("상세", "edit-deal", d.id)}</td></tr>`;
 }
 function dealsPage() {
   const groups = new Map();
@@ -363,7 +364,7 @@ function dealsPage() {
     `<div class="cards deal-company-list" style="grid-template-columns:1fr">${[...groups.values()].map(items => {
       const products = new Map();
       for (const d of items) { const key = dealProductKey(d); if (!products.has(key)) products.set(key, []); products.get(key).push(d); }
-      return `<details class="panel deal-company"><summary><strong>${esc(targetName(items[0].brand))}</strong> <span class="sub">상품 ${products.size}개</span></summary><p class="fine">용량·할인 조건을 선택하면 가격과 수수료가 바뀝니다. 수수료액은 크리에이터 배분 전이며 회사 순이익이 아닙니다. 소비자가는 가격표의 할인 전 기준입니다.</p><div class="table-wrap"><table><thead><tr><th>상품</th><th>구성·판매 조건</th><th>소비자가</th><th>공동구매가</th><th>수수료율</th><th>수수료액</th><th>비고</th><th></th></tr></thead><tbody>${[...products.values()].map(items => dealProductRow(items)).join("")}</tbody></table></div><div class="card-footer"><a href="#matching">크리에이터 매칭 ↗</a></div></details>`;
+      return `<details class="panel deal-company"><summary><strong>${esc(targetName(items[0].brand))}</strong> <span class="sub">상품 ${products.size}개</span></summary><p class="fine">용량·할인 조건을 선택하면 가격과 수수료가 바뀝니다. 외부 브랜드 수수료는 공급사 전체 수수료이며, 자사 상품은 크리에이터 수수료를 별도로 표시합니다. 소비자가는 가격표의 할인 전 기준입니다.</p><div class="table-wrap"><table><thead><tr><th>상품</th><th>구성·판매 조건</th><th>소비자가</th><th>공동구매가</th><th>수수료율</th><th>수수료액</th><th>비고</th><th></th></tr></thead><tbody>${[...products.values()].map(items => dealProductRow(items)).join("")}</tbody></table></div><div class="card-footer"><a href="#matching">크리에이터 매칭 ↗</a></div></details>`;
     }).join("") || '<div class="panel empty">실제 협의한 상품을 추가하세요. 미협의 가격은 빈칸으로 남깁니다.</div>'}</div>`;
 }
 
@@ -383,7 +384,7 @@ function dealForm(id = "") {
       )
       .join(
         "",
-      )}</select></label>${field("category", "법적 분류", d.category, "text", ["미확인", "건강기능식품", "일반 건강식품"])}${field("state", "협의 상태", d.state, "text", ["협의 중", "확정"])}${field("productUrl", "공식 제품 링크", d.productUrl, "url")}${field("image", "사용 허가된 이미지 URL", d.image, "url")}${[
+      )}</select></label>${field("category", "법적 분류", d.category, "text", ["미확인", "건강기능식품", "일반 건강식품"])}${field("state", "협의 상태", d.state, "text", ["협의 중", "확정"])}${field("productName", "상품 묶음 이름", d.productName||"")}${feeSelect("ownership", "브랜드 구분", d.feeTerms?.ownership||"unknown", [["unknown","미확인"],["owned","자사"],["external","외부"]])}${feeSelect("feeBasis", "수수료 기준", d.feeTerms?.basis||"unknown", [["unknown","미확인"],["creator_only","크리에이터 배분율"],["vendor_total","공급사 전체 수수료"]])}${field("creatorPercent", "크리에이터 배분율 (%) · 미확인 시 빈칸", d.feeTerms?.creatorPercent??"", "number")}${field("companyPercent", "회사 배분율 · 미확인 시 빈칸", d.feeTerms?.companyPercent??"", "number")}${feeSelect("companyUnit", "회사 배분율 기준", d.feeTerms?.companyUnit||"unknown", [["unknown","미확인"],["sale_percent","판매가 기준"],["vendor_fee_percent","공급사 수수료 기준"]])}${field("productUrl", "공식 제품 링크", d.productUrl, "url")}${field("image", "사용 허가된 이미지 URL", d.image, "url")}${[
       ["retail", "정상 판매가"],
       ["price", "공동구매가"],
       ["supply", "공급가"],
@@ -1074,10 +1075,15 @@ document.addEventListener("submit", async (e) => {
     } else if (form.id === "deal-form") {
       const old = deal(fid),
         d = {
-          ...f,
+          ...(old || {}), ...f,
           topics: listText(f.topics),
+          feeTerms: { ...(old?.feeTerms || {}), ownership:f.ownership, basis:f.feeBasis,
+            creatorPercent:f.creatorPercent === "" ? null : Number(f.creatorPercent),
+            companyPercent:f.companyPercent === "" ? null : Number(f.companyPercent), companyUnit:f.companyUnit },
           ...(old ? { version: old.version } : {}),
         };
+      for (const k of ["ownership","feeBasis","creatorPercent","companyPercent","companyUnit"]) delete d[k];
+      for (const v of [d.feeTerms.creatorPercent,d.feeTerms.companyPercent]) if(v!==null&&(!Number.isFinite(v)||v<0||v>100)) throw Error("수수료율은 0~100 사이로 입력하세요.");
       for (const k of ["retail", "price", "supply", "moq", "stock"])
         d[k] = f[k] === "" ? null : Number(f[k]);
       await api("/deal" + (fid ? "/" + fid : ""), fid ? "PUT" : "POST", d);
