@@ -1296,7 +1296,7 @@ async function syncCreatorGmailObservations({ sb: sb2, query: query2, remote: re
         const messages = gmailMessages2(thread, g.email, [], textBody2, hasAttachments), original = String(parsed.messageId || "").trim(), references = (m) => !!original && [m.inReplyTo, m.references].some((v) => String(v || "").split(/\s+/).includes(original));
         const inbound = messages.filter((m) => m.out === false && !m.automatic && !(m.bounceFailures || []).length && String(m.replyAddress || "").toLowerCase() === recipient && m.at >= parsed.at && references(m));
         reply = inbound.length > 0;
-        for (let i = 0; i < inbound.length; i += 100) await query2(sb2.rpc("sanji_creator_inbound_store", { p_owner: owner, p_creator: row.creator_id, p_version: row.version, p_sent: o.providerMessageId, p_thread: msg.threadId, p_messages: inbound.slice(i, i + 100) }));
+        for (let i = 0; i < inbound.length; i += 100) await query2(sb2.rpc("sanji_creator_inbound_store", { p_owner: owner, p_mailbox: String(g.email || "").trim().toLowerCase(), p_creator: row.creator_id, p_version: row.version, p_sent: o.providerMessageId, p_thread: msg.threadId, p_messages: inbound.slice(i, i + 100) }));
         for (const m of messages) {
           if (m.at < parsed.at || !m.bounceFailures?.some((f) => f.email === recipient && f.kind === "permanent")) continue;
           if (references(m)) failed = true;
@@ -4062,7 +4062,10 @@ Deno.serve(async (req) => {
       }
     }
     if (path === "/creator-inbox" && req.method === "GET") {
-      const items = await query(sb.from("sanji_creator_inbound_messages").select("creator_id,provider_thread_id,data").eq("owner", u).order("created", { ascending: false }).limit(500));
+      const connection2 = await query(sb.from("sanji_connections").select("summary").eq("owner", u).eq("provider", "gmail").maybeSingle());
+      const mailbox = String(connection2?.summary?.email || "").trim().toLowerCase();
+      if (!mailbox) return json({ items: [] });
+      const items = await query(sb.from("sanji_creator_inbound_messages").select("creator_id,provider_thread_id,data").eq("owner", u).eq("mailbox", mailbox).order("created", { ascending: false }).limit(500));
       const ids = [...new Set(items.map((x) => x.creator_id))];
       const creators = [];
       for (let i = 0; i < ids.length; i += 100) creators.push(...await query(sb.from("sanji_creator_recovery").select("id,handle").eq("owner", u).in("id", ids.slice(i, i + 100))));

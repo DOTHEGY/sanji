@@ -161,6 +161,7 @@ async function boot() {
   }
 }
 async function authPage() {
+  inboxRequestGeneration++;
   me = null;
   csrf = "";
   $("#nav").innerHTML = "";
@@ -170,6 +171,7 @@ async function authPage() {
     `<div class="panel auth"><div class="eyebrow">PRIVATE WORKSPACE</div><h1>${status.setupRequired ? "관리자 계정 만들기" : "다시 만나 반갑습니다"}</h1><p class="login-note">실제 회사·크리에이터·대화 자료는 로그인 후에만 조회됩니다. 가상 데이터는 포함하지 않습니다.</p><form id="auth-form" data-type="${status.setupRequired ? "setup" : "login"}">${status.setupRequired ? field("token", "서버 초기 설정 토큰|서버 환경 변수 SANJI_SETUP_TOKEN 값입니다. 메일·Instagram 비밀번호가 아닙니다.", "", "password") : ""}${field("email", "관리자 이메일", "", "email")}${field("password", "서비스 로그인 비밀번호|초기 생성 시 12자 이상. 외부 이메일 계정 비밀번호를 입력하지 마세요.", "", "password")}<button class="primary" type="submit">${status.setupRequired ? "관리자 계정 생성" : "로그인"}</button><div id="auth-error" class="login-note"></div></form></div>`;
 }
 function render() {
+  inboxRequestGeneration++;
   if (!me) return;
   const rawKey = location.hash.slice(1) || "dashboard";
   const key = rawKey === "discovery" ? "brands" : rawKey;
@@ -516,11 +518,14 @@ function inboundHumanReply(m){
  if(/(?:^|[_-])(read|seen|open|tracking|bounce|delivery_status|auto_reply|autoresponder)(?:$|[_-])/.test(kind))return false;
  return !!(String(m.text||'').trim()||m.hasAttachments||m.source==='operator_reported');
 }
-let creatorInboxThreads=[];
+let creatorInboxThreads=[], inboxRequestGeneration=0, inboxFolder='';
 function inboxThreadName(t){return t.creatorHandle?'@'+t.creatorHandle:targetName(t.target);}
-function visibleInboxThreads(threads,q,type,mode){const needle=String(q||'').toLowerCase();return threads.filter(t=>{const name=inboxThreadName(t);return String(name+' '+(t.subject||'')+' '+(t.owner||'')+' '+(t.next||'')).toLowerCase().includes(needle)&&(!type||(type==='creator'?(t.creatorHandle||candidate(t.target)?.kind==='크리에이터'):(!t.creatorHandle&&!!candidate(t.target)&&candidate(t.target)?.kind!=='크리에이터')))&&(mode==='all'||(t.messages||[]).some(inboundHumanReply));});}
+function visibleInboxThreads(threads,q,type,mode){const needle=String(q||'').toLowerCase();return threads.filter(t=>{const name=inboxThreadName(t);return String(name+' '+(t.subject||'')+' '+(t.owner||'')+' '+(t.next||'')).toLowerCase().includes(needle)&&(!type||(type==='creator'?(t.creatorHandle||candidate(t.target)?.kind==='크리에이터'):(!t.creatorHandle&&['브랜드','제조사','공식 유통사'].includes(candidate(t.target)?.kind))))&&(mode==='all'||(t.messages||[]).some(inboundHumanReply));});}
 async function inboxPage() {
-  try{const r=await api('/creator-inbox');const groups=new Map();for(const item of r.items||[]){const id='creator:'+item.creator_id+':'+item.provider_thread_id;if(!groups.has(id))groups.set(id,{id,creatorHandle:item.handle,channel:'email',providerId:item.provider_thread_id,subject:item.data?.subject||'크리에이터 답장',classification:'수신',messages:[]});groups.get(id).messages.push(item.data);}creatorInboxThreads=[...groups.values()];}catch(e){creatorInboxThreads=[];toast('크리에이터 답장을 불러오지 못했습니다: '+e.message);}
+  const generation=++inboxRequestGeneration, account=me, stillCurrent=()=>generation===inboxRequestGeneration&&me===account&&!!me&&(location.hash.slice(1)==='inbox');
+  let loaded=[];
+  try{const r=await api('/creator-inbox');if(!stillCurrent())return;const groups=new Map();for(const item of r.items||[]){const id='creator:'+item.creator_id+':'+item.provider_thread_id;if(!groups.has(id))groups.set(id,{id,creatorHandle:item.handle,channel:'email',providerId:item.provider_thread_id,subject:item.data?.subject||'크리에이터 답장',classification:'수신',messages:[]});groups.get(id).messages.push(item.data);}loaded=[...groups.values()];for(const t of loaded)t.messages.sort((a,b)=>String(a.at||'').localeCompare(String(b.at||''))||String(a.id||'').localeCompare(String(b.id||'')));}catch(e){if(!stillCurrent())return;toast('크리에이터 답장을 불러오지 못했습니다: '+e.message);}
+  if(!stillCurrent())return;creatorInboxThreads=loaded;
   $("#app").innerHTML =
     head(
       "통합 대화함",
@@ -528,7 +533,7 @@ async function inboxPage() {
       button("Gmail 답장 동기화", "sync-mail"),
     ) +
     `<p class="fine">산지에서 브랜드·크리에이터 답장을 나눠 봅니다. Gmail 라벨 자동 분류는 권한 확인 전 꺼져 있습니다.</p>` +
-    `<div class="toolbar"><input id="thread-filter" class="search" placeholder="이름·제목·담당자·메모 검색" aria-label="대화 검색"><select id="thread-mode" aria-label="대화 범위"><option value="replies">답장 온 대화</option><option value="all">전체 대화 기록</option></select><select id="thread-type"><option value="">전체 대상</option><option value="brand">브랜드</option><option value="creator">크리에이터</option></select></div><div class="panel conversation"><div class="thread-list" id="thread-list"></div><div class="thread-content" id="thread-detail"></div></div>`;
+    `<div class="toolbar"><input id="thread-filter" class="search" placeholder="이름·제목·담당자·메모 검색" aria-label="대화 검색"><select id="thread-mode" aria-label="대화 범위"><option value="replies">답장 온 대화</option><option value="all">전체 대화 기록</option></select><div class="actions" role="group" aria-label="답장 폴더">${[['','전체'],['brand','브랜드'],['creator','크리에이터']].map(([value,label])=>`<button type="button" data-action="inbox-folder" data-id="${value}" aria-pressed="${inboxFolder===value}">${label}</button>`).join('')}</div><input type="hidden" id="thread-type" value="${esc(inboxFolder)}"></div><div class="panel conversation"><div class="thread-list" id="thread-list"></div><div class="thread-content" id="thread-detail"></div></div>`;
   filterThreads();
 }
 function filterThreads() {
@@ -1148,6 +1153,7 @@ const actions = {
   "creator-meta-connect-page":async()=>{try{const id=($('#creator-meta-page-id')?.value||'').trim();if(!/^[0-9]{5,30}$/.test(id))throw Error('페이지 ID는 숫자로 입력하세요.');const r=await api('/creator-meta/connect-page','POST',{pageId:id});toast('@'+r.account.username+' 연결됨');await creatorDiscoveryPage();}catch(e){toast(e.message);}},
   "creator-meta-connect":async()=>{try{const r=await api('/creator-meta/start','POST',{});location.href=r.url;}catch(e){toast(e.message);}},
   "creator-meta-disconnect":async()=>{try{await api('/creator-meta/disconnect','POST',{});await creatorDiscoveryPage();}catch(e){toast(e.message);}},
+  "inbox-folder":value=>{inboxFolder=['','brand','creator'].includes(value)?value:'';$('#thread-type').value=inboxFolder;document.querySelectorAll('[data-action="inbox-folder"]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.id===inboxFolder)));filterThreads();},
   "recovery-preview":async()=>{recoveryPreviewMode=true;await creatorDiscoveryPage();},
   "recovery-recommend":async()=>{try{await api('/creator-recovery/recommend','POST',{});recoveryPreviewMode=false;recoveryHistoryDay='';await creatorDiscoveryPage();}catch(e){toast(e.message);}},
   "recovery-copy-all":async()=>{await navigator.clipboard.writeText(recoverySelected().map(x=>'@'+x.handle).join('\n'));toast('추천 아이디를 복사했습니다.');},
