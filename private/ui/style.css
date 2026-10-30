@@ -889,3 +889,9 @@ nav {
 .creator-contact-review-form textarea[name=emailBody]{min-height:340px}
 .creator-contact-review-form button{justify-self:start}
 @media(max-width:600px){.creator-contact-review[open]{inset:1vh 8px;height:98vh;padding:16px}.creator-contact-review[open]>summary{top:-16px}.creator-contact-review-form textarea[name=emailBody]{min-height:260px}}
+.creator-dm-manual{margin-top:28px;padding-top:22px;border-top:1px solid #e4ebe6;min-width:0}
+.creator-dm-event-form,.creator-dm-draft-form{display:grid;gap:12px;margin:18px 0;min-width:0}
+.creator-dm-event-form label,.creator-dm-draft-form label{display:grid;gap:6px;min-width:0}
+.creator-dm-event-form input,.creator-dm-event-form select,.creator-dm-event-form textarea,.creator-dm-draft-form textarea{box-sizing:border-box;width:100%;max-width:100%;min-width:0}
+.creator-dm-event-form textarea,.creator-dm-draft-form textarea{min-height:140px;resize:vertical;line-height:1.65}
+.creator-dm-event-form button,.creator-dm-draft-form button{justify-self:start}
