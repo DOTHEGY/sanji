@@ -221,6 +221,8 @@ export async function workspaceApi(path, method = "GET", body) {
       ),
     );
   }
+  if (path === "/creator-conversation-status" && method === "GET") return {items:await result(client.rpc("sanji_creator_conversation_list"))};
+  if (path === "/creator-conversation-status" && method === "PUT") return await result(client.rpc("sanji_creator_conversation_save",{p_creator:body.creatorId,p_thread:body.threadId,p_version:body.version,p_status:body.status,p_note:body.note}));
   if (path.startsWith("/thread/") && method === "PUT")
     return unpack(
       await result(
