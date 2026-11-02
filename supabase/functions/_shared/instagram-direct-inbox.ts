@@ -13,7 +13,7 @@ export function instagramDirectInbox({sb,query,connection,remote,env}:any){
   if(!Number.isSafeInteger(offset)||offset<0||offset>100000)throw Error('잘못된 페이지');const a=await account(owner);
   const rows=await query(sb.from('sanji_instagram_inbound').select('account_id,peer_id,message_id,received_at,body').eq('owner',owner).eq('account_id',a.id).order('received_at',{ascending:false}).order('message_id',{ascending:false}).range(offset,offset+500));
   if(!Array.isArray(rows))throw Error('대화 목록 확인 실패');const hasMore=rows.length>500,items=rows.slice(0,500),ids=items.map((x:any)=>x.message_id);
-  const attempts:any[]=[];for(let i=0;i<ids.length;i+=20){const page=await query(sb.from('sanji_instagram_reply_attempts').select('account_id,peer_id,inbound_id,body,status,created_at').eq('owner',owner).eq('account_id',a.id).in('inbound_id',ids.slice(i,i+20)));if(!Array.isArray(page))throw Error('답장 목록 확인 실패');attempts.push(...page);}return {items,attempts,offset,hasMore,account:'valu_est',sendingEnabled:env('INSTAGRAM_DIRECT_REPLY_ENABLED')==='true'};
+  const attempts:any[]=[],enriched:any[]=[];for(let i=0;i<ids.length;i+=20){const chunk=ids.slice(i,i+20);const page=await query(sb.from('sanji_instagram_reply_attempts').select('account_id,peer_id,inbound_id,body,status,created_at').eq('owner',owner).eq('account_id',a.id).in('inbound_id',chunk));if(!Array.isArray(page))throw Error('답장 목록 확인 실패');attempts.push(...page);const texts=await query(sb.from('sanji_instagram_inbound_enrichment').select('message_id,body').eq('owner',owner).eq('account_id',a.id).in('message_id',chunk));if(!Array.isArray(texts))throw Error('보완된 메시지 확인 실패');enriched.push(...texts);}const confirmed=new Map(enriched.map((x:any)=>[x.message_id,x.body]));return {items:items.map((x:any)=>confirmed.has(x.message_id)?{...x,body:confirmed.get(x.message_id),bodyProvenance:'provider_rechecked'}:x),attempts,offset,hasMore,account:'valu_est',sendingEnabled:env('INSTAGRAM_DIRECT_REPLY_ENABLED')==='true'};
  }
  async function sync(owner:string,cursor?:string){
   let stage='account',reason='account_unavailable';const cursorKind=cursor===undefined?'initial':typeof cursor==='string'&&cursor.startsWith('r1.')?'resume':'provider';
@@ -30,7 +30,7 @@ export function instagramDirectInbox({sb,query,connection,remote,env}:any){
   if(typeof c.id!=='string'||!c.id||c.id.length>500||(threadId&&threadId!==c.id))throw Error('대화가 변경되어 다시 확인해야 합니다');
   stage='thread';reason='provider_request';const thread=await get(c.id,new URLSearchParams({fields:'messages'})),messages=thread?.messages?.data;reason='invalid_provider_response';if(!Array.isArray(messages))throw Error('메시지 목록 확인 실패');
   reason='messages_changed';if(prefix.some((id,i)=>messages[i]?.id!==id))throw Error('메시지가 변경되어 처음부터 다시 확인해야 합니다');
-  let inserted=0,partialMessages=messages.length>20||!!thread.messages.paging?.next;const end=Math.min(messages.length,20,offset+5);
+  let inserted=0,enriched=0,partialMessages=messages.length>20||!!thread.messages.paging?.next;const end=Math.min(messages.length,20,offset+5);
   for(let i=offset;i<end;i++){
    stage='detail';reason='invalid_provider_response';const m=messages[i];if(typeof m?.id!=='string'||!m.id||m.id.length>500)throw Error('메시지 식별자를 확인할 수 없습니다');
    reason='provider_request';const detail=await get(m.id,new URLSearchParams({fields:'id,created_time,from,to,message'}));
@@ -38,12 +38,12 @@ export function instagramDirectInbox({sb,query,connection,remote,env}:any){
    if(detail.id!==m.id||!/^\d+$/.test(peer)||peer===a.id||!detail.to?.data?.some((x:any)=>String(x.id)===a.id)||!Number.isFinite(at)||at>Date.now()+300000)continue;
    if(at<Date.now()-90*86400000||body.length>10000){partialMessages=true;continue;}
    if(!body.trim()){const hasAttachmentField=Object.prototype.hasOwnProperty.call(detail,'attachments');const observation:any={event:'instagram_message_content_observation',message_field_present:Object.prototype.hasOwnProperty.call(detail,'message'),text_present:false,attachment_field_present:hasAttachmentField};if(hasAttachmentField&&Array.isArray(detail.attachments?.data))observation.attachment_present=detail.attachments.data.length>0;console.info(JSON.stringify(observation));}
-   stage='store';reason='storage_failed';if(await capture(owner,{accountId:a.id,peerId:peer,messageId:detail.id,text:body.trim()?body:'본문 없음 또는 조회 불가 · Instagram에서 확인 필요',receivedAt:new Date(at).toISOString()}))inserted++;
+   stage='store';reason='storage_failed';const receivedAt=new Date(at).toISOString(),stored=await capture(owner,{accountId:a.id,peerId:peer,messageId:detail.id,text:body.trim()?body:'본문 없음 또는 조회 불가 · Instagram에서 확인 필요',receivedAt});if(stored)inserted++;else if(body.trim()&&body!=='본문 없음 또는 조회 불가 · Instagram에서 확인 필요'&&await query(sb.rpc('sanji_instagram_enrich_inbound',{p_owner:owner,p_account:a.id,p_peer:peer,p_mid:detail.id,p_at:receivedAt,p_body:body})))enriched++;
   }
   stage='pagination';reason='invalid_provider_cursor';let nextCursor:string|null=null;
   if(end<Math.min(messages.length,20)){const ids=messages.slice(0,end).map((m:any)=>m?.id);if(ids.some((x:any)=>typeof x!=='string'||!x||x.length>500))throw Error('메시지 식별자를 확인할 수 없습니다');nextCursor='r1.'+btoa(JSON.stringify({page:page||null,thread:c.id,offset:end,prefix:ids})).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
   else if(conversations?.paging?.next){const after=conversations?.paging?.cursors?.after;if(!validCursor(after))throw Error('다음 페이지 확인 실패');nextCursor=after;}
-  return {inserted,nextCursor,partialMessages};
+  return {inserted,enriched,nextCursor,partialMessages};
   }catch(e){const error:any=Error('Instagram 수신 조회를 완료하지 못했습니다.');error.syncStage=stage;const source:any=e;error.syncReason=['TimeoutError','AbortError'].includes(source?.name)?'timeout':reason;error.syncCursorKind=cursorKind;if(Number.isSafeInteger(source?.status)&&source.status>=100&&source.status<=599)error.status=source.status;for(const key of ['httpStatus','metaCode','metaSubcode'])if(Number.isSafeInteger(source?.[key])&&source[key]>=0&&source[key]<=2147483647)error[key]=source[key];throw error;}
  }
  async function reply(owner:string,b:any){

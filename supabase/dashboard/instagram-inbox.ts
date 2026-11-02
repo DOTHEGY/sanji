@@ -182,13 +182,18 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
     const rows = await query2(sb2.from("sanji_instagram_inbound").select("account_id,peer_id,message_id,received_at,body").eq("owner", owner).eq("account_id", a.id).order("received_at", { ascending: false }).order("message_id", { ascending: false }).range(offset, offset + 500));
     if (!Array.isArray(rows)) throw Error("\uB300\uD654 \uBAA9\uB85D \uD655\uC778 \uC2E4\uD328");
     const hasMore = rows.length > 500, items = rows.slice(0, 500), ids = items.map((x) => x.message_id);
-    const attempts = [];
+    const attempts = [], enriched = [];
     for (let i = 0; i < ids.length; i += 20) {
-      const page = await query2(sb2.from("sanji_instagram_reply_attempts").select("account_id,peer_id,inbound_id,body,status,created_at").eq("owner", owner).eq("account_id", a.id).in("inbound_id", ids.slice(i, i + 20)));
+      const chunk = ids.slice(i, i + 20);
+      const page = await query2(sb2.from("sanji_instagram_reply_attempts").select("account_id,peer_id,inbound_id,body,status,created_at").eq("owner", owner).eq("account_id", a.id).in("inbound_id", chunk));
       if (!Array.isArray(page)) throw Error("\uB2F5\uC7A5 \uBAA9\uB85D \uD655\uC778 \uC2E4\uD328");
       attempts.push(...page);
+      const texts = await query2(sb2.from("sanji_instagram_inbound_enrichment").select("message_id,body").eq("owner", owner).eq("account_id", a.id).in("message_id", chunk));
+      if (!Array.isArray(texts)) throw Error("\uBCF4\uC644\uB41C \uBA54\uC2DC\uC9C0 \uD655\uC778 \uC2E4\uD328");
+      enriched.push(...texts);
     }
-    return { items, attempts, offset, hasMore, account: "valu_est", sendingEnabled: env2("INSTAGRAM_DIRECT_REPLY_ENABLED") === "true" };
+    const confirmed = new Map(enriched.map((x) => [x.message_id, x.body]));
+    return { items: items.map((x) => confirmed.has(x.message_id) ? { ...x, body: confirmed.get(x.message_id), bodyProvenance: "provider_rechecked" } : x), attempts, offset, hasMore, account: "valu_est", sendingEnabled: env2("INSTAGRAM_DIRECT_REPLY_ENABLED") === "true" };
   }
   async function sync(owner, cursor) {
     let stage = "account", reason = "account_unavailable";
@@ -237,7 +242,7 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
       if (!Array.isArray(messages)) throw Error("\uBA54\uC2DC\uC9C0 \uBAA9\uB85D \uD655\uC778 \uC2E4\uD328");
       reason = "messages_changed";
       if (prefix.some((id, i) => messages[i]?.id !== id)) throw Error("\uBA54\uC2DC\uC9C0\uAC00 \uBCC0\uACBD\uB418\uC5B4 \uCC98\uC74C\uBD80\uD130 \uB2E4\uC2DC \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4");
-      let inserted = 0, partialMessages = messages.length > 20 || !!thread.messages.paging?.next;
+      let inserted = 0, enriched = 0, partialMessages = messages.length > 20 || !!thread.messages.paging?.next;
       const end = Math.min(messages.length, 20, offset + 5);
       for (let i = offset; i < end; i++) {
         stage = "detail";
@@ -261,7 +266,9 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
         }
         stage = "store";
         reason = "storage_failed";
-        if (await capture(owner, { accountId: a.id, peerId: peer, messageId: detail.id, text: body.trim() ? body : "\uBCF8\uBB38 \uC5C6\uC74C \uB610\uB294 \uC870\uD68C \uBD88\uAC00 \xB7 Instagram\uC5D0\uC11C \uD655\uC778 \uD544\uC694", receivedAt: new Date(at2).toISOString() })) inserted++;
+        const receivedAt = new Date(at2).toISOString(), stored = await capture(owner, { accountId: a.id, peerId: peer, messageId: detail.id, text: body.trim() ? body : "\uBCF8\uBB38 \uC5C6\uC74C \uB610\uB294 \uC870\uD68C \uBD88\uAC00 \xB7 Instagram\uC5D0\uC11C \uD655\uC778 \uD544\uC694", receivedAt });
+        if (stored) inserted++;
+        else if (body.trim() && body !== "\uBCF8\uBB38 \uC5C6\uC74C \uB610\uB294 \uC870\uD68C \uBD88\uAC00 \xB7 Instagram\uC5D0\uC11C \uD655\uC778 \uD544\uC694" && await query2(sb2.rpc("sanji_instagram_enrich_inbound", { p_owner: owner, p_account: a.id, p_peer: peer, p_mid: detail.id, p_at: receivedAt, p_body: body }))) enriched++;
       }
       stage = "pagination";
       reason = "invalid_provider_cursor";
@@ -275,7 +282,7 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
         if (!validCursor(after)) throw Error("\uB2E4\uC74C \uD398\uC774\uC9C0 \uD655\uC778 \uC2E4\uD328");
         nextCursor = after;
       }
-      return { inserted, nextCursor, partialMessages };
+      return { inserted, enriched, nextCursor, partialMessages };
     } catch (e) {
       const error = Error("Instagram \uC218\uC2E0 \uC870\uD68C\uB97C \uC644\uB8CC\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
       error.syncStage = stage;
