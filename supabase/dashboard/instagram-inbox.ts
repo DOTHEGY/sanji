@@ -184,11 +184,13 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
     const hasMore = rows.length > 500, items = rows.slice(0, 500), ids = items.map((x) => x.message_id);
     const attempts = [], enriched = [];
     for (let i = 0; i < ids.length; i += 20) {
-      const chunk = ids.slice(i, i + 20);
-      const page = await query2(sb2.from("sanji_instagram_reply_attempts").select("account_id,peer_id,inbound_id,body,status,created_at").eq("owner", owner).eq("account_id", a.id).in("inbound_id", chunk));
+      const page = await query2(sb2.from("sanji_instagram_reply_attempts").select("account_id,peer_id,inbound_id,body,status,created_at").eq("owner", owner).eq("account_id", a.id).in("inbound_id", ids.slice(i, i + 20)));
       if (!Array.isArray(page)) throw Error("\uB2F5\uC7A5 \uBAA9\uB85D \uD655\uC778 \uC2E4\uD328");
       attempts.push(...page);
-      const texts = await query2(sb2.from("sanji_instagram_inbound_enrichment").select("message_id,body").eq("owner", owner).eq("account_id", a.id).in("message_id", chunk));
+    }
+    const placeholders = items.filter((x) => x.body === "\uBCF8\uBB38 \uC5C6\uC74C \uB610\uB294 \uC870\uD68C \uBD88\uAC00 \xB7 Instagram\uC5D0\uC11C \uD655\uC778 \uD544\uC694").map((x) => x.message_id);
+    for (let i = 0; i < placeholders.length; i += 20) {
+      const texts = await query2(sb2.from("sanji_instagram_inbound_enrichment").select("message_id,body").eq("owner", owner).eq("account_id", a.id).in("message_id", placeholders.slice(i, i + 20)));
       if (!Array.isArray(texts)) throw Error("\uBCF4\uC644\uB41C \uBA54\uC2DC\uC9C0 \uD655\uC778 \uC2E4\uD328");
       enriched.push(...texts);
     }
