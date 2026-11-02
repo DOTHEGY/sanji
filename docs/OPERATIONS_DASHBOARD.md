@@ -52,3 +52,5 @@
 
 - [데스크톱 미리보기](previews/operations-dashboard-desktop.png)
 - [모바일 미리보기](previews/operations-dashboard-mobile.png)
+- [통합 대화함 데스크톱 미리보기](previews/inbox-compact-desktop.png)
+- [통합 대화함 모바일 미리보기](previews/inbox-compact-mobile.png)

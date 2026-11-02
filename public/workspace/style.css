@@ -920,3 +920,20 @@ nav a{transition:background-color .15s ease,color .15s ease}
 .operation-progress{display:grid;gap:6px;margin:14px 0}.operation-progress progress{width:100%;height:10px;accent-color:var(--green)}.operation-progress small{color:var(--muted)}
 
 .dashboard-secondary{margin:16px 0 20px}.dashboard-secondary>summary{cursor:pointer;color:var(--green);font-weight:700;padding:10px 0}.dashboard-secondary>.stats{margin-top:8px}
+/* Keep the conversation readable and place optional controls behind disclosure. */
+.conversation{grid-template-columns:minmax(190px,290px) minmax(0,1fr);width:100%;max-width:100%}
+.thread-list,.thread-content{min-width:0;max-width:100%}
+.thread-list{max-height:75vh;overflow-y:auto}
+.thread-content{overflow-wrap:anywhere}
+.thread-content .form-grid{grid-template-columns:minmax(0,1fr);min-width:0}
+.thread-content .field,.thread-content input,.thread-content select,.thread-content textarea{min-width:0;max-width:100%;width:100%}
+.thread-content pre{white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%}
+.thread-content .message{overflow-wrap:anywhere;word-break:break-word}
+.inbox-tools{display:grid;gap:8px;margin-top:20px}
+.inbox-extra,.inbox-advanced{min-width:0;border:1px solid var(--line);border-radius:9px;padding:12px}
+.inbox-extra>summary,.inbox-advanced>summary,.inbox-filter-options>summary{cursor:pointer;font-weight:650;color:var(--green)}
+.inbox-extra[open]>summary,.inbox-advanced[open]>summary{margin-bottom:14px}
+.inbox-extra textarea{min-height:110px}
+.inbox-filter-options{position:relative}
+.inbox-filter-options select{display:block;width:min(100%,240px);margin-top:8px}
+@media(max-width:850px){.conversation{grid-template-columns:minmax(0,1fr)}.thread-list{max-height:220px;border-right:0;border-bottom:1px solid var(--line)}.thread-content{padding:18px}.message.out{margin-left:12px}}
