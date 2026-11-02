@@ -178,10 +178,10 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
     const username = typeof value?.username === "string" && /^[A-Za-z0-9._]{1,30}$/.test(value.username) && ![".", ".."].includes(value.username) && value.username.toLowerCase() !== "valu_est" ? value.username : null, name = typeof value?.name === "string" && value.name.trim() && value.name.length <= 100 && !/[\x00-\x1f\x7f]/.test(value.name) ? value.name.trim() : null;
     return { username, name };
   };
-  async function observe(owner, accountId, peerId, value, observedAt) {
+  async function observe(owner, accountId, peerId, messageId, value, observedAt) {
     const { username, name } = safePeer(value);
     if (!username && !name) return false;
-    return query2(sb2.rpc("sanji_instagram_observe_peer", { p_owner: owner, p_account: accountId, p_peer: peerId, p_username: username, p_name: name, p_observed_at: observedAt }));
+    return query2(sb2.rpc("sanji_instagram_observe_peer", { p_owner: owner, p_account: accountId, p_peer: peerId, p_mid: messageId, p_username: username, p_name: name, p_observed_at: observedAt }));
   }
   async function capture(owner, e) {
     return query2(sb2.rpc("sanji_instagram_capture", { p_owner: owner, p_account: e.accountId, p_peer: e.peerId, p_mid: e.messageId, p_at: e.receivedAt, p_body: e.text }));
@@ -286,7 +286,7 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
         stage = "store";
         reason = "storage_failed";
         if (await capture(owner, { accountId: a.id, peerId: peer, messageId: detail.id, text: body.trim() ? body : "\uBCF8\uBB38 \uC5C6\uC74C \uB610\uB294 \uC870\uD68C \uBD88\uAC00 \xB7 Instagram\uC5D0\uC11C \uD655\uC778 \uD544\uC694", receivedAt: new Date(at2).toISOString() })) inserted++;
-        await observe(owner, a.id, peer, detail.from, observedAt);
+        await observe(owner, a.id, peer, detail.id, detail.from, observedAt);
       }
       stage = "pagination";
       reason = "invalid_provider_cursor";
@@ -321,14 +321,14 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
     const a = await account(owner);
     if (peerId === a.id) throw Error("\uC0C1\uB300 \uACC4\uC815\uC744 \uD655\uC778\uD558\uC138\uC694");
     const inbound = await query2(sb2.from("sanji_instagram_inbound").select("message_id").eq("owner", owner).eq("account_id", a.id).eq("peer_id", peerId).limit(1));
-    if (!Array.isArray(inbound) || !inbound.length) throw Error("\uD655\uC778\uB41C \uC218\uC2E0 \uB300\uD654\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4");
+    if (!Array.isArray(inbound) || !inbound.length || typeof inbound[0]?.message_id !== "string" || !inbound[0].message_id) throw Error("\uD655\uC778\uB41C \uC218\uC2E0 \uB300\uD654\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4");
     const version = env2("META_GRAPH_VERSION") || "v24.0";
     if (!/^v\d+\.\d+$/.test(version)) throw Error("invalid version");
     const observedAt = (/* @__PURE__ */ new Date()).toISOString(), profile = await remote2("https://graph.instagram.com/" + version + "/" + encodeURIComponent(peerId) + "?" + new URLSearchParams({ fields: "name,username" }), { method: "GET", headers: { Authorization: "Bearer " + a.token }, signal: AbortSignal.timeout(3500) }, "Instagram \uC0C1\uB300 \uACC4\uC815 \uC870\uD68C");
     if (profile?.id != null && String(profile.id) !== peerId) throw Error("\uC0C1\uB300 \uACC4\uC815\uC774 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4");
     const safe = safePeer(profile);
     if (!safe.username && !safe.name) return { found: false };
-    const saved = await observe(owner, a.id, peerId, profile, observedAt);
+    const saved = await observe(owner, a.id, peerId, inbound[0].message_id, profile, observedAt);
     return { found: saved === true };
   }
   async function reply(owner, b) {
