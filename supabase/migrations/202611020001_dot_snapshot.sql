@@ -34,6 +34,8 @@ begin
   if gen=old.ledger_generation_id and src=old.source_as_of and exp<=old.exported_at then raise exception '이전 내보내기입니다'; end if;
   if gen=old.ledger_generation_id and src=old.source_as_of then
    -- A newer export may add audit/login/coverage evidence, but must not roll back evidence.
+   before_time:=nullif(old.payload->>'last_profile_observed_at','')::timestamptz; after_time:=nullif(p_data->>'last_profile_observed_at','')::timestamptz;
+   if before_time is not null and (after_time is null or after_time<before_time) then raise exception '이전 프로필 관찰입니다'; end if;
    foreach k in array array['login','database_audit'] loop
     before_time:=nullif(old.payload->k->>'observed_at','')::timestamptz;
     after_time:=nullif(p_data->k->>'observed_at','')::timestamptz;
