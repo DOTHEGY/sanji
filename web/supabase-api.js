@@ -4,6 +4,7 @@ import {
   supabaseUrl,
   supabaseKey,
   edgeFunctionUrl,
+  instagramInboxFunctionUrl,
   dotSnapshotFunctionUrl,
 } from "./supabase-config.js";
 export const client = createClient(supabaseUrl, supabaseKey, {
@@ -62,7 +63,7 @@ async function member() {
 }
 async function edge(path, method, body) {
   const session = await member();
-  const functionUrl = path === "/dot-snapshot" || path.startsWith("/dot-snapshot/") ? dotSnapshotFunctionUrl : edgeFunctionUrl;
+  const functionUrl = path.startsWith("/creator-instagram/") ? instagramInboxFunctionUrl : path === "/dot-snapshot" || path.startsWith("/dot-snapshot/") ? dotSnapshotFunctionUrl : edgeFunctionUrl;
   let response;
   try {
     response = await fetch(functionUrl + path, {
@@ -76,6 +77,7 @@ async function edge(path, method, body) {
     });
   } catch {
     if (functionUrl === dotSnapshotFunctionUrl) throw error("원장 서버에 연결할 수 없습니다.", 503);
+
     const diagnosis = await probeEdge(functionUrl);
     throw error(
       diagnosis.kind === "ready"
