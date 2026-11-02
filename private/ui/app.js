@@ -629,7 +629,7 @@ function inboundHumanReply(m){
  if(!m||m.out!==false||m.automatic||(m.bounceFailures||[]).length)return false;
  const kind=String(m.type||m.kind||m.event||'').toLowerCase();
  if(/(?:^|[_-])(read|seen|open|tracking|bounce|delivery_status|auto_reply|autoresponder)(?:$|[_-])/.test(kind))return false;
- return !!(String(m.text||'').trim()||m.hasAttachments);
+ return !!((typeof m.text==='string'&&m.text.trim())||m.hasAttachments===true);
 }
 const conversationStatuses=['미정','대화 중','답변 대기','회신 중단','다른 제안 검토','상대방 거절','우리 측 거절','협업 진행','종료'];
 let creatorInboxThreads=[], inboxRequestGeneration=0, inboxFolder='', inboxLifecycle='active', inboxEdited=false, inboxDirtyForms=new Set(), inboxFilterSnapshot={q:'',mode:'replies',type:'',lifecycle:'active'};
