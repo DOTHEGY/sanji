@@ -63,6 +63,12 @@ function fail(stage, cause) {
   }
   return error;
 }
+function tokenMeta(value) {
+  const item = typeof value?.access_token === "string" ? value : Array.isArray(value?.data) && value.data.length === 1 ? value.data[0] : null;
+  const shape = typeof value?.access_token === "string" ? "flat" : item && typeof item.access_token === "string" ? "single_data" : "other";
+  const kind = typeof item?.token_type !== "string" ? "missing" : item.token_type.toLowerCase() === "bearer" ? "bearer" : "other";
+  return { shape, kind };
+}
 async function at(stage, fn) {
   try {
     return await fn();
@@ -91,15 +97,40 @@ function creatorInstagramOauth({ sb: sb2, query: query2, env: env2, key: key2, d
     });
     const form = new FormData();
     for (const [k, v] of Object.entries({ client_id: env2("META_APP_ID"), client_secret: env2("META_APP_SECRET"), code: url.searchParams.get("code"), grant_type: "authorization_code", redirect_uri: base + "/oauth/instagram/callback" })) form.set(k, String(v));
-    const token = await at("short_exchange", async () => instagramTokenResponse(await remote2("https://api.instagram.com/oauth/access_token", { method: "POST", body: form }, "Instagram \uACF5\uC2DD \uC778\uC99D")));
-    let longFailure = null;
+    let shortMeta = { shape: "other", kind: "missing" }, longMeta = null;
+    const token = await at("short_exchange", async () => {
+      const raw = await remote2("https://api.instagram.com/oauth/access_token", { method: "POST", body: form }, "Instagram \uACF5\uC2DD \uC778\uC99D");
+      shortMeta = tokenMeta(raw);
+      return instagramTokenResponse(raw);
+    });
+    let longFailure = null, longAttempted = false;
     const sessionRemote = async (address, options, label) => {
       const stage = new URL(address).pathname === "/access_token" ? "long_exchange" : "profile";
+      if (stage === "long_exchange") longAttempted = true;
       try {
-        return await remote2(address, options, label);
+        const result = await remote2(address, options, label);
+        if (stage === "long_exchange") {
+          longMeta = tokenMeta(result);
+          try {
+            instagramTokenResponse(result, true);
+          } catch (e) {
+            longFailure = fail(stage, e);
+            longFailure.failureKind = "invalid_response";
+            throw longFailure;
+          }
+        }
+        return result;
       } catch (e) {
         const safe2 = fail(stage, e);
-        if (stage === "long_exchange") longFailure = safe2;
+        if (stage === "long_exchange") {
+          safe2.failureKind = e?.failureKind === "invalid_response" ? "invalid_response" : "provider_or_network_failure";
+          longFailure = safe2;
+        } else if (longAttempted) {
+          safe2.profileTokenMode = longFailure ? "short" : "long";
+          safe2.shortMeta = shortMeta;
+          if (longMeta) safe2.longMeta = longMeta;
+          if (longFailure) safe2.previousLongFailure = longFailure;
+        }
         throw safe2;
       }
     };
@@ -107,7 +138,14 @@ function creatorInstagramOauth({ sb: sb2, query: query2, env: env2, key: key2, d
     try {
       session = await resolveSession(token, sessionRemote, env2("META_APP_SECRET"), env2("META_GRAPH_VERSION") || "v24.0");
     } catch (e) {
-      throw e?.oauthStage ? e : fail("profile", e);
+      const safe2 = e?.oauthStage ? e : fail("profile", e);
+      if (safe2.oauthStage === "profile" && longAttempted && !safe2.profileTokenMode) {
+        safe2.profileTokenMode = longFailure ? "short" : "long";
+        safe2.shortMeta = shortMeta;
+        if (longMeta) safe2.longMeta = longMeta;
+        if (longFailure) safe2.previousLongFailure = longFailure;
+      }
+      throw safe2;
     }
     if (String(session.username || "").replace(/^@/, "").toLowerCase() !== expected || !/^\d+$/.test(String(session.id || ""))) throw fail("account", null);
     if (session.tokenMode === "short") throw longFailure || fail("long_exchange", null);
@@ -315,6 +353,21 @@ function instagramInboxHandler({ sb: sb2, query: query2, env: env2, key: key2, d
       if (["state", "short_exchange", "long_exchange", "profile", "account", "save", "capabilities"].includes(safe?.oauthStage)) {
         const record = { event: "instagram_oauth_failure", stage: safe.oauthStage, response_http_status: responseStatus };
         if (safe.oauthStage === "profile") {
+          if (["short", "long"].includes(safe.profileTokenMode)) record.profile_token_mode = safe.profileTokenMode;
+          for (const [key3, prefix] of [["shortMeta", "short"], ["longMeta", "long"]]) {
+            const m = safe[key3];
+            if (m && ["flat", "single_data", "other"].includes(m.shape) && ["bearer", "other", "missing"].includes(m.kind)) {
+              record[prefix + "_response_shape"] = m.shape;
+              record[prefix + "_token_type"] = m.kind;
+            }
+          }
+          const version = env2("META_GRAPH_VERSION") || "v24.0";
+          record.profile_api_version = version.length <= 16 && /^v\d+\.\d+$/.test(version) ? version : "invalid_version";
+          const previous = safe.previousLongFailure;
+          if (previous && ["invalid_response", "provider_or_network_failure"].includes(previous.failureKind)) {
+            record.long_exchange_failure_kind = previous.failureKind;
+            for (const [key3, name] of [["httpStatus", "long_exchange_http_status"], ["metaCode", "long_exchange_meta_code"], ["metaSubcode", "long_exchange_meta_subcode"]]) if (Number.isSafeInteger(previous[key3]) && previous[key3] >= 0 && previous[key3] <= 2147483647) record[name] = previous[key3];
+          }
           record.profile_request = "versioned_me_user_id_username";
           record.profile_version = !env2("META_GRAPH_VERSION") || env2("META_GRAPH_VERSION") === "v24.0" ? "v24_default_or_configured" : "configured_other";
           if (["unsupported_user_id_field", "unsupported_username_field", "unsupported_get_request", "invalid_parameter"].includes(safe.compatibility)) record.profile_error_kind = safe.compatibility;
