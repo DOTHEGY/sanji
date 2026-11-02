@@ -64,6 +64,7 @@ var stages = /* @__PURE__ */ new Set(["state", "short_exchange", "long_exchange"
 function fail(stage, cause) {
   const error = Error("Instagram \uC5F0\uACB0\uC744 \uC644\uB8CC\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
   error.oauthStage = stages.has(stage) ? stage : "state";
+  if (Number.isSafeInteger(cause?.status) && cause.status >= 100 && cause.status <= 599) error.status = cause.status;
   for (const key2 of ["httpStatus", "metaCode", "metaSubcode"]) {
     const n = cause?.[key2];
     if (Number.isSafeInteger(n) && n >= 0 && n <= 2147483647) error[key2] = n;
@@ -318,13 +319,12 @@ function instagramInboxHandler({ sb: sb2, query: query2, env: env2, key: key2, d
       if (path === "/creator-instagram/reply" && req.method === "POST") return json(await inbox.reply(owner, await input()));
       return json({ error: "\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uACBD\uB85C" }, 404);
     } catch (e) {
-      const safe = e;
+      const safe = e, status = Number(safe?.status), responseStatus = status === 429 ? 429 : status === 401 || status === 403 ? 403 : status >= 500 && status <= 599 ? 503 : 400;
       if (["state", "short_exchange", "long_exchange", "profile", "account", "save", "capabilities"].includes(safe?.oauthStage)) {
-        const record = { event: "instagram_oauth_failure", stage: safe.oauthStage, response_http_status: 400 };
+        const record = { event: "instagram_oauth_failure", stage: safe.oauthStage, response_http_status: responseStatus };
         for (const [key3, name] of [["httpStatus", "http_status"], ["metaCode", "meta_code"], ["metaSubcode", "meta_subcode"]]) if (Number.isSafeInteger(safe[key3]) && safe[key3] >= 0 && safe[key3] <= 2147483647) record[name] = safe[key3];
         console.error(JSON.stringify(record));
       }
-      const status = Number(e?.status);
       if (status === 429) return json({ error: "Meta \uC694\uCCAD \uD55C\uB3C4\uC5D0 \uB3C4\uB2EC\uD588\uC2B5\uB2C8\uB2E4. \uC7A0\uC2DC \uD6C4 \uC9C1\uC811 \uB2E4\uC2DC \uD655\uC778\uD558\uC138\uC694." }, 429);
       if (status === 401 || status === 403) return json({ error: "Meta \uACC4\uC815 \uC5F0\uACB0 \uB610\uB294 \uBA54\uC2DC\uC9C0 \uAD8C\uD55C\uC744 \uD655\uC778\uD558\uC138\uC694." }, 403);
       if (status >= 500 && status <= 599) return json({ error: "Meta \uC11C\uBE44\uC2A4\uAC00 \uC77C\uC2DC\uC801\uC73C\uB85C \uC751\uB2F5\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. \uC7A0\uC2DC \uD6C4 \uC9C1\uC811 \uB2E4\uC2DC \uD655\uC778\uD558\uC138\uC694." }, 503);

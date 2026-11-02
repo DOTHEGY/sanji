@@ -1,7 +1,7 @@
 import {instagramTokenResponse} from '../_shared/instagram-token.ts';
 // Instagram OAuth: stage-only diagnostics; provider content is never logged.
 const stages=new Set(['state','short_exchange','long_exchange','profile','account','save','capabilities']);
-function fail(stage:string,cause:any){const error:any=Error('Instagram 연결을 완료하지 못했습니다.');error.oauthStage=stages.has(stage)?stage:'state';for(const key of ['httpStatus','metaCode','metaSubcode']){const n=cause?.[key];if(Number.isSafeInteger(n)&&n>=0&&n<=2147483647)error[key]=n;}return error;}
+function fail(stage:string,cause:any){const error:any=Error('Instagram 연결을 완료하지 못했습니다.');error.oauthStage=stages.has(stage)?stage:'state';if(Number.isSafeInteger(cause?.status)&&cause.status>=100&&cause.status<=599)error.status=cause.status;for(const key of ['httpStatus','metaCode','metaSubcode']){const n=cause?.[key];if(Number.isSafeInteger(n)&&n>=0&&n<=2147483647)error[key]=n;}return error;}
 async function at(stage:string,fn:()=>Promise<any>){try{return await fn();}catch(e){throw fail(stage,e);}}
 export function creatorInstagramOauth({sb,query,env,key,digest,encrypt,remote,resolveSession,capabilities,audit,oauthStateProblem,oauthLifetimeMs}:any){
  const provider='instagram_message_connect',expected='valu_est';
