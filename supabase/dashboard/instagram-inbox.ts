@@ -191,64 +191,101 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
     return { items, attempts, offset, hasMore, account: "valu_est", sendingEnabled: env2("INSTAGRAM_DIRECT_REPLY_ENABLED") === "true" };
   }
   async function sync(owner, cursor) {
-    const a = await account(owner), version = env2("META_GRAPH_VERSION") || "v24.0";
-    if (!/^v\d+\.\d+$/.test(version)) throw Error("invalid version");
-    const validCursor = (x) => typeof x === "string" && !x.includes("://") && /^[A-Za-z0-9._~:+\/=-]{1,512}$/.test(x);
-    let page, offset = 0, threadId, prefix = [];
-    if (cursor?.startsWith("r1.")) {
-      try {
-        const data = JSON.parse(atob(cursor.slice(3).replace(/-/g, "+").replace(/_/g, "/")));
-        if (data.page !== null && !validCursor(data.page) || typeof data.thread !== "string" || !data.thread || data.thread.length > 500 || !Number.isSafeInteger(data.offset) || data.offset < 1 || data.offset > 19 || !Array.isArray(data.prefix) || data.prefix.length !== data.offset || data.prefix.some((x) => typeof x !== "string" || !x || x.length > 500)) throw Error("invalid");
-        page = data.page || void 0;
-        offset = data.offset;
-        threadId = data.thread;
-        prefix = data.prefix;
-      } catch {
-        throw Error("\uC798\uBABB\uB41C \uC774\uC5B4\uBCF4\uAE30");
+    let stage = "account", reason = "account_unavailable";
+    const cursorKind = cursor === void 0 ? "initial" : typeof cursor === "string" && cursor.startsWith("r1.") ? "resume" : "provider";
+    try {
+      const a = await account(owner), version = env2("META_GRAPH_VERSION") || "v24.0";
+      if (!/^v\d+\.\d+$/.test(version)) throw Error("invalid version");
+      stage = "cursor";
+      reason = "invalid_cursor";
+      const validCursor = (x) => typeof x === "string" && !x.includes("://") && /^[A-Za-z0-9._~:+\/=-]{1,512}$/.test(x);
+      let page, offset = 0, threadId, prefix = [];
+      if (cursor?.startsWith("r1.")) {
+        try {
+          const data = JSON.parse(atob(cursor.slice(3).replace(/-/g, "+").replace(/_/g, "/")));
+          if (data.page !== null && !validCursor(data.page) || typeof data.thread !== "string" || !data.thread || data.thread.length > 500 || !Number.isSafeInteger(data.offset) || data.offset < 1 || data.offset > 19 || !Array.isArray(data.prefix) || data.prefix.length !== data.offset || data.prefix.some((x) => typeof x !== "string" || !x || x.length > 500)) throw Error("invalid");
+          page = data.page || void 0;
+          offset = data.offset;
+          threadId = data.thread;
+          prefix = data.prefix;
+        } catch {
+          throw Error("\uC798\uBABB\uB41C \uC774\uC5B4\uBCF4\uAE30");
+        }
+      } else if (cursor !== void 0) {
+        if (!validCursor(cursor)) throw Error("\uC798\uBABB\uB41C \uD398\uC774\uC9C0");
+        page = cursor;
       }
-    } else if (cursor !== void 0) {
-      if (!validCursor(cursor)) throw Error("\uC798\uBABB\uB41C \uD398\uC774\uC9C0");
-      page = cursor;
-    }
-    const get = async (path, fields) => remote2("https://graph.instagram.com/" + version + "/" + (path === "me/conversations" ? path : encodeURIComponent(path)) + "?" + fields.toString(), { headers: { Authorization: "Bearer " + a.token }, signal: AbortSignal.timeout(3500) }, "Instagram \uB300\uD654 \uC870\uD68C");
-    const params = new URLSearchParams({ platform: "instagram", limit: "1" });
-    if (page) params.set("after", page);
-    const conversations = await get("me/conversations", params);
-    if (!Array.isArray(conversations?.data) || conversations.data.length > 1) throw Error("\uB300\uD654 \uBAA9\uB85D \uD655\uC778 \uC2E4\uD328");
-    const c = conversations.data[0];
-    if (!c) {
-      if (offset || conversations?.paging?.next) throw Error("\uD398\uC774\uC9C0\uAC00 \uBCC0\uACBD\uB418\uC5B4 \uB2E4\uC2DC \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4");
-      return { inserted: 0, nextCursor: null, partialMessages: false };
-    }
-    if (typeof c.id !== "string" || !c.id || c.id.length > 500 || threadId && threadId !== c.id) throw Error("\uB300\uD654\uAC00 \uBCC0\uACBD\uB418\uC5B4 \uB2E4\uC2DC \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4");
-    const thread = await get(c.id, new URLSearchParams({ fields: "messages" })), messages = thread?.messages?.data;
-    if (!Array.isArray(messages)) throw Error("\uBA54\uC2DC\uC9C0 \uBAA9\uB85D \uD655\uC778 \uC2E4\uD328");
-    if (prefix.some((id, i) => messages[i]?.id !== id)) throw Error("\uBA54\uC2DC\uC9C0\uAC00 \uBCC0\uACBD\uB418\uC5B4 \uCC98\uC74C\uBD80\uD130 \uB2E4\uC2DC \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4");
-    let inserted = 0, partialMessages = messages.length > 20 || !!thread.messages.paging?.next;
-    const end = Math.min(messages.length, 20, offset + 5);
-    for (let i = offset; i < end; i++) {
-      const m = messages[i];
-      if (typeof m?.id !== "string" || !m.id || m.id.length > 500) throw Error("\uBA54\uC2DC\uC9C0 \uC2DD\uBCC4\uC790\uB97C \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4");
-      const detail = await get(m.id, new URLSearchParams({ fields: "id,created_time,from,to,message" }));
-      const peer = String(detail.from?.id || ""), at2 = Date.parse(detail.created_time), body = typeof detail.message === "string" ? detail.message : "";
-      if (detail.id !== m.id || !/^\d+$/.test(peer) || peer === a.id || !detail.to?.data?.some((x) => String(x.id) === a.id) || !Number.isFinite(at2) || at2 > Date.now() + 3e5) continue;
-      if (at2 < Date.now() - 90 * 864e5 || body.length > 1e4) {
-        partialMessages = true;
-        continue;
+      const get = async (path, fields) => remote2("https://graph.instagram.com/" + version + "/" + (path === "me/conversations" ? path : encodeURIComponent(path)) + "?" + fields.toString(), { headers: { Authorization: "Bearer " + a.token }, signal: AbortSignal.timeout(3500) }, "Instagram \uB300\uD654 \uC870\uD68C");
+      const params = new URLSearchParams({ platform: "instagram", limit: "1" });
+      if (page) params.set("after", page);
+      stage = "conversations";
+      reason = "provider_request";
+      const conversations = await get("me/conversations", params);
+      reason = "invalid_provider_response";
+      if (!Array.isArray(conversations?.data) || conversations.data.length > 1) throw Error("\uB300\uD654 \uBAA9\uB85D \uD655\uC778 \uC2E4\uD328");
+      reason = "conversation_changed_or_invalid";
+      const c = conversations.data[0];
+      if (!c) {
+        if (offset || conversations?.paging?.next) throw Error("\uD398\uC774\uC9C0\uAC00 \uBCC0\uACBD\uB418\uC5B4 \uB2E4\uC2DC \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4");
+        return { inserted: 0, nextCursor: null, partialMessages: false };
       }
-      if (await capture(owner, { accountId: a.id, peerId: peer, messageId: detail.id, text: body.trim() ? body : "\uBCF8\uBB38 \uC5C6\uC74C \uB610\uB294 \uC870\uD68C \uBD88\uAC00 \xB7 Instagram\uC5D0\uC11C \uD655\uC778 \uD544\uC694", receivedAt: new Date(at2).toISOString() })) inserted++;
+      if (typeof c.id !== "string" || !c.id || c.id.length > 500 || threadId && threadId !== c.id) throw Error("\uB300\uD654\uAC00 \uBCC0\uACBD\uB418\uC5B4 \uB2E4\uC2DC \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4");
+      stage = "thread";
+      reason = "provider_request";
+      const thread = await get(c.id, new URLSearchParams({ fields: "messages" })), messages = thread?.messages?.data;
+      reason = "invalid_provider_response";
+      if (!Array.isArray(messages)) throw Error("\uBA54\uC2DC\uC9C0 \uBAA9\uB85D \uD655\uC778 \uC2E4\uD328");
+      reason = "messages_changed";
+      if (prefix.some((id, i) => messages[i]?.id !== id)) throw Error("\uBA54\uC2DC\uC9C0\uAC00 \uBCC0\uACBD\uB418\uC5B4 \uCC98\uC74C\uBD80\uD130 \uB2E4\uC2DC \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4");
+      let inserted = 0, partialMessages = messages.length > 20 || !!thread.messages.paging?.next;
+      const end = Math.min(messages.length, 20, offset + 5);
+      for (let i = offset; i < end; i++) {
+        stage = "detail";
+        reason = "invalid_provider_response";
+        const m = messages[i];
+        if (typeof m?.id !== "string" || !m.id || m.id.length > 500) throw Error("\uBA54\uC2DC\uC9C0 \uC2DD\uBCC4\uC790\uB97C \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4");
+        reason = "provider_request";
+        const detail = await get(m.id, new URLSearchParams({ fields: "id,created_time,from,to,message" }));
+        reason = "invalid_provider_response";
+        const peer = String(detail.from?.id || ""), at2 = Date.parse(detail.created_time), body = typeof detail.message === "string" ? detail.message : "";
+        if (detail.id !== m.id || !/^\d+$/.test(peer) || peer === a.id || !detail.to?.data?.some((x) => String(x.id) === a.id) || !Number.isFinite(at2) || at2 > Date.now() + 3e5) continue;
+        if (at2 < Date.now() - 90 * 864e5 || body.length > 1e4) {
+          partialMessages = true;
+          continue;
+        }
+        if (!body.trim()) {
+          const hasAttachmentField = Object.prototype.hasOwnProperty.call(detail, "attachments");
+          const observation = { event: "instagram_message_content_observation", message_field_present: Object.prototype.hasOwnProperty.call(detail, "message"), text_present: false, attachment_field_present: hasAttachmentField };
+          if (hasAttachmentField && Array.isArray(detail.attachments?.data)) observation.attachment_present = detail.attachments.data.length > 0;
+          console.info(JSON.stringify(observation));
+        }
+        stage = "store";
+        reason = "storage_failed";
+        if (await capture(owner, { accountId: a.id, peerId: peer, messageId: detail.id, text: body.trim() ? body : "\uBCF8\uBB38 \uC5C6\uC74C \uB610\uB294 \uC870\uD68C \uBD88\uAC00 \xB7 Instagram\uC5D0\uC11C \uD655\uC778 \uD544\uC694", receivedAt: new Date(at2).toISOString() })) inserted++;
+      }
+      stage = "pagination";
+      reason = "invalid_provider_cursor";
+      let nextCursor = null;
+      if (end < Math.min(messages.length, 20)) {
+        const ids = messages.slice(0, end).map((m) => m?.id);
+        if (ids.some((x) => typeof x !== "string" || !x || x.length > 500)) throw Error("\uBA54\uC2DC\uC9C0 \uC2DD\uBCC4\uC790\uB97C \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4");
+        nextCursor = "r1." + btoa(JSON.stringify({ page: page || null, thread: c.id, offset: end, prefix: ids })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      } else if (conversations?.paging?.next) {
+        const after = conversations?.paging?.cursors?.after;
+        if (!validCursor(after)) throw Error("\uB2E4\uC74C \uD398\uC774\uC9C0 \uD655\uC778 \uC2E4\uD328");
+        nextCursor = after;
+      }
+      return { inserted, nextCursor, partialMessages };
+    } catch (e) {
+      const error = Error("Instagram \uC218\uC2E0 \uC870\uD68C\uB97C \uC644\uB8CC\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+      error.syncStage = stage;
+      const source = e;
+      error.syncReason = ["TimeoutError", "AbortError"].includes(source?.name) ? "timeout" : reason;
+      error.syncCursorKind = cursorKind;
+      if (Number.isSafeInteger(source?.status) && source.status >= 100 && source.status <= 599) error.status = source.status;
+      for (const key2 of ["httpStatus", "metaCode", "metaSubcode"]) if (Number.isSafeInteger(source?.[key2]) && source[key2] >= 0 && source[key2] <= 2147483647) error[key2] = source[key2];
+      throw error;
     }
-    let nextCursor = null;
-    if (end < Math.min(messages.length, 20)) {
-      const ids = messages.slice(0, end).map((m) => m?.id);
-      if (ids.some((x) => typeof x !== "string" || !x || x.length > 500)) throw Error("\uBA54\uC2DC\uC9C0 \uC2DD\uBCC4\uC790\uB97C \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4");
-      nextCursor = "r1." + btoa(JSON.stringify({ page: page || null, thread: c.id, offset: end, prefix: ids })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-    } else if (conversations?.paging?.next) {
-      const after = conversations?.paging?.cursors?.after;
-      if (!validCursor(after)) throw Error("\uB2E4\uC74C \uD398\uC774\uC9C0 \uD655\uC778 \uC2E4\uD328");
-      nextCursor = after;
-    }
-    return { inserted, nextCursor, partialMessages };
   }
   async function reply(owner, b) {
     if (env2("INSTAGRAM_DIRECT_REPLY_ENABLED") !== "true") throw Error("Instagram \uB2F5\uC7A5 \uBC1C\uC1A1\uC774 \uBE44\uD65C\uC131\uD654\uB418\uC5B4 \uC788\uC2B5\uB2C8\uB2E4.");
@@ -352,6 +389,11 @@ function instagramInboxHandler({ sb: sb2, query: query2, env: env2, key: key2, d
       return json({ error: "\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uACBD\uB85C" }, 404);
     } catch (e) {
       const safe = e, status = Number(safe?.status), responseStatus = status === 429 ? 429 : status === 401 || status === 403 ? 403 : status >= 500 && status <= 599 ? 503 : 400;
+      if (["account", "cursor", "conversations", "thread", "detail", "store", "pagination"].includes(safe?.syncStage) && ["initial", "resume", "provider"].includes(safe?.syncCursorKind) && ["account_unavailable", "invalid_cursor", "provider_request", "invalid_provider_response", "conversation_changed_or_invalid", "messages_changed", "storage_failed", "invalid_provider_cursor", "timeout"].includes(safe?.syncReason)) {
+        const event = { event: "instagram_sync_failure", stage: safe.syncStage, reason: safe.syncReason, cursor_kind: safe.syncCursorKind, response_http_status: responseStatus };
+        for (const [key3, name] of [["httpStatus", "provider_http_status"], ["metaCode", "meta_code"], ["metaSubcode", "meta_subcode"]]) if (Number.isSafeInteger(safe[key3]) && safe[key3] >= 0 && safe[key3] <= 2147483647) event[name] = safe[key3];
+        console.error(JSON.stringify(event));
+      }
       if (["state", "short_exchange", "long_exchange", "profile", "account", "save", "capabilities"].includes(safe?.oauthStage)) {
         const record = { event: "instagram_oauth_failure", stage: safe.oauthStage, response_http_status: responseStatus };
         if (safe.oauthStage === "profile") {
@@ -396,6 +438,7 @@ function instagramInboxHandler({ sb: sb2, query: query2, env: env2, key: key2, d
       if (status === 429) return json({ error: "Meta \uC694\uCCAD \uD55C\uB3C4\uC5D0 \uB3C4\uB2EC\uD588\uC2B5\uB2C8\uB2E4. \uC7A0\uC2DC \uD6C4 \uC9C1\uC811 \uB2E4\uC2DC \uD655\uC778\uD558\uC138\uC694." }, 429);
       if (status === 401 || status === 403) return json({ error: "Meta \uACC4\uC815 \uC5F0\uACB0 \uB610\uB294 \uBA54\uC2DC\uC9C0 \uAD8C\uD55C\uC744 \uD655\uC778\uD558\uC138\uC694." }, 403);
       if (status >= 500 && status <= 599) return json({ error: "Meta \uC11C\uBE44\uC2A4\uAC00 \uC77C\uC2DC\uC801\uC73C\uB85C \uC751\uB2F5\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. \uC7A0\uC2DC \uD6C4 \uC9C1\uC811 \uB2E4\uC2DC \uD655\uC778\uD558\uC138\uC694." }, 503);
+      if (["messages_changed", "conversation_changed_or_invalid", "invalid_cursor", "invalid_provider_cursor"].includes(safe?.syncReason)) return json({ error: "\uB300\uD654 \uBAA9\uB85D\uC774 \uBC14\uB00C\uC5C8\uAC70\uB098 \uC774\uC5B4\uBCF4\uAE30 \uC815\uBCF4\uB97C \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. Instagram \uC218\uC2E0 \uD655\uC778\uC744 \uCC98\uC74C\uBD80\uD130 \uB2E4\uC2DC \uB20C\uB7EC\uC8FC\uC138\uC694." }, 400);
       return json({ error: "Instagram \uC694\uCCAD\uC744 \uC644\uB8CC\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uACC4\uC815 \uC5F0\uACB0\uACFC \uAD8C\uD55C\uC744 \uD655\uC778\uD558\uC138\uC694." }, 400);
     }
   };
