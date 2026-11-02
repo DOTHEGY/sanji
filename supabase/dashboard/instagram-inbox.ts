@@ -55,7 +55,7 @@ var stages = /* @__PURE__ */ new Set(["state", "short_exchange", "long_exchange"
 function fail(stage, cause) {
   const error = Error("Instagram \uC5F0\uACB0\uC744 \uC644\uB8CC\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
   error.oauthStage = stages.has(stage) ? stage : "state";
-  if (cause?.compatibility === "unsupported_user_id_field") error.compatibility = "unsupported_user_id_field";
+  if (["unsupported_user_id_field", "unsupported_username_field", "unsupported_get_request", "invalid_parameter"].includes(cause?.compatibility)) error.compatibility = cause.compatibility;
   if (Number.isSafeInteger(cause?.status) && cause.status >= 100 && cause.status <= 599) error.status = cause.status;
   for (const key2 of ["httpStatus", "metaCode", "metaSubcode"]) {
     const n = cause?.[key2];
@@ -314,7 +314,11 @@ function instagramInboxHandler({ sb: sb2, query: query2, env: env2, key: key2, d
       const safe = e, status = Number(safe?.status), responseStatus = status === 429 ? 429 : status === 401 || status === 403 ? 403 : status >= 500 && status <= 599 ? 503 : 400;
       if (["state", "short_exchange", "long_exchange", "profile", "account", "save", "capabilities"].includes(safe?.oauthStage)) {
         const record = { event: "instagram_oauth_failure", stage: safe.oauthStage, response_http_status: responseStatus };
-        if (safe.compatibility === "unsupported_user_id_field") record.profile_error_kind = "unsupported_user_id_field";
+        if (safe.oauthStage === "profile") {
+          record.profile_request = "versioned_me_user_id_username";
+          record.profile_version = !env2("META_GRAPH_VERSION") || env2("META_GRAPH_VERSION") === "v24.0" ? "v24_default_or_configured" : "configured_other";
+          if (["unsupported_user_id_field", "unsupported_username_field", "unsupported_get_request", "invalid_parameter"].includes(safe.compatibility)) record.profile_error_kind = safe.compatibility;
+        }
         for (const [key3, name] of [["httpStatus", "http_status"], ["metaCode", "meta_code"], ["metaSubcode", "meta_subcode"]]) if (Number.isSafeInteger(safe[key3]) && safe[key3] >= 0 && safe[key3] <= 2147483647) record[name] = safe[key3];
         console.error(JSON.stringify(record));
       }
@@ -328,8 +332,14 @@ function instagramInboxHandler({ sb: sb2, query: query2, env: env2, key: key2, d
 
 // supabase/functions/instagram-inbox/meta-compatibility.ts
 function metaCompatibility(data) {
-  const error = data?.error;
-  return error?.code === 100 && typeof error?.message === "string" && /^\s*(?:\(#100\)\s*)?tried accessing nonexisting field\s*\(user_id\)\s+on node type\b/i.test(error.message.slice(0, 300)) ? "unsupported_user_id_field" : null;
+  const e = data?.error;
+  if (e?.code !== 100 || typeof e?.message !== "string") return null;
+  const s = e.message.slice(0, 300);
+  if (/^\s*(?:\(#100\)\s*)?tried accessing nonexisting field\s*\(user_id\)\s+on node type\b/i.test(s)) return "unsupported_user_id_field";
+  if (/^\s*(?:\(#100\)\s*)?tried accessing nonexisting field\s*\(username\)\s+on node type\b/i.test(s)) return "unsupported_username_field";
+  if (/^\s*(?:\(#100\)\s*)?unsupported get request\b/i.test(s)) return "unsupported_get_request";
+  if (/^\s*(?:\(#100\)\s*)?invalid (?:parameter|argument)\b/i.test(s)) return "invalid_parameter";
+  return null;
 }
 
 // supabase/functions/instagram-inbox/index.ts
