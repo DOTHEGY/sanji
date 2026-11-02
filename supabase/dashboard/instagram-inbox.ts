@@ -12,24 +12,15 @@ function instagramTokenResponse(response, requireExpiry = false) {
   return token;
 }
 
-// supabase/functions/_shared/instagram-session.ts
+// supabase/functions/instagram-inbox/session.ts
 function instagramPermissions(value) {
   return Array.isArray(value) ? value.map(String) : String(value || "").split(",").map((s) => s.trim()).filter(Boolean);
 }
 async function instagramProfile(token, request, version) {
-  const paths = [version + "/me", "me", .../^\d+$/.test(String(token.user_id || token.id || "")) ? [version + "/" + (token.user_id || token.id)] : [], ...version !== "v24.0" ? ["v24.0/me"] : []];
-  let error;
-  for (const path of paths) {
-    try {
-      const profile = await request("https://graph.instagram.com/" + path + "?" + new URLSearchParams({ fields: "user_id,username", access_token: token.access_token }), { method: "GET" }, "Instagram \uACC4\uC815 \uC870\uD68C");
-      if (!/^\d+$/.test(String(profile.user_id || profile.id || "")) || !profile.username) throw Error("Instagram \uACC4\uC815 ID\xB7\uC774\uB984\uC744 \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
-      return { ...profile, id: String(profile.user_id || profile.id) };
-    } catch (e) {
-      error = e;
-      if (!/Unsupported request|Unsupported get request|Unknown path|nonexisting field/i.test(String(e?.message || ""))) throw e;
-    }
-  }
-  throw error;
+  const response = await request("https://graph.instagram.com/" + version + "/me?" + new URLSearchParams({ fields: "user_id,username", access_token: token.access_token }), { method: "GET" }, "Instagram \uACC4\uC815 \uC870\uD68C");
+  const profile = Array.isArray(response?.data) && response.data.length === 1 ? response.data[0] : response;
+  if (!/^\d+$/.test(String(profile?.user_id || "")) || !profile?.username) throw Error("Instagram \uACC4\uC815 ID\xB7\uC774\uB984\uC744 \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+  return { ...profile, id: String(profile.user_id) };
 }
 async function resolveInstagramSession(response, request, appSecret, version, time = Date.now()) {
   const token = instagramTokenResponse(response);
@@ -64,6 +55,7 @@ var stages = /* @__PURE__ */ new Set(["state", "short_exchange", "long_exchange"
 function fail(stage, cause) {
   const error = Error("Instagram \uC5F0\uACB0\uC744 \uC644\uB8CC\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
   error.oauthStage = stages.has(stage) ? stage : "state";
+  if (cause?.compatibility === "unsupported_user_id_field") error.compatibility = "unsupported_user_id_field";
   if (Number.isSafeInteger(cause?.status) && cause.status >= 100 && cause.status <= 599) error.status = cause.status;
   for (const key2 of ["httpStatus", "metaCode", "metaSubcode"]) {
     const n = cause?.[key2];
@@ -322,6 +314,7 @@ function instagramInboxHandler({ sb: sb2, query: query2, env: env2, key: key2, d
       const safe = e, status = Number(safe?.status), responseStatus = status === 429 ? 429 : status === 401 || status === 403 ? 403 : status >= 500 && status <= 599 ? 503 : 400;
       if (["state", "short_exchange", "long_exchange", "profile", "account", "save", "capabilities"].includes(safe?.oauthStage)) {
         const record = { event: "instagram_oauth_failure", stage: safe.oauthStage, response_http_status: responseStatus };
+        if (safe.compatibility === "unsupported_user_id_field") record.profile_error_kind = "unsupported_user_id_field";
         for (const [key3, name] of [["httpStatus", "http_status"], ["metaCode", "meta_code"], ["metaSubcode", "meta_subcode"]]) if (Number.isSafeInteger(safe[key3]) && safe[key3] >= 0 && safe[key3] <= 2147483647) record[name] = safe[key3];
         console.error(JSON.stringify(record));
       }
@@ -331,6 +324,12 @@ function instagramInboxHandler({ sb: sb2, query: query2, env: env2, key: key2, d
       return json({ error: "Instagram \uC694\uCCAD\uC744 \uC644\uB8CC\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uACC4\uC815 \uC5F0\uACB0\uACFC \uAD8C\uD55C\uC744 \uD655\uC778\uD558\uC138\uC694." }, 400);
     }
   };
+}
+
+// supabase/functions/instagram-inbox/meta-compatibility.ts
+function metaCompatibility(data) {
+  const error = data?.error;
+  return error?.code === 100 && typeof error?.message === "string" && /^\s*(?:\(#100\)\s*)?tried accessing nonexisting field\s*\(user_id\)\s+on node type\b/i.test(error.message.slice(0, 300)) ? "unsupported_user_id_field" : null;
 }
 
 // supabase/functions/instagram-inbox/index.ts
@@ -369,6 +368,8 @@ async function remote(url, options = {}) {
     failure.httpStatus = response.status;
     try {
       const data = await response.json();
+      const compatibility = metaCompatibility(data);
+      if (compatibility) failure.compatibility = compatibility;
       for (const [source, target2] of [["code", "metaCode"], ["error_subcode", "metaSubcode"]]) {
         const n = data?.error?.[source] ?? data?.[source];
         if (Number.isSafeInteger(n) && n >= 0 && n <= 2147483647) failure[target2] = n;
