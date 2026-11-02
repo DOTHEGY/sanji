@@ -55,7 +55,7 @@ var stages = /* @__PURE__ */ new Set(["state", "short_exchange", "long_exchange"
 function fail(stage, cause) {
   const error = Error("Instagram \uC5F0\uACB0\uC744 \uC644\uB8CC\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
   error.oauthStage = stages.has(stage) ? stage : "state";
-  if (["unsupported_user_id_field", "unsupported_username_field", "unsupported_get_request", "invalid_parameter", "invalid_access_token", "invalid_client_secret", "invalid_grant_type"].includes(cause?.compatibility)) error.compatibility = cause.compatibility;
+  if (["unsupported_user_id_field", "unsupported_username_field", "unsupported_get_request", "invalid_parameter", "invalid_access_token", "missing_access_token", "invalid_client_secret", "missing_client_secret", "invalid_grant_type", "unsupported_get_method"].includes(cause?.compatibility)) error.compatibility = cause.compatibility;
   if (Number.isSafeInteger(cause?.status) && cause.status >= 100 && cause.status <= 599) error.status = cause.status;
   for (const key2 of ["httpStatus", "metaCode", "metaSubcode"]) {
     const n = cause?.[key2];
@@ -105,7 +105,8 @@ function creatorInstagramOauth({ sb: sb2, query: query2, env: env2, key: key2, d
     });
     let longFailure = null, longAttempted = false;
     const sessionRemote = async (address, options, label) => {
-      const stage = new URL(address).pathname === "/access_token" ? "long_exchange" : "profile";
+      const requestUrl = new URL(address), stage = requestUrl.pathname === "/access_token" ? "long_exchange" : "profile";
+      const longRequestMeta = stage === "long_exchange" ? { method: options?.method === "GET" ? "GET" : "other", host: requestUrl.hostname === "graph.instagram.com" ? "graph_instagram" : "other", grant_present: !!requestUrl.searchParams.get("grant_type"), secret_present: !!requestUrl.searchParams.get("client_secret"), token_present: !!requestUrl.searchParams.get("access_token") } : null;
       if (stage === "long_exchange") longAttempted = true;
       try {
         const result = await remote2(address, options, label);
@@ -124,6 +125,7 @@ function creatorInstagramOauth({ sb: sb2, query: query2, env: env2, key: key2, d
         const safe2 = fail(stage, e);
         if (stage === "long_exchange") {
           safe2.failureKind = e?.failureKind === "invalid_response" ? "invalid_response" : "provider_or_network_failure";
+          safe2.longRequestMeta = longRequestMeta;
           longFailure = safe2;
         } else if (longAttempted) {
           safe2.profileTokenMode = longFailure ? "short" : "long";
@@ -366,14 +368,28 @@ function instagramInboxHandler({ sb: sb2, query: query2, env: env2, key: key2, d
           const previous = safe.previousLongFailure;
           if (previous && ["invalid_response", "provider_or_network_failure"].includes(previous.failureKind)) {
             record.long_exchange_failure_kind = previous.failureKind;
-            if (["invalid_access_token", "invalid_client_secret", "invalid_grant_type", "invalid_parameter"].includes(previous.compatibility)) record.long_exchange_error_kind = previous.compatibility;
+            const request = previous.longRequestMeta;
+            if (request && ["GET", "other"].includes(request.method) && ["graph_instagram", "other"].includes(request.host)) {
+              record.long_exchange_method = request.method;
+              record.long_exchange_host = request.host;
+              for (const k of ["grant_present", "secret_present", "token_present"]) if (typeof request[k] === "boolean") record["long_exchange_" + k] = request[k];
+            }
+            if (["invalid_access_token", "missing_access_token", "invalid_client_secret", "missing_client_secret", "invalid_grant_type", "unsupported_get_method", "invalid_parameter"].includes(previous.compatibility)) record.long_exchange_error_kind = previous.compatibility;
             for (const [key3, name] of [["httpStatus", "long_exchange_http_status"], ["metaCode", "long_exchange_meta_code"], ["metaSubcode", "long_exchange_meta_subcode"]]) if (Number.isSafeInteger(previous[key3]) && previous[key3] >= 0 && previous[key3] <= 2147483647) record[name] = previous[key3];
           }
           record.profile_request = "versioned_me_user_id_username";
           record.profile_version = !env2("META_GRAPH_VERSION") || env2("META_GRAPH_VERSION") === "v24.0" ? "v24_default_or_configured" : "configured_other";
           if (["unsupported_user_id_field", "unsupported_username_field", "unsupported_get_request", "invalid_parameter"].includes(safe.compatibility)) record.profile_error_kind = safe.compatibility;
         }
-        if (safe.oauthStage === "long_exchange" && ["invalid_access_token", "invalid_client_secret", "invalid_grant_type", "invalid_parameter"].includes(safe.compatibility)) record.long_exchange_error_kind = safe.compatibility;
+        if (safe.oauthStage === "long_exchange") {
+          const request = safe.longRequestMeta;
+          if (request && ["GET", "other"].includes(request.method) && ["graph_instagram", "other"].includes(request.host)) {
+            record.long_exchange_method = request.method;
+            record.long_exchange_host = request.host;
+            for (const k of ["grant_present", "secret_present", "token_present"]) if (typeof request[k] === "boolean") record["long_exchange_" + k] = request[k];
+          }
+        }
+        if (safe.oauthStage === "long_exchange" && ["invalid_access_token", "missing_access_token", "invalid_client_secret", "missing_client_secret", "invalid_grant_type", "unsupported_get_method", "invalid_parameter"].includes(safe.compatibility)) record.long_exchange_error_kind = safe.compatibility;
         for (const [key3, name] of [["httpStatus", "http_status"], ["metaCode", "meta_code"], ["metaSubcode", "meta_subcode"]]) if (Number.isSafeInteger(safe[key3]) && safe[key3] >= 0 && safe[key3] <= 2147483647) record[name] = safe[key3];
         console.error(JSON.stringify(record));
       }
@@ -394,8 +410,11 @@ function metaCompatibility(data) {
   if (/^\s*(?:\(#100\)\s*)?tried accessing nonexisting field\s*\(user_id\)\s+on node type\b/i.test(s)) return "unsupported_user_id_field";
   if (/^\s*(?:\(#100\)\s*)?tried accessing nonexisting field\s*\(username\)\s+on node type\b/i.test(s)) return "unsupported_username_field";
   if (/^\s*(?:\(#100\)\s*)?unsupported get request\b/i.test(s)) return "unsupported_get_request";
-  if (/^\s*(?:\(#100\)\s*)?invalid (?:oauth )?access token\b/i.test(s) || /^\s*(?:\(#100\)\s*)?error validating access token\b/i.test(s)) return "invalid_access_token";
-  if (/^\s*(?:\(#100\)\s*)?invalid client secret\b/i.test(s)) return "invalid_client_secret";
+  if (/^\s*(?:\(#100\)\s*)?(?:unsupported (?:request )?method\s*:?\s*get|unsupported request\s*-\s*method type\s*:\s*get)\b/i.test(s)) return "unsupported_get_method";
+  if (/^\s*(?:\(#100\)\s*)?invalid (?:oauth )?access[_ ]token\b/i.test(s) || /^\s*(?:\(#100\)\s*)?error validating access token\b/i.test(s)) return "invalid_access_token";
+  if (/^\s*(?:\(#100\)\s*)?(?:missing (?:required )?access[_ ]token|access[_ ]token (?:is )?required)\b/i.test(s)) return "missing_access_token";
+  if (/^\s*(?:\(#100\)\s*)?invalid client[_ ]secret\b/i.test(s)) return "invalid_client_secret";
+  if (/^\s*(?:\(#100\)\s*)?(?:missing (?:required )?client[_ ]secret|client[_ ]secret (?:is )?required)\b/i.test(s)) return "missing_client_secret";
   if (/^\s*(?:\(#100\)\s*)?invalid grant[_ ]type\b/i.test(s)) return "invalid_grant_type";
   if (/^\s*(?:\(#100\)\s*)?invalid (?:parameter|argument)\b/i.test(s)) return "invalid_parameter";
   return null;
