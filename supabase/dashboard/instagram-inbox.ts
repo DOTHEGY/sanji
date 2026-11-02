@@ -227,7 +227,9 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
       const c = conversations.data[0];
       if (!c) {
         if (offset || conversations?.paging?.next) throw Error("\uD398\uC774\uC9C0\uAC00 \uBCC0\uACBD\uB418\uC5B4 \uB2E4\uC2DC \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4");
-        return { inserted: 0, nextCursor: null, partialMessages: false };
+        const progress2 = { inputCursorKind: cursorKind, inputResumeOffset: offset, nextCursorKind: "none", hasMore: false, cursorStalled: false, detailsChecked: 0, detailsSkipped: 0, inserted: 0 };
+        console.info(JSON.stringify({ event: "instagram_sync_progress", ...progress2 }));
+        return { inserted: 0, nextCursor: null, partialMessages: false, progress: progress2 };
       }
       if (typeof c.id !== "string" || !c.id || c.id.length > 500 || threadId && threadId !== c.id) throw Error("\uB300\uD654\uAC00 \uBCC0\uACBD\uB418\uC5B4 \uB2E4\uC2DC \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4");
       stage = "thread";
@@ -237,7 +239,7 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
       if (!Array.isArray(messages)) throw Error("\uBA54\uC2DC\uC9C0 \uBAA9\uB85D \uD655\uC778 \uC2E4\uD328");
       reason = "messages_changed";
       if (prefix.some((id, i) => messages[i]?.id !== id)) throw Error("\uBA54\uC2DC\uC9C0\uAC00 \uBCC0\uACBD\uB418\uC5B4 \uCC98\uC74C\uBD80\uD130 \uB2E4\uC2DC \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4");
-      let inserted = 0, partialMessages = messages.length > 20 || !!thread.messages.paging?.next;
+      let inserted = 0, detailsChecked = 0, detailsSkipped = 0, partialMessages = messages.length > 20 || !!thread.messages.paging?.next;
       const end = Math.min(messages.length, 20, offset + 5);
       for (let i = offset; i < end; i++) {
         stage = "detail";
@@ -247,10 +249,15 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
         reason = "provider_request";
         const detail = await get(m.id, new URLSearchParams({ fields: "id,created_time,from,to,message" }));
         reason = "invalid_provider_response";
+        detailsChecked++;
         const peer = String(detail.from?.id || ""), at2 = Date.parse(detail.created_time), body = typeof detail.message === "string" ? detail.message : "";
-        if (detail.id !== m.id || !/^\d+$/.test(peer) || peer === a.id || !detail.to?.data?.some((x) => String(x.id) === a.id) || !Number.isFinite(at2) || at2 > Date.now() + 3e5) continue;
+        if (detail.id !== m.id || !/^\d+$/.test(peer) || peer === a.id || !detail.to?.data?.some((x) => String(x.id) === a.id) || !Number.isFinite(at2) || at2 > Date.now() + 3e5) {
+          detailsSkipped++;
+          continue;
+        }
         if (at2 < Date.now() - 90 * 864e5 || body.length > 1e4) {
           partialMessages = true;
+          detailsSkipped++;
           continue;
         }
         if (!body.trim()) {
@@ -275,7 +282,11 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
         if (!validCursor(after)) throw Error("\uB2E4\uC74C \uD398\uC774\uC9C0 \uD655\uC778 \uC2E4\uD328");
         nextCursor = after;
       }
-      return { inserted, nextCursor, partialMessages };
+      const cursorStalled = !!cursor && nextCursor === cursor;
+      if (cursorStalled) nextCursor = null;
+      const nextCursorKind = nextCursor ? nextCursor.startsWith("r1.") ? "resume" : "provider" : "none", progress = { inputCursorKind: cursorKind, inputResumeOffset: offset, nextCursorKind, hasMore: !!nextCursor, cursorStalled, detailsChecked, detailsSkipped, inserted };
+      console.info(JSON.stringify({ event: "instagram_sync_progress", ...progress }));
+      return { inserted, nextCursor, partialMessages, progress };
     } catch (e) {
       const error = Error("Instagram \uC218\uC2E0 \uC870\uD68C\uB97C \uC644\uB8CC\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
       error.syncStage = stage;
