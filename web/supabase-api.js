@@ -4,6 +4,7 @@ import {
   supabaseUrl,
   supabaseKey,
   edgeFunctionUrl,
+  dotSnapshotFunctionUrl,
 } from "./supabase-config.js";
 export const client = createClient(supabaseUrl, supabaseKey, {
   auth: {
@@ -61,9 +62,10 @@ async function member() {
 }
 async function edge(path, method, body) {
   const session = await member();
+  const functionUrl = path === "/dot-snapshot" || path.startsWith("/dot-snapshot/") ? dotSnapshotFunctionUrl : edgeFunctionUrl;
   let response;
   try {
-    response = await fetch(edgeFunctionUrl + path, {
+    response = await fetch(functionUrl + path, {
       method,
       headers: {
         apikey: supabaseKey,
@@ -73,7 +75,8 @@ async function edge(path, method, body) {
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
   } catch {
-    const diagnosis = await probeEdge(edgeFunctionUrl);
+    if (functionUrl === dotSnapshotFunctionUrl) throw error("원장 서버에 연결할 수 없습니다.", 503);
+    const diagnosis = await probeEdge(functionUrl);
     throw error(
       diagnosis.kind === "ready"
         ? "서버 상태 확인은 정상이나 인증 요청의 CORS 연결이 실패했습니다. APP_ORIGIN과 함수 로그를 확인하세요."
@@ -87,7 +90,7 @@ async function edge(path, method, body) {
   if (!response.ok) {
     if (data.code === "NOT_FOUND" || data.code === "BOOT_ERROR")
       throw error(
-        classifyEdgeResponse(response.status, data, edgeFunctionUrl).message,
+        classifyEdgeResponse(response.status, data, functionUrl).message,
         response.status,
       );
     const e = error(
