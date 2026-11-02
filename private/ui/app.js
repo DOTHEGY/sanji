@@ -184,6 +184,17 @@ function render() {
     "워크스페이스 / " + (routes[key]?.[1] || "대시보드");
   (pages[key] || dashboard)();
 }
+function dashboardExistingSummary(state,discovery,now){
+ const day=v=>{const d=new Date(v);return Number.isFinite(d.getTime())?new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(d):null;};
+ const today=day(now),yesterday=day(new Date(new Date(now).getTime()-86400000)),candidates=Array.isArray(state?.candidates)?state.candidates:[],types=new Map(candidates.map(c=>[c.id,c.kind])),brand=id=>['브랜드','제조사','공식 유통사'].includes(types.get(id));
+ const brandCandidates=candidates.filter(c=>brand(c.id)),addresses=new Set(brandCandidates.map(c=>String(c.contact?.email||'').trim().toLowerCase()).filter(x=>/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x))),outbox=(Array.isArray(state?.outbox)?state.outbox:[]).filter(o=>o.channel==='email'&&o.status==='accepted'&&brand(o.target)&&o.data?.proposalType!=='creator_product_proposal'),jobs=(Array.isArray(state?.jobs)?state.jobs:[]).filter(j=>brand(j.target)&&!j.creatorReviewId&&Array.isArray(j.emails)&&j.emails.some(x=>String(x||'').trim())),history=Array.isArray(discovery?.history)?discovery.history:[],todayRecord=history.find(x=>x.day===today)||null;
+ const acceptedDays=new Map(),bounced=new Set(),byId=new Map(outbox.map(o=>[o.id,o]));for(const t of Array.isArray(state?.threads)?state.threads:[]){if(!brand(t.target)||t.channel!=='email')continue;for(const m of Array.isArray(t.messages)?t.messages:[]){const d=day(m.at);if(!d)continue;if(m.out===true&&m.outboxId&&byId.get(m.outboxId)?.target===t.target){const prior=acceptedDays.get(m.outboxId);acceptedDays.set(m.outboxId,prior===undefined?d:prior===d?d:null);}if(m.out===false&&d===today)for(const f of Array.isArray(m.bounceFailures)?m.bounceFailures:[])if(f.kind==='permanent'&&f.source==='delivery_status'&&/^5\./.test(String(f.status||''))&&f.email)bounced.add(String(f.email).toLowerCase());}}
+ return {today,creatorRecords:candidates.filter(c=>c.kind==='크리에이터').length,brandRecords:brandCandidates.length,addressCount:addresses.size,accepted:outbox.length,acceptedToday:[...acceptedDays.values()].filter(d=>d===today).length,acceptedYesterday:[...acceptedDays.values()].filter(d=>d===yesterday).length,bounceAddressesToday:bounced.size,queued:jobs.filter(j=>j.status==='queued').length,review:jobs.filter(j=>['failed','review_pending','outcome_unknown'].includes(j.status)).length,unclassified:(state?.outbox||[]).filter(o=>o.channel==='email'&&o.status==='accepted'&&!brand(o.target)&&types.get(o.target)!=='크리에이터').length,todayRecord,history:history.filter(x=>Number(x.companies)>0||Number(x.emails)>0||Number(x.candidates)>0).slice(0,14)};
+}
+function dashboardExistingView(state,discovery,checkedAt,now){
+ const m=dashboardExistingSummary(state,discovery,now),number=n=>Number.isInteger(n)&&n>=0?String(n.toLocaleString('ko-KR')):'확인 불가',record=m.todayRecord,cell=(label,value,note)=>'<div class="existing-metric"><span>'+esc(label)+'</span><strong>'+esc(number(value))+'</strong><small>'+esc(note)+'</small></div>',historyRows=m.history.map(x=>'<tr><td>'+esc(x.day)+'</td><td>'+esc(number(x.candidates))+'</td><td>'+esc(number(x.companies))+'</td><td>'+esc(number(x.emails))+'</td></tr>').join('');
+ return '<section class="panel existing-overview"><div class="panel-head"><div><h2>운영 기록</h2><p class="fine">한국시간 · 현재 불러온 자료 기준</p></div><a href="#brands">브랜드 기록 확인 ↗</a></div><div class="existing-grid"><section><h3>크리에이터 수집</h3><p>불러온 크리에이터 후보 기록 <strong>'+esc(number(m.creatorRecords))+'</strong> · 전체 저장량 아님</p><p>dot 확인 횟수·고유 인원·중복·실패·잔여 및 전체 저장량은 원장과 연결되지 않아 확인 불가입니다.</p><a href="#creators">크리에이터 목록 ↗</a></section><section><h3>브랜드 메일</h3><div class="existing-metrics">'+cell('오늘 새 후보 기록',record?.candidates??null,'브랜드 발굴 기록 기준')+cell('오늘 이메일 확보 후보',record?.companies??null,'회사 고유 수 아님')+cell('오늘 새 이메일 주소',record?.emails??null,'중복 제거한 주소')+cell('오늘 접수 관찰',m.acceptedToday,'발송 ID·시각 일치 기록만 · 일부일 수 있음')+cell('어제 접수 관찰',m.acceptedYesterday,'발송 ID·시각 일치 기록만 · 일부일 수 있음')+cell('오늘 영구 반송 주소 관찰',m.bounceAddressesToday,'주소 단위 · 일부일 수 있음')+cell('불러온 예약 대기',m.queued,'최근 최대 200건 중 브랜드만')+'</div><details><summary>불러온 기록 상세</summary><div class="existing-metrics">'+cell('불러온 브랜드 후보',m.brandRecords,'후보 기록 · 전체 회사 수 아님')+cell('불러온 후보 이메일',m.addressCount,'중복 제거 · 유효성 별도')+cell('불러온 Gmail 접수',m.accepted,'최근 최대 500건 중 브랜드만')+cell('불러온 실패·확인 필요',m.review,'예약 처리 기록 · 반송과 별개')+'</div></details><p class="fine">'+(checkedAt?'브랜드 발굴 기록 마지막 조회 '+esc(localTime(checkedAt)):'오늘 발굴 수치는 브랜드 화면을 연 뒤 확인할 수 있습니다.')+' · 후보나 발송 대상이 누락될 수 있어 전체 합계가 아닙니다. Gmail 접수는 도착 성공이 아닙니다.</p>'+(m.unclassified?'<p class="notice">대상 종류가 확인되지 않은 접수 기록은 브랜드 수에서 제외했습니다.</p>':'')+'<p class="fine">접수 관찰은 발송 기록과 대화 메시지 ID가 일치한 건만 포함합니다. 수신함 도착과 개별 발송건에 직접 귀속된 반송 여부는 확인할 수 없습니다.</p><details><summary>브랜드 날짜별 발굴 기록</summary><p class="fine">최초 이메일 발견일 기준 · 기록이 없는 날짜는 0으로 채우지 않습니다.</p><div class="table-scroll"><table><thead><tr><th>날짜</th><th>신규 후보 기록</th><th>이메일 확보 후보</th><th>주소 수</th></tr></thead><tbody>'+(historyRows||'<tr><td colspan="4">불러온 발굴 기록이 없습니다.</td></tr>')+'</tbody></table></div></details></section></div></section>';
+}
 function dashboard() {
   const sent = data.outbox.filter((o) => o.status === "accepted"),
     sentTargets = new Set(sent.map((o) => o.target)),
@@ -200,6 +211,7 @@ function dashboard() {
         )
         .map((t) => t.target),
     );
+  const cache=discoverySnapshotOwner===me?discoveryView:null,cacheAt=cache?discoverySnapshotAt:null;
   const rate = (n) =>
     sentTargets.size ? Math.round((n / sentTargets.size) * 100) + "%" : "—";
   $("#app").innerHTML =
@@ -208,6 +220,7 @@ function dashboard() {
       "브랜드 영업과 크리에이터 협업의 진행 상황을 확인하세요.",
       '<a class="text-link" href="#brands">브랜드 이메일 열기 ↗</a>',
     ) +
+    dashboardExistingView(data,cache,cacheAt,new Date()) +
     `<p class="notice">dot 수집 원장 미연결 · 확인 횟수, 고유 인원, 실패와 일일 잔여량은 아직 확인할 수 없습니다.</p><div class="dashboard-shortcuts"><a href="#brands"><strong>브랜드 영업</strong><small>업체 발굴 · 제안 메일 · 발송 관리</small></a><a href="#creators"><strong>크리에이터 협업</strong><small>크리에이터 목록 · 상품 매칭</small></a><a href="#inbox"><strong>회신 확인</strong><small>통합 대화함 · 답장 작성</small></a></div><div class="stats"><div class="stat"><label>발굴 후보</label><strong>${data.candidates.length}</strong><small>검증된 사업용 연락처 ${data.candidates.filter((c) => c.contact.verified).length}</small></div><div class="stat"><label>이메일·API 접수</label><strong>${sent.length}</strong><small>받은편지함 도착·열람은 미확인</small></div><div class="stat"><label>사람의 회신율</label><strong>${rate(humanTargets.size)}</strong><small>회신 대상 ${humanTargets.size} / 접수 대상 ${sentTargets.size} · 자동 응답 제외 · 문자·전화 수동 회신 포함</small></div><div class="stat"><label>확보한 상품 딜</label><strong>${data.deals.filter((d) => d.state === "확정").length}</strong><small>상품 조건이 확정된 카드 수</small></div></div><div class="grid"><div class="panel"><div class="panel-head"><h2>지금 해야 할 일</h2><a href="#inbox">대화함 ↗</a></div>${
       data.candidates
         .filter((c) => c.next)
@@ -625,7 +638,7 @@ async function settingsPage() {
 function connectionStep(label,done){return '<span class="connection-step '+(done?"done":"")+'">'+(done?"✓":"○")+' '+esc(label)+'</span>';}
 function sourceSummary(r){const s=r.engine?.sourceState||r.settings.source_state||{};return '<span>최근 목록 갱신 '+esc(localTime(s.checked))+'</span><span>신규 후보 '+Number(s.added||0)+'곳</span>'+(s.error?'<details><summary>수집 제한·오류</summary><p>'+esc(s.error)+'</p></details>':"");}
 
-let discoveryView = null, discoveryOnlyEmails = true, discoveryPollGeneration=0, discoveryPollInFlight=false;
+let discoveryView = null, discoverySnapshotAt = null, discoverySnapshotOwner = null, discoveryRequestGeneration = 0, discoveryOnlyEmails = true, discoveryPollGeneration=0, discoveryPollInFlight=false;
 let mailDayFilter="all";
 const inlineMailState=new Map();let inlineMailBusy=false;
 let mailOpenReport = [], mailOpenReportAvailable=false, mailOpenReportChecked=0;
@@ -693,10 +706,11 @@ function sentMailCards() {
   }).join("")+manualRows.map(t=>'<article class="panel sent-card"><h3>'+esc(targetName(t.target))+'</h3>'+tag(t.channel==="phone"?"전화 회신 · 수동 기록":t.channel==="sms"?"문자 회신 · 수동 기록":"운영자 보고 · 수동 기록")+'<p>'+esc(t.messages.at(-1)?.text||"")+'</p>'+button('기록 보기','mail-open-thread',t.id)+'</article>').join('')+'</div>'+(rows.length||manualRows.length?"":'<div class="panel empty"><h3>조건에 해당하는 메일이 없습니다</h3><p>실제 기록이 있는 메일만 표시합니다. 감지 없음은 미열람·수신 실패를 의미하지 않습니다.</p></div>');
 }
 async function discoveryPage() {
+  const discoveryRequestOwner=me,discoveryRequest=++discoveryRequestGeneration;
   clearTimeout(discoveryRefresh);
   $("#app").innerHTML=head("브랜드 이메일","업체별로 준비된 제안을 확인하고, 승인한 메일만 보내세요.")+'<div class="panel">메일 목록을 불러오는 중…</div>';
   try {
-    const r=await api("/discovery");const auto=await api("/brand-auto-schedule").catch(()=>({enabled:false,unavailable:true}));discoveryView=r;window.discoveryView=r;
+    const r=await api("/discovery");const auto=await api("/brand-auto-schedule").catch(()=>({enabled:false,unavailable:true}));if(me!==discoveryRequestOwner||discoveryRequest!==discoveryRequestGeneration||!['brands','discovery'].includes(location.hash.slice(1)))return;discoveryView=r;discoverySnapshotAt=new Date().toISOString();discoverySnapshotOwner=discoveryRequestOwner;window.discoveryView=r;
     if(brandTab==="opened"&&Date.now()-mailOpenReportChecked>60000){
       mailOpenReportChecked=Date.now();try{const report=await api("/email-tracking/report?includeAutomated=false");mailOpenReport=report.rows||[];mailOpenReportAvailable=true;}catch{mailOpenReport=[];mailOpenReportAvailable=false;}
     }
@@ -708,7 +722,7 @@ async function discoveryPage() {
     '<details class="panel"><summary>전체 예약 이력·취소 · 예약·처리 상태 탭에서 업체별 확인</summary><p id="schedule-live-status" class="fine">예약 상태는 예약·처리 상태 탭에서 자동 확인합니다.</p><div id="inline-schedule-jobs">'+jobTable()+'</div></details><div id="inline-mail-summary" class="notice" role="status" aria-live="polite">'+esc(inlineMailStatus())+'</div><div id="discovery-results">'+(brandMailResults(r))+'</div></div>'+
     '<details class="panel mail-advanced"><summary>수집 현황·운영 설정</summary><form id="brand-auto-settings"><label><input type="checkbox" name="enabled" '+(auto.enabled?'checked':'')+(auto.unavailable?' disabled':'')+'> 신규 검증 브랜드 자동 예약</label>'+(auto.unavailable?'<p class="notice">자동 예약 서버 설정을 확인할 수 없습니다.</p>':'')+'<label>메일 유형 <select name="messageType"><option value="">선택하세요</option><option value="non_marketing" '+(auto.message_type==='non_marketing'?'selected':'')+'>비광고 협업 제안</option><option value="marketing" '+(auto.message_type==='marketing'?'selected':'')+'>광고성 정보</option></select></label><p class="fine">최근 자동 예약 상태: '+esc(r.engine?.autoReservation?.status||'아직 실행 기록 없음')+' · '+esc(r.engine?.autoReservation?.reason||'')+'</p><p class="fine">켜진 이후 새로 확보한 검증 대상은 개별 승인 없이 실제 이메일로 예약·발송됩니다. 월~목은 다음 날, 금~일은 월요일 오전 9시(한국시간). 회사당 한 주소로 보내며 기존 예약과 과거 후보는 변경하지 않습니다. 예약 내역에서 취소할 수 있습니다.</p><button type="submit">자동 예약 설정 저장</button></form><div id="discovery-progress">'+discoveryProgress(r)+'</div><div class="actions">'+button("새로고침","discovery-refresh")+button("다음 업체 수집","discovery-run")+button(discoveryOnlyEmails?"메일 미확보 업체도 보기":"이메일 있는 업체만 보기","discovery-filter")+'</div><form id="discovery-settings" class="form-grid">'+field("target","하루 신규 업체 목표",r.settings.target,"number")+field("enabled","자동 수집 켜짐",r.settings.enabled,"checkbox")+field("notifyCompletion","목표 달성 시 관리자 이메일로 완료 알림",r.settings.notify_completion,"checkbox")+'<input name="keywords" type="hidden" value="'+esc(r.settings.keywords.join("\n"))+'"><button type="submit">설정 저장</button></form><details><summary>홈페이지 직접 추가</summary><form id="discovery-seed" class="form-grid">'+field("name","업체명","")+field("url","공개 홈페이지 URL","","url")+'<button type="submit">추가</button></form></details><p class="fine">작업 상태는 열린 화면에서 1분마다 갱신되며, 목록은 직접 새로고침합니다. Google·네이버·Bing·DuckDuckGo의 공개 검색 결과를 순차 확인합니다. 보안문자·차단은 우회하지 않으며, 검색어 회전과 재보충은 하루 64개 검색어 이내로 진행합니다. 유료 검색·AI API는 사용하지 않습니다. Supabase 실제 사용료는 청구 화면에서 확인해야 합니다.</p></details>';
     scheduleDiscoveryRefresh();
-  } catch(e) {if(e.status===404){candidatesPage("brand");return;}$("#app").innerHTML=head("브랜드 이메일","")+'<div class="error">'+esc(e.message)+'</div>';}
+  } catch(e) {if(me!==discoveryRequestOwner||discoveryRequest!==discoveryRequestGeneration||!['brands','discovery'].includes(location.hash.slice(1)))return;if(e.status===404){candidatesPage("brand");return;}$("#app").innerHTML=head("브랜드 이메일","")+'<div class="error">'+esc(e.message)+'</div>';}
 }
 function scheduleDiscoveryRefresh() {
   clearTimeout(discoveryRefresh);
