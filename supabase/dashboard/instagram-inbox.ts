@@ -126,35 +126,62 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
   async function sync(owner, cursor) {
     const a = await account(owner), version = env2("META_GRAPH_VERSION") || "v24.0";
     if (!/^v\d+\.\d+$/.test(version)) throw Error("invalid version");
-    if (cursor !== void 0 && (typeof cursor !== "string" || cursor.includes("://") || !/^[A-Za-z0-9._~:+\/=-]{1,512}$/.test(cursor))) throw Error("\uC798\uBABB\uB41C \uD398\uC774\uC9C0");
-    const get = async (path, fields) => remote2("https://graph.instagram.com/" + version + "/" + (path === "me/conversations" ? path : encodeURIComponent(path)) + "?" + fields.toString(), { headers: { Authorization: "Bearer " + a.token } }, "Instagram \uB300\uD654 \uC870\uD68C");
-    const params = new URLSearchParams({ platform: "instagram", limit: "10" });
-    if (cursor) params.set("after", cursor);
-    const conversations = await get("me/conversations", params);
-    if (!Array.isArray(conversations?.data) || conversations.data.length > 10) throw Error("\uB300\uD654 \uBAA9\uB85D \uD655\uC778 \uC2E4\uD328");
-    let inserted = 0, partialMessages = false;
-    for (const c of conversations.data.slice(0, 10)) {
-      if (typeof c.id !== "string" || !c.id || c.id.length > 500) continue;
-      const thread = await get(c.id, new URLSearchParams({ fields: "messages" }));
-      if (!Array.isArray(thread?.messages?.data)) throw Error("\uBA54\uC2DC\uC9C0 \uBAA9\uB85D \uD655\uC778 \uC2E4\uD328");
-      if (thread.messages.data.length > 20 || thread.messages.paging?.next) partialMessages = true;
-      for (const m of thread.messages.data.slice(0, 20)) {
-        if (typeof m.id !== "string" || !m.id || m.id.length > 500) continue;
-        const detail = await get(m.id, new URLSearchParams({ fields: "id,created_time,from,to,message" }));
-        const peer = String(detail.from?.id || ""), at = Date.parse(detail.created_time), body = typeof detail.message === "string" ? detail.message : "";
-        if (detail.id !== m.id || !/^\d+$/.test(peer) || peer === a.id || !detail.to?.data?.some((x) => String(x.id) === a.id) || !Number.isFinite(at) || at > Date.now() + 3e5) continue;
-        if (at < Date.now() - 90 * 864e5 || body.length > 1e4) {
-          partialMessages = true;
-          continue;
-        }
-        const safeBody = body.trim() ? body : "\uBCF8\uBB38 \uC5C6\uC74C \uB610\uB294 \uC870\uD68C \uBD88\uAC00 \xB7 Instagram\uC5D0\uC11C \uD655\uC778 \uD544\uC694";
-        if (await capture(owner, { accountId: a.id, peerId: peer, messageId: detail.id, text: safeBody, receivedAt: new Date(at).toISOString() })) inserted++;
+    const validCursor = (x) => typeof x === "string" && !x.includes("://") && /^[A-Za-z0-9._~:+\/=-]{1,512}$/.test(x);
+    let page, offset = 0, threadId, prefix = [];
+    if (cursor?.startsWith("r1.")) {
+      try {
+        const data = JSON.parse(atob(cursor.slice(3).replace(/-/g, "+").replace(/_/g, "/")));
+        if (data.page !== null && !validCursor(data.page) || typeof data.thread !== "string" || !data.thread || data.thread.length > 500 || !Number.isSafeInteger(data.offset) || data.offset < 1 || data.offset > 19 || !Array.isArray(data.prefix) || data.prefix.length !== data.offset || data.prefix.some((x) => typeof x !== "string" || !x || x.length > 500)) throw Error("invalid");
+        page = data.page || void 0;
+        offset = data.offset;
+        threadId = data.thread;
+        prefix = data.prefix;
+      } catch {
+        throw Error("\uC798\uBABB\uB41C \uC774\uC5B4\uBCF4\uAE30");
       }
+    } else if (cursor !== void 0) {
+      if (!validCursor(cursor)) throw Error("\uC798\uBABB\uB41C \uD398\uC774\uC9C0");
+      page = cursor;
     }
-    const after = conversations?.paging?.next ? conversations?.paging?.cursors?.after : null;
-    if (after != null && (typeof after !== "string" || after.includes("://") || !/^[A-Za-z0-9._~:+\/=-]{1,512}$/.test(after))) throw Error("\uB2E4\uC74C \uD398\uC774\uC9C0 \uD655\uC778 \uC2E4\uD328");
-    if (conversations?.paging?.next && !after) throw Error("\uB2E4\uC74C \uD398\uC774\uC9C0 \uD655\uC778 \uC2E4\uD328");
-    return { inserted, nextCursor: after || null, partialMessages };
+    const get = async (path, fields) => remote2("https://graph.instagram.com/" + version + "/" + (path === "me/conversations" ? path : encodeURIComponent(path)) + "?" + fields.toString(), { headers: { Authorization: "Bearer " + a.token }, signal: AbortSignal.timeout(3500) }, "Instagram \uB300\uD654 \uC870\uD68C");
+    const params = new URLSearchParams({ platform: "instagram", limit: "1" });
+    if (page) params.set("after", page);
+    const conversations = await get("me/conversations", params);
+    if (!Array.isArray(conversations?.data) || conversations.data.length > 1) throw Error("\uB300\uD654 \uBAA9\uB85D \uD655\uC778 \uC2E4\uD328");
+    const c = conversations.data[0];
+    if (!c) {
+      if (offset || conversations?.paging?.next) throw Error("\uD398\uC774\uC9C0\uAC00 \uBCC0\uACBD\uB418\uC5B4 \uB2E4\uC2DC \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4");
+      return { inserted: 0, nextCursor: null, partialMessages: false };
+    }
+    if (typeof c.id !== "string" || !c.id || c.id.length > 500 || threadId && threadId !== c.id) throw Error("\uB300\uD654\uAC00 \uBCC0\uACBD\uB418\uC5B4 \uB2E4\uC2DC \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4");
+    const thread = await get(c.id, new URLSearchParams({ fields: "messages" })), messages = thread?.messages?.data;
+    if (!Array.isArray(messages)) throw Error("\uBA54\uC2DC\uC9C0 \uBAA9\uB85D \uD655\uC778 \uC2E4\uD328");
+    if (prefix.some((id, i) => messages[i]?.id !== id)) throw Error("\uBA54\uC2DC\uC9C0\uAC00 \uBCC0\uACBD\uB418\uC5B4 \uCC98\uC74C\uBD80\uD130 \uB2E4\uC2DC \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4");
+    let inserted = 0, partialMessages = messages.length > 20 || !!thread.messages.paging?.next;
+    const end = Math.min(messages.length, 20, offset + 5);
+    for (let i = offset; i < end; i++) {
+      const m = messages[i];
+      if (typeof m?.id !== "string" || !m.id || m.id.length > 500) throw Error("\uBA54\uC2DC\uC9C0 \uC2DD\uBCC4\uC790\uB97C \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4");
+      const detail = await get(m.id, new URLSearchParams({ fields: "id,created_time,from,to,message" }));
+      const peer = String(detail.from?.id || ""), at = Date.parse(detail.created_time), body = typeof detail.message === "string" ? detail.message : "";
+      if (detail.id !== m.id || !/^\d+$/.test(peer) || peer === a.id || !detail.to?.data?.some((x) => String(x.id) === a.id) || !Number.isFinite(at) || at > Date.now() + 3e5) continue;
+      if (at < Date.now() - 90 * 864e5 || body.length > 1e4) {
+        partialMessages = true;
+        continue;
+      }
+      if (await capture(owner, { accountId: a.id, peerId: peer, messageId: detail.id, text: body.trim() ? body : "\uBCF8\uBB38 \uC5C6\uC74C \uB610\uB294 \uC870\uD68C \uBD88\uAC00 \xB7 Instagram\uC5D0\uC11C \uD655\uC778 \uD544\uC694", receivedAt: new Date(at).toISOString() })) inserted++;
+    }
+    let nextCursor = null;
+    if (end < Math.min(messages.length, 20)) {
+      const ids = messages.slice(0, end).map((m) => m?.id);
+      if (ids.some((x) => typeof x !== "string" || !x || x.length > 500)) throw Error("\uBA54\uC2DC\uC9C0 \uC2DD\uBCC4\uC790\uB97C \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4");
+      nextCursor = "r1." + btoa(JSON.stringify({ page: page || null, thread: c.id, offset: end, prefix: ids })).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    } else if (conversations?.paging?.next) {
+      const after = conversations?.paging?.cursors?.after;
+      if (!validCursor(after)) throw Error("\uB2E4\uC74C \uD398\uC774\uC9C0 \uD655\uC778 \uC2E4\uD328");
+      nextCursor = after;
+    }
+    return { inserted, nextCursor, partialMessages };
   }
   async function reply(owner, b) {
     if (env2("INSTAGRAM_DIRECT_REPLY_ENABLED") !== "true") throw Error("Instagram \uB2F5\uC7A5 \uBC1C\uC1A1\uC774 \uBE44\uD65C\uC131\uD654\uB418\uC5B4 \uC788\uC2B5\uB2C8\uB2E4.");
@@ -295,7 +322,7 @@ async function connection(owner, provider) {
 async function remote(url, options = {}) {
   const target = new URL(url);
   if (target.protocol !== "https:" || !["graph.instagram.com", "api.instagram.com"].includes(target.hostname) || target.username || target.password) throw Error("invalid provider");
-  const response = await fetch(url, { ...options, redirect: "error", signal: AbortSignal.timeout(2e4) });
+  const response = await fetch(url, { ...options, redirect: "error", signal: options.signal || AbortSignal.timeout(2e4) });
   if (!response.ok) {
     const failure = Error("provider request failed");
     failure.status = response.status;
