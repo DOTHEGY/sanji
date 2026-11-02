@@ -1,4 +1,4 @@
-import {createClient} from 'npm:@supabase/supabase-js@2';
+import {createClient} from 'npm:@supabase/supabase-js@2.118.0';
 import {Buffer} from 'node:buffer';
 import {resolveInstagramSession} from '../_shared/instagram-session.ts';
 import {instagramInboxHandler} from './handler.ts';
