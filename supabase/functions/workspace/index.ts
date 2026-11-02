@@ -1,3 +1,4 @@
+import {operationsDashboard} from '../_shared/operations-dashboard.ts';
 import {creatorInstagramInbox} from '../_shared/creator-instagram-inbox.ts';
 import {templateLibraryService} from '../_shared/template-library.ts';
 import {creatorInstagramOauth} from '../_shared/creator-instagram-oauth.ts';
@@ -184,6 +185,7 @@ const saveManualReply=manualReplyService({sb,query,putRecord,audit});
 const creatorLocal=creatorLocalService({sb,query,audit,encrypt,decrypt,putRecord});
 const creatorServer=creatorServerService({sb,query,encrypt,decrypt,audit,creatorLocal,creatorDiscovery});
 const brandAuto = brandAutoService({sb,query,env,connection,emailTracking,digest,uuid,audit});
+const readOperationsDashboard=operationsDashboard({sb,query});
 const discovery = discoveryService({sb,query,connection,saveConnection,env,audit,putRecord,notifyOwner,autoSchedule:(u:string)=>brandAuto.process(u)});
 async function loadGmailSignature(u:string){
  const c=await gmailToken(u);try{const result=await remote("https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs",{headers:{Authorization:"Bearer "+c.access_token}},"Gmail 기본 서명 조회");return {...selectGmailSignature(result,c.email),checked:now(),needsConsent:false};}
@@ -859,6 +861,7 @@ Deno.serve(async (req: Request) => {
         fail(413, "요청 크기 초과");
       return text ? JSON.parse(text) : {};
     };
+    if(path==="/operations-dashboard"&&req.method==="GET")return json(await readOperationsDashboard(u));
     if(path==="/manual-reply"&&req.method==="POST"){
       try{return json(await saveManualReply(u,await input()));}catch(e){fail(400,String(e.message||"수동 회신 저장 실패"));}
     }

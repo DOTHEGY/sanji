@@ -178,6 +178,7 @@ function render() {
   if (!me) return;
   const rawKey = location.hash.slice(1) || "dashboard";
   const key = rawKey === "discovery" ? "brands" : rawKey;
+  if(key!=="inbox")inboxLifecycle="active";
   $("#nav").innerHTML = navGroups.map(g => `<div class="nav-group${g.bottom?" nav-management":""}"${g.label?` role="group" aria-label="${g.label}"`:""}>${g.label?`<p class="nav-group-label">${g.label}</p>`:""}${g.keys.map(k=>`<a href="#${k}" class="${key===k?"active":""}"${key===k?' aria-current="page"':""}><span aria-hidden="true">${routes[k][0]}</span>${routes[k][1]}</a>`).join("")}</div>`).join("");
   $("#breadcrumb").textContent =
     "워크스페이스 / " + (routes[key]?.[1] || "대시보드");
@@ -204,10 +205,10 @@ function dashboard() {
   $("#app").innerHTML =
     head(
       "대시보드",
-      "브랜드 영업과 크리에이터 협업의 진행 상황을 확인하세요.",
+      "확인된 수집·발송 기록을 한국시간 기준으로 보여줍니다.",
       '<a class="text-link" href="#brands">브랜드 이메일 열기 ↗</a>',
     ) +
-    `<div class="dashboard-shortcuts"><a href="#brands"><strong>브랜드 영업</strong><small>업체 발굴 · 제안 메일 · 발송 관리</small></a><a href="#creators"><strong>크리에이터 협업</strong><small>크리에이터 목록 · 상품 매칭</small></a><a href="#inbox"><strong>회신 확인</strong><small>통합 대화함 · 답장 작성</small></a></div><div class="stats"><div class="stat"><label>발굴 후보</label><strong>${data.candidates.length}</strong><small>검증된 사업용 연락처 ${data.candidates.filter((c) => c.contact.verified).length}</small></div><div class="stat"><label>이메일·API 접수</label><strong>${sent.length}</strong><small>받은편지함 도착·열람은 미확인</small></div><div class="stat"><label>사람의 회신율</label><strong>${rate(humanTargets.size)}</strong><small>회신 대상 ${humanTargets.size} / 접수 대상 ${sentTargets.size} · 자동 응답 제외 · 문자·전화 수동 회신 포함</small></div><div class="stat"><label>확보한 상품 딜</label><strong>${data.deals.filter((d) => d.state === "확정").length}</strong><small>상품 조건이 확정된 카드 수</small></div></div><div class="grid"><div class="panel"><div class="panel-head"><h2>지금 해야 할 일</h2><a href="#inbox">대화함 ↗</a></div>${
+    `<div id="operations-dashboard" aria-live="polite"><section class="panel"><h2>운영 현황</h2><p>기록을 불러오는 중입니다…</p></section></div><div class="dashboard-shortcuts"><a href="#brands"><strong>브랜드 영업</strong><small>업체 발굴 · 제안 메일 · 발송 관리</small></a><a href="#creators"><strong>크리에이터 협업</strong><small>크리에이터 목록 · 상품 매칭</small></a><a href="#inbox"><strong>회신 확인</strong><small>통합 대화함 · 답장 작성</small></a></div><div class="stats"><div class="stat"><label>화면에 불러온 후보</label><strong>${data.candidates.length}</strong><small>검증된 사업용 연락처 ${data.candidates.filter((c) => c.contact.verified).length}</small></div><div class="stat"><label>화면에 불러온 접수 기록</label><strong>${sent.length}</strong><small>받은편지함 도착·열람은 미확인</small></div><div class="stat"><label>불러온 기록의 회신율</label><strong>${rate(humanTargets.size)}</strong><small>회신 대상 ${humanTargets.size} / 접수 대상 ${sentTargets.size} · 자동 응답 제외 · 문자·전화 수동 회신 포함</small></div><div class="stat"><label>불러온 확정 상품 딜</label><strong>${data.deals.filter((d) => d.state === "확정").length}</strong><small>상품 조건이 확정된 카드 수</small></div></div><div class="grid"><div class="panel"><div class="panel-head"><h2>지금 해야 할 일</h2><a href="#inbox">대화함 ↗</a></div>${
       data.candidates
         .filter((c) => c.next)
         .map(
@@ -217,7 +218,18 @@ function dashboard() {
         .join("") ||
       '<div class="empty">후보에 다음 행동을 기록하면 여기에 표시됩니다.</div>'
     }</div><div class="panel"><h2>성과와 집계 기준</h2><div class="task">긍정 회신율 <strong style="margin-left:auto">${rate(positive.size)}</strong></div><div class="task">협상 전환율 <strong style="margin-left:auto">${humanTargets.size ? Math.round((data.candidates.filter((c) => c.status === "협상" && humanTargets.has(c.id)).length / humanTargets.size) * 100) + "%" : "—"}</strong></div><div class="task">크리에이터 수락 <strong style="margin-left:auto">${data.candidates.filter((c) => c.kind === "크리에이터" && ["수락", "공동구매 확정"].includes(c.status)).length}</strong></div><div class="task">공동구매 확정 <strong style="margin-left:auto">${data.threads.filter((t) => t.classification === "공동구매 확정").length}</strong></div><p class="fine">전체 기록 기간 · 긍정/접수 대상 · 협상/사람 회신 대상 · 수동 DM 접수/열람 미집계 · 매출 수집 없음</p></div></div><div class="panel"><h2>발송·오류 현황</h2>${outboxTable()}</div>`;
+  loadOperationsDashboard();
 }
+let operationsRequestGeneration=0;
+function operationNumber(value){return Number.isInteger(value)&&value>=0?value.toLocaleString('ko-KR'):'확인 불가';}
+function operationMetric(label,value,note=''){return '<div class="operation-metric"><span>'+esc(label)+'</span><strong>'+esc(operationNumber(value))+'</strong>'+(note?'<small>'+esc(note)+'</small>':'')+'</div>';}
+function operationProgress(t){const checked=t?.checked,goal=t?.goal;if(!Number.isInteger(checked)||checked<0||!Number.isInteger(goal)||goal<=0)return '<p class="fine">확인 진행률 · 원장 연결 후 표시</p>';const width=Math.min(100,Math.round(100*checked/goal));return '<div class="operation-progress"><span>확인 진행률 '+esc(String(width))+'%</span><progress value="'+Math.min(checked,goal)+'" max="'+goal+'">'+width+'%</progress><small>'+esc(operationNumber(checked))+'회 / '+esc(operationNumber(goal))+'회</small></div>';}
+function operationsDashboardView(r){
+ const c=r.creator||{},b=r.brand||{},today=c.today,discovery=(b.discoveryHistory||[]).find(x=>x.day===b.today),rows=(c.days||[]).map(d=>'<tr><td>'+esc(d.day)+'</td><td>'+esc(c.complete?operationNumber(d.received):'일부 기록')+'</td><td>'+esc(c.complete?operationNumber(d.added):'일부 기록')+'</td><td>'+esc(c.complete?operationNumber(d.existing):'일부 기록')+'</td></tr>').join(''),sendMap=new Map((b.sendDays||[]).map(x=>[x.day,x.accepted]));
+ const brandRows=(b.discoveryHistory||[]).slice(0,14).map(d=>'<tr><td>'+esc(d.day)+'</td><td>'+esc(operationNumber(d.companies))+'</td><td>'+esc(operationNumber(d.emails))+'</td><td>'+(b.complete?.outbox?esc(operationNumber(sendMap.get(d.day)||0)):'일부 기록')+'</td></tr>').join('');
+ return '<div class="operations-heading"><div><h2>오늘의 운영 현황</h2><p>한국시간 · 확인 '+esc(localTime(r.checkedAt))+'</p></div>'+button('현황 새로고침','operations-refresh')+'</div><div class="operations-grid"><section class="panel operations-panel"><div class="panel-head"><div><h3>크리에이터 수집</h3><p>dot이 확인하고 산지가 수신·중복 검사합니다.</p></div><a href="#creators">목록 보기 ↗</a></div><div class="operations-metrics">'+operationMetric('전체 DB',c.total,'저장된 고유 계정')+operationMetric('오늘 신규 저장',c.newStoredToday??null,'전체 출처 · DB 저장 시각')+operationMetric('배치 신규 저장',c.complete?(today?.added??null):null,'산지 수신 배치 기준')+operationMetric('산지 수신 처리',c.complete?(today?.received??null):null,'dot 전체 확인 횟수와 다름')+operationMetric('기존 계정',c.complete?(today?.existing??null):null,'산지에 전달된 배치 기준')+operationMetric('dot 확인 횟수',c.telemetry?.checked??null,'확인 처리 횟수')+operationMetric('dot 고유 아이디',c.telemetry?.uniqueHandles??null,'중복 제거한 handle')+operationMetric('수집 실패',c.telemetry?.failed??null,'원장 상태 필요')+operationMetric('일일 확인 목표',c.telemetry?.goal??null,'신규 저장 목표 아님')+operationMetric('일일 잔여',c.telemetry?.remaining??null,'원장 상태 필요')+'</div>'+operationProgress(c.telemetry)+'<p class="notice">수집 원장 미연결: 확인 횟수·고유 인원·실패·일일 목표와 남은 수량·로그인 상태는 확인할 수 없습니다. 수신 처리 수를 전체 확인 수로 계산하지 않습니다.</p>'+(c.complete?'':'<p class="notice">배치 기록이 많아 표시된 합계가 일부일 수 있습니다.</p>')+'<details><summary>날짜별 산지 수신 기록</summary><p class="fine">날짜는 산지가 배치를 받은 한국시간입니다. 기록이 없는 날은 0으로 표시하지 않습니다.</p><div class="table-scroll"><table><thead><tr><th>날짜</th><th>수신 처리</th><th>신규 저장</th><th>기존 계정</th></tr></thead><tbody>'+ (rows||'<tr><td colspan="4">확인된 수신 배치가 없습니다.</td></tr>')+'</tbody></table></div></details></section><section class="panel operations-panel"><div class="panel-head"><div><h3>브랜드 메일</h3><p>업체·주소·메일 건수는 서로 다른 단위입니다.</p></div><a href="#brands">브랜드 메일 ↗</a></div><div class="operations-metrics">'+operationMetric('오늘 이메일 확보 후보',discovery?.companies??null,'후보 기록 수')+operationMetric('오늘 고유 회사',null,'회사별 중복 확인 필요')+operationMetric('오늘 확보 이메일',discovery?.emails??null,'중복 제거한 주소 수 · 유효성 별도')+operationMetric('오늘 Gmail 접수',b.complete?.outbox?b.acceptedToday:null,'메시지 수 · 도착 미확인')+operationMetric('어제 Gmail 접수',b.complete?.outbox?b.acceptedYesterday:null,'메시지 수 · 도착 미확인')+operationMetric('예약 대기',b.complete?.jobs?b.queued:null,'승인된 메일 중 브랜드만')+operationMetric('처리 중',b.complete?.jobs?b.processing:null,'브랜드 메일')+operationMetric('실패·확인 필요',b.complete?.jobs?b.review:null,'브랜드 예약')+operationMetric('오늘 주소별 영구 반송',b.complete?.threads?b.bounceAddressesToday:null,'개별 발송건 귀속과 별개')+operationMetric('발송건에 직접 귀속된 반송',b.complete?.threads&&b.complete?.outbox?b.bounceAttributedToday:null,'원본 참조 확인')+'</div>'+((b.unclassifiedOutbox||b.unclassifiedJobs)?'<p class="notice">분류 근거가 없는 일부 발송·예약 기록은 브랜드 집계에서 제외했습니다.</p>':'')+'<details><summary>날짜별 브랜드 실적</summary><div class="table-scroll"><table><thead><tr><th>날짜</th><th>이메일 확보 후보</th><th>확보 주소</th><th>Gmail 접수</th></tr></thead><tbody>'+(brandRows||'<tr><td colspan="4">확인된 발굴 기록이 없습니다.</td></tr>')+'</tbody></table></div></details><p class="fine">Gmail 접수는 도착 성공이 아닙니다. 반송은 주소 수준과 발송건 직접 귀속을 따로 표시합니다.</p></section></div>';
+}
+async function loadOperationsDashboard(){const generation=++operationsRequestGeneration,account=me;try{const r=await api('/operations-dashboard');if(generation!==operationsRequestGeneration||me!==account||!me||(location.hash.slice(1)||'dashboard')!=='dashboard')return;const panel=$('#operations-dashboard');if(panel)panel.innerHTML=operationsDashboardView(r);}catch(e){if(generation!==operationsRequestGeneration||me!==account||(location.hash.slice(1)||'dashboard')!=='dashboard')return;const panel=$('#operations-dashboard');if(panel)panel.innerHTML='<section class="panel error"><h2>운영 현황을 불러오지 못했습니다</h2><p>'+esc(e.message||'연결을 확인하세요.')+'</p>'+button('다시 확인','operations-refresh')+'</section>';}}
 function manualReplyDialog(target=""){
  const c=data.candidates.find(c=>c.id===target),brands=data.candidates.filter(c=>c.kind!=="크리에이터");
  modal('<h2>문자·전화 회신 기록</h2><p>운영자가 직접 받은 회신을 기록합니다. 실제 Gmail 수신으로 표시하지 않습니다.</p><form id="manual-reply-form"><label class="field">업체명<input name="company" list="manual-brand-names" required value="'+esc(c?.name||'')+'"><datalist id="manual-brand-names">'+[...new Set([...brands.map(c=>c.name),...(window.discoveryView?.leads||[]).map(l=>l.data.name)])].map(n=>'<option value="'+esc(n)+'">').join('')+'</datalist></label>'+'<label class="field">업체 선택 (같은 이름이 여러 개일 때)<select name="target"><option value="">입력한 업체명으로 찾기</option>'+brands.map(c=>'<option value="'+esc(c.id)+'" '+(c.id===target?'selected':'')+'>'+esc(c.name)+' · '+esc(c.contact?.email||c.website||'연락처 미확인')+'</option>').join('')+'</select></label>'+field('channel','회신 경로','문자','text',['문자','전화'])+field('classification','회신 분류','미분류','text',['미분류','관심 회신','단순 안내','거절','수신 거부'])+field('text','받은 내용·통화 메모','','textarea')+'<p class="fine">회신 일시는 저장한 현재 시각으로 기록합니다.</p><button class="primary" type="submit">회신 기록 저장</button></form>');
@@ -534,7 +546,7 @@ function inboundHumanReply(m){
  return !!(String(m.text||'').trim()||m.hasAttachments||m.source==='operator_reported');
 }
 const conversationStatuses=['미정','대화 중','답변 대기','회신 중단','다른 제안 검토','상대방 거절','우리 측 거절','협업 진행','종료'];
-let creatorInboxThreads=[], inboxRequestGeneration=0, inboxFolder='', inboxEdited=false, inboxDirtyForms=new Set(), inboxFilterSnapshot={q:'',mode:'replies',type:''};
+let creatorInboxThreads=[], inboxRequestGeneration=0, inboxFolder='', inboxLifecycle='active', inboxEdited=false, inboxDirtyForms=new Set(), inboxFilterSnapshot={q:'',mode:'replies',type:'',lifecycle:'active'};
 function allowInboxChange(){return !inboxEdited||window.confirm('저장하지 않은 변경을 버릴까요?');}
 function meetingKstInput(v){const d=new Date(v);return Number.isNaN(d.getTime())?'':new Date(d.getTime()+9*3600000).toISOString().slice(0,16);}
 function meetingKstUtc(v){if(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(v))throw Error('미팅 일시를 입력하세요.');const d=new Date(v+':00+09:00');if(Number.isNaN(d.getTime())||meetingKstInput(d.toISOString())!==v)throw Error('미팅 일시를 확인하세요.');return d.toISOString();}
@@ -542,7 +554,8 @@ function groupInboxThreads(threads){const groups=new Map();for(const t of thread
 function inboxThreadCategory(t){if(t.creatorHandle)return 'creator';const kind=t.target?candidate(t.target)?.kind:'';return kind==='크리에이터'?'creator':['브랜드','제조사','공식 유통사'].includes(kind)?'brand':'unknown';}
 function inboxCategoryBadge(t){const kind=inboxThreadCategory(t),label={brand:'브랜드',creator:'크리에이터',unknown:'유형 미확인'}[kind];return '<span class="inbox-kind inbox-kind--'+kind+'">'+label+'</span>';}
 function inboxThreadName(t){if(t.instagramOfficial)return 'Instagram 사용자 ID '+t.instagramPeerId;return t.creatorHandle?'@'+t.creatorHandle:targetName(t.target);}
-function visibleInboxThreads(threads,q,type,mode){const needle=String(q||'').toLowerCase();return threads.filter(t=>{const name=inboxThreadName(t);return String(name+' '+(t.subject||'')+' '+(t.owner||'')+' '+(t.next||'')).toLowerCase().includes(needle)&&(!type||(inboxThreadCategory(t)===type))&&(mode==='all'||(mode.startsWith('status:')?!t.instagramOfficial&&(t.conversationStatus||'미정')===mode.slice(7):(t.messages||[]).some(inboundHumanReply)));});}
+function inboxIsClosed(t){return ['거절','수신 거부'].includes(t.classification)||['상대방 거절','우리 측 거절','종료'].includes(t.conversationStatus);}
+function visibleInboxThreads(threads,q,type,mode,lifecycle='active'){const needle=String(q||'').toLowerCase();return threads.filter(t=>{const name=inboxThreadName(t);return (lifecycle==='all'||(lifecycle==='closed'?inboxIsClosed(t):!inboxIsClosed(t)))&&String(name+' '+(t.subject||'')+' '+(t.owner||'')+' '+(t.next||'')).toLowerCase().includes(needle)&&(!type||(inboxThreadCategory(t)===type))&&(mode==='all'||(mode.startsWith('status:')?!t.instagramOfficial&&(t.conversationStatus||'미정')===mode.slice(7):(t.messages||[]).some(inboundHumanReply)));});}
 async function inboxPage() {
   const generation=++inboxRequestGeneration, account=me, stillCurrent=()=>generation===inboxRequestGeneration&&me===account&&!!me&&(location.hash.slice(1)==='inbox');
   let loaded=[];
@@ -557,15 +570,15 @@ async function inboxPage() {
       button("Gmail 답장 동기화", "sync-mail") + button("Instagram 수신 확인", "instagram-sync"),
     ) +
     `<p class="fine">산지에서 브랜드·크리에이터 답장을 나눠 봅니다. Gmail 라벨 자동 분류는 권한 확인 전 꺼져 있습니다.</p>` +
-    `<div class="toolbar"><input id="thread-filter" class="search" placeholder="이름·제목·담당자·메모 검색" aria-label="대화 검색"><select id="thread-mode" aria-label="대화 범위"><option value="replies">답장 온 대화</option><option value="all">전체 대화 기록</option>${conversationStatuses.map(status=>`<option value="status:${esc(status)}">진행 상태 · ${esc(status)}</option>`).join('')}</select><div class="actions" role="group" aria-label="답장 폴더">${[['','전체'],['brand','브랜드'],['creator','크리에이터']].map(([value,label])=>`<button type="button" data-action="inbox-folder" data-id="${value}" aria-pressed="${inboxFolder===value}">${label}</button>`).join('')}</div><input type="hidden" id="thread-type" value="${esc(inboxFolder)}"></div><div class="panel conversation"><div class="thread-list" id="thread-list"></div><div class="thread-content" id="thread-detail"></div></div>`;
+    `<div class="toolbar"><input id="thread-filter" class="search" placeholder="이름·제목·담당자·메모 검색" aria-label="대화 검색"><select id="thread-lifecycle" aria-label="대화 진행 범위"><option value="active" ${inboxLifecycle==='active'?'selected':''}>진행 중</option><option value="closed" ${inboxLifecycle==='closed'?'selected':''}>종료·거절</option><option value="all" ${inboxLifecycle==='all'?'selected':''}>진행·종료 전체</option></select><select id="thread-mode" aria-label="대화 범위"><option value="replies">답장 온 대화</option><option value="all">전체 대화 기록</option>${conversationStatuses.map(status=>`<option value="status:${esc(status)}">진행 상태 · ${esc(status)}</option>`).join('')}</select><div class="actions" role="group" aria-label="답장 폴더">${[['','전체'],['brand','브랜드'],['creator','크리에이터']].map(([value,label])=>`<button type="button" data-action="inbox-folder" data-id="${value}" aria-pressed="${inboxFolder===value}">${label}</button>`).join('')}</div><input type="hidden" id="thread-type" value="${esc(inboxFolder)}"></div><div class="panel conversation"><div class="thread-list" id="thread-list"></div><div class="thread-content" id="thread-detail"></div></div>`;
   filterThreads();
 }
 function filterThreads() {
   if (!$("#thread-list")) return;
-  const q = $("#thread-filter").value, type = $("#thread-type").value, mode = $("#thread-mode").value;
-  const visible=visibleInboxThreads([...data.threads,...creatorInboxThreads],q,type,mode);
+  const q = $("#thread-filter").value, type = $("#thread-type").value, mode = $("#thread-mode").value, lifecycle = $("#thread-lifecycle")?.value||'active';
+  const visible=visibleInboxThreads([...data.threads,...creatorInboxThreads],q,type,mode,lifecycle);
   $("#thread-list").innerHTML=groupInboxThreads(visible).map(group=>`<details class="thread" open><summary>${inboxCategoryBadge(group[0])} <strong>${esc(inboxThreadName(group[0]))}</strong> · ${group.length}개 대화</summary>${group.map(t=>`<button data-action="thread" data-id="${esc(t.id)}" style="text-align:left;width:100%;border:0;background:none"><p>${esc(t.subject)}</p>${tag(t.channel)} ${tag(t.classification)} ${tag(t.instagramOfficial?'상태 관리 미지원':t.conversationStatus||'미정')} ${(t.messages||[]).some(m=>m.out===false&&m.source==='operator_reported')?tag('수동 확인'):''}</button>`).join('')}</details>`).join('')||'<div class="empty">조건에 맞는 대화가 없습니다.</div>';
-  inboxFilterSnapshot={q,mode,type};
+  inboxFilterSnapshot={q,mode,type,lifecycle};inboxLifecycle=lifecycle;
   const next=visible.some(t=>t.id===selectedThread)?selectedThread:(visible[0]?.id||'');
   if($('#thread-detail').dataset.threadId!==next)showThread(next);
 
@@ -1185,6 +1198,7 @@ document.addEventListener("submit", async (e) => {
   }
 });
 const actions = {
+  'operations-refresh':()=>loadOperationsDashboard(),
   "gmail-signature-import":async()=>{const r=await api('/gmail/signature','POST',{});if(r.needsConsent){modal('<h2>Gmail 서명 조회 권한</h2><p>기본 서명을 가져오려면 Gmail 설정 접근 권한이 추가로 필요합니다. 산지는 설정을 수정하지 않고 서명 조회에만 사용합니다. Google 승인 화면에서 권한 범위를 확인해 주세요.</p>'+button('Google에서 서명 조회 권한 승인','connect-gmail-signature'));return;}if(!r.text&&!r.html){toast('현재 Gmail 발신 주소에 기본 서명이 없습니다. Gmail 설정에서 기본 서명을 지정해 주세요.');return;}await api('/settings','PUT',{...data.settings,emailSignature:r.text,gmailSignatureHtml:r.html,gmailSignatureEmail:r.email,signatureSource:'gmail',signatureChecked:r.checked,gmailSignatureNeedsConsent:false,gmailSignatureSyncState:'imported'});await reload();await settingsPage();toast('Gmail 기본 서명을 불러왔습니다. 새로 준비·승인하는 메일부터 적용됩니다.');},
   "connect-gmail-signature":async()=>location.assign((await api('/oauth/gmail','POST',{includeSignature:true})).url),
   "creator-capture":async id=>{const p=window.creatorDiscoveryView.prospects.find(x=>x.id===id);modal('<h2>@'+esc(p.handle)+' 프로필 캡처</h2><p>저장된 확인 시점 화면이며 실시간 화면이 아닙니다.</p><div id="creator-capture-modal">불러오는 중…</div>');const url=await creatorCaptureUrl(id);const el=$('#creator-capture-modal');if(el)el.innerHTML=url?'<img class="creator-capture-full" alt="실제 프로필 캡처" src="'+esc(url)+'">':'저장된 캡처 없음';},
@@ -1447,8 +1461,12 @@ document.addEventListener("input", (e) => {
 document.addEventListener("change", (e) => {
   if(e.target.id==='recovery-history-day'){recoveryHistoryDay=e.target.value;recoveryTarget=readRecommendationTarget(recoveryHistoryDay||recommendationDay());recoveryPreviewMode=false;creatorDiscoveryPage();return;}
   {const changed=e.target.closest('#thread-form, #meeting-form, #instagram-reply-form, #creator-conversation-form');if(changed){inboxEdited=true;inboxDirtyForms.add(changed.id);}}
+  if(e.target.id==='thread-lifecycle'&&inboxEdited&&!allowInboxChange()){e.target.value=inboxFilterSnapshot.lifecycle;return;}
+  if(e.target.id==='thread-lifecycle'&&inboxEdited){inboxEdited=false;inboxDirtyForms.clear();$('#thread-detail').dataset.threadId='__refresh__';}
+  if(e.target.id==='thread-lifecycle'&&e.target.value==='closed'&&$('#thread-mode').value==='replies')$('#thread-mode').value='all';
   if(e.target.id==="thread-mode"&&inboxEdited&&!allowInboxChange()){e.target.value=inboxFilterSnapshot.mode;return;}
   if(e.target.id==="thread-mode"&&inboxEdited){inboxEdited=false;inboxDirtyForms.clear();$('#thread-detail').dataset.threadId='__refresh__';}
+  if(e.target.id==='thread-mode'&&e.target.value.startsWith('status:')){const status=e.target.value.slice(7),closed=['상대방 거절','우리 측 거절','종료'].includes(status),scope=$('#thread-lifecycle');if(scope&&scope.value!=='all'&&((closed&&scope.value==='active')||(!closed&&scope.value==='closed')))scope.value=closed?'closed':'active';}
 
   if(e.target.id==='recovery-email-only'){document.querySelectorAll('[data-recovery-row]').forEach(row=>row.hidden=e.target.checked&&row.dataset.email!=='true');return;}
   if(e.target.dataset.recoveryStatus){api('/creator-recovery/status','POST',{id:e.target.dataset.recoveryStatus,status:e.target.value}).then(()=>creatorDiscoveryPage()).catch(err=>{toast(err.message);creatorDiscoveryPage();});return;}
@@ -1471,7 +1489,7 @@ document.addEventListener("change", (e) => {
   if (e.target.id === "match-target") showMatches();
   if (["status-filter", "category-filter"].includes(e.target.id))
     filterCandidates();
-  if (["thread-type", "thread-mode"].includes(e.target.id)) filterThreads();
+  if (["thread-type", "thread-mode", "thread-lifecycle"].includes(e.target.id)) filterThreads();
   if (e.target.id === "mail-filter" && discoveryView) $("#discovery-results").innerHTML=discoveryCards(discoveryView);
 });
 window.addEventListener('beforeunload',e=>{if(inboxEdited){e.preventDefault();e.returnValue='';}});

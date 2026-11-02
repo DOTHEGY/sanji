@@ -1,3 +1,88 @@
+// supabase/functions/_shared/operations-dashboard.ts
+var kst = (value) => {
+  const date2 = new Date(value);
+  return Number.isFinite(date2.getTime()) ? new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" }).format(date2) : null;
+};
+function aggregateOperations({ batches, outbox, candidates, jobs, drafts, threads, discovery: discovery2, now: now2 }) {
+  const today = kst(now2), yesterday = kst(new Date(Date.parse(now2) - 864e5)), byDay = /* @__PURE__ */ new Map();
+  for (const b of batches) {
+    const day3 = kst(b.created);
+    if (!day3) continue;
+    const d = byDay.get(day3) || { day: day3, received: 0, added: 0, existing: 0, batches: 0 };
+    d.received += Number(b.processed) || 0;
+    d.added += Number(b.added) || 0;
+    d.existing += Number(b.existing) || 0;
+    d.batches++;
+    byDay.set(day3, d);
+  }
+  const kinds = new Map(candidates.map((r) => [r.id, r.data?.kind])), brand = (id) => ["\uBE0C\uB79C\uB4DC", "\uC81C\uC870\uC0AC", "\uACF5\uC2DD \uC720\uD1B5\uC0AC"].includes(String(kinds.get(id) || "")), known = (id) => brand(id) || kinds.get(id) === "\uD06C\uB9AC\uC5D0\uC774\uD130", outbound = outbox.filter((o) => o.channel === "email" && brand(o.target));
+  const sendDays = /* @__PURE__ */ new Map();
+  for (const o of outbound) if (o.status === "accepted") {
+    const day3 = kst(o.created);
+    if (day3) sendDays.set(day3, (sendDays.get(day3) || 0) + 1);
+  }
+  const draftMap = new Map(drafts.map((d) => [d.id, d.data || {}])), brandJobs = jobs.filter((j) => {
+    const d = draftMap.get(j.draft_id);
+    return d?.channel === "email" && brand(d.target) && d?.proposalType !== "creator_product_proposal";
+  });
+  const acceptedByTarget = /* @__PURE__ */ new Map();
+  for (const o of outbound) {
+    if (o.status !== "accepted") continue;
+    const rows = acceptedByTarget.get(o.target) || [];
+    rows.push(o);
+    acceptedByTarget.set(o.target, rows);
+  }
+  const addr = /* @__PURE__ */ new Set(), exact = /* @__PURE__ */ new Set();
+  for (const t of threads) {
+    if (!brand(t.data?.target) || t.data?.channel !== "email") continue;
+    for (const m of Array.isArray(t.data?.messages) ? t.data.messages : []) {
+      if (m.out !== false || !kst(m.at)) continue;
+      for (const f of Array.isArray(m.bounceFailures) ? m.bounceFailures : []) {
+        if (f.kind !== "permanent" || f.source !== "delivery_status" || !/^5\./.test(String(f.status || "")) || !f.email) continue;
+        const day3 = kst(m.at), email = String(f.email).toLowerCase();
+        if (day3 === today) addr.add(email);
+        for (const o of acceptedByTarget.get(t.data?.target) || []) {
+          const mid = o.data?.messageId, recipients = Array.isArray(o.data?.emails) && o.data.emails.length ? o.data.emails : [o.data?.email];
+          if (o.status !== "accepted" || !mid || o.target !== t.data?.target || !recipients.some((e) => String(e || "").toLowerCase() === email) || Date.parse(m.at) < Date.parse(o.created)) continue;
+          const ref = "<" + mid + "@sanji.local>";
+          if ([m.references, m.inReplyTo].some((x) => String(x || "").split(/\s+/).includes(ref)) && day3 === today) exact.add(o.id);
+        }
+      }
+    }
+  }
+  return { creator: { today: byDay.get(today) || null, days: [...byDay.values()].sort((a, b) => b.day.localeCompare(a.day)), telemetry: { checked: null, uniqueHandles: null, failed: null, goal: null, remaining: null, state: "unavailable" } }, brand: { today, yesterday, discoveryHistory: discovery2, acceptedToday: sendDays.get(today) || 0, acceptedYesterday: sendDays.get(yesterday) || 0, sendDays: [...sendDays].sort(([a], [b]) => b.localeCompare(a)).map(([day3, accepted]) => ({ day: day3, accepted })), queued: brandJobs.filter((j) => j.status === "queued").length, processing: brandJobs.filter((j) => j.status === "processing").length, review: brandJobs.filter((j) => ["failed", "review_pending", "outcome_unknown"].includes(j.status)).length, bounceAddressesToday: addr.size, bounceAttributedToday: exact.size, unclassifiedOutbox: outbox.filter((o) => o.channel === "email" && !known(o.target)).length, unclassifiedJobs: jobs.filter((j) => {
+    const d = draftMap.get(j.draft_id);
+    return !d || !d.channel || !known(d.target);
+  }).length } };
+}
+function operationsDashboard({ sb: sb2, query: query2 }) {
+  async function capped(owner, table, select, order, since) {
+    const pageSize = table === "sanji_records" ? 100 : 500, maximum = table === "sanji_records" ? 500 : 5e3, rows = [];
+    for (let offset = 0; offset < maximum; offset += pageSize) {
+      let q = sb2.from(table).select(select).eq("owner", owner);
+      if (since) q = q.gte(order, since);
+      if (table === "sanji_records") q = q.eq("kind", "thread");
+      if (table === "sanji_outbox") q = q.eq("channel", "email");
+      if (table === "sanji_jobs") q = q.in("status", ["queued", "processing", "failed", "review_pending", "outcome_unknown"]);
+      const page = await query2(q.order(order, { ascending: false }).order(table === "sanji_creator_visible_batches" ? "batch_hash" : "id", { ascending: false }).range(offset, offset + pageSize - 1));
+      rows.push(...page);
+      if (page.length < pageSize) return { rows, complete: true };
+    }
+    return { rows, complete: false };
+  }
+  return async (owner) => {
+    const now2 = (/* @__PURE__ */ new Date()).toISOString(), since = new Date(Date.now() - 30 * 864e5).toISOString(), todayStart = (/* @__PURE__ */ new Date(kst(now2) + "T00:00:00+09:00")).toISOString();
+    const [totalResult, newResult, batches, outbox, jobs, threads, discovery2] = await Promise.all([sb2.from("sanji_creator_recovery").select("id", { count: "exact", head: true }).eq("owner", owner), sb2.from("sanji_creator_recovery").select("id", { count: "exact", head: true }).eq("owner", owner).gte("created", todayStart), capped(owner, "sanji_creator_visible_batches", "batch_hash,processed,added,existing,created", "created", since), capped(owner, "sanji_outbox", "id,target,channel,status,created,data", "created", since), capped(owner, "sanji_jobs", "id,draft_id,status,run_at", "run_at"), capped(owner, "sanji_records", "id,data,updated", "updated"), query2(sb2.rpc("sanji_discovery_history", { p_owner: owner }))]);
+    if (totalResult.error || newResult.error || !Number.isInteger(totalResult.count) || !Number.isInteger(newResult.count)) throw Error("\uD06C\uB9AC\uC5D0\uC774\uD130 \uC804\uCCB4 \uC218\uB97C \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+    const draftIds = jobs.rows.map((j) => j.draft_id).filter(Boolean), drafts = [];
+    for (let i = 0; i < draftIds.length; i += 100) drafts.push(...await query2(sb2.from("sanji_drafts").select("id,data").eq("owner", owner).in("id", draftIds.slice(i, i + 100))));
+    const ids = [...new Set([...outbox.rows.map((o) => o.target), ...drafts.map((d) => d.data?.target), ...threads.rows.map((t) => t.data?.target)].filter((x) => typeof x === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(x)))], candidates = [];
+    for (let i = 0; i < ids.length; i += 100) candidates.push(...await query2(sb2.from("sanji_records").select("id,data").eq("owner", owner).eq("kind", "candidate").in("id", ids.slice(i, i + 100))));
+    const result = aggregateOperations({ batches: batches.rows, outbox: outbox.rows, candidates, jobs: jobs.rows, drafts, threads: threads.rows.filter((t) => t.data?.messages), discovery: discovery2, now: now2 });
+    return { ...result, creator: { ...result.creator, total: totalResult.count, newStoredToday: newResult.count, complete: batches.complete }, brand: { ...result.brand, complete: { outbox: outbox.complete, jobs: jobs.complete, threads: threads.complete } }, checkedAt: now2 };
+  };
+}
+
 // supabase/functions/_shared/creator-instagram-events.ts
 async function verifyInstagramSignature(raw, header, secret) {
   if (!secret || !/^sha256=[a-f0-9]{64}$/i.test(header)) return false;
@@ -3671,6 +3756,7 @@ var saveManualReply = manualReplyService({ sb, query, putRecord, audit });
 var creatorLocal = creatorLocalService({ sb, query, audit, encrypt, decrypt, putRecord });
 var creatorServer = creatorServerService({ sb, query, encrypt, decrypt, audit, creatorLocal, creatorDiscovery });
 var brandAuto = brandAutoService({ sb, query, env, connection, emailTracking, digest: digest3, uuid, audit });
+var readOperationsDashboard = operationsDashboard({ sb, query });
 var discovery = discoveryService({ sb, query, connection, saveConnection, env, audit, putRecord, notifyOwner, autoSchedule: (u) => brandAuto.process(u) });
 async function loadGmailSignature(u) {
   const c = await gmailToken(u);
@@ -4239,6 +4325,7 @@ Deno.serve(async (req) => {
         fail(413, "\uC694\uCCAD \uD06C\uAE30 \uCD08\uACFC");
       return text3 ? JSON.parse(text3) : {};
     };
+    if (path === "/operations-dashboard" && req.method === "GET") return json(await readOperationsDashboard(u));
     if (path === "/manual-reply" && req.method === "POST") {
       try {
         return json(await saveManualReply(u, await input()));
