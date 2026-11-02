@@ -15,3 +15,5 @@
 이 실행기는 실제 exporter 원본 파일에 접근하지 못했습니다. 이전 독립 검토에서 실제 10월 30일·11월 2일 자료를 대조한 validator와 projection은 이번 코드와 바이트가 동일하지만, 신규 HTTP 경로에 대한 실제 자료 재전송 검사는 연결된 담당자가 별도로 수행해야 합니다.
 
 연결 담당자는 실제 exporter JSON을 로컬에 둔 뒤 `node scripts/review-dot-export.cjs <snapshot.json> [snapshot.json ...]`으로 validator·projection을 읽기 전용 비교할 수 있습니다. 이 명령은 외부 요청을 하지 않고 개인 식별자나 파일 경로를 출력하지 않습니다. 날짜·집계·DB audit 유무만 출력합니다.
+
+독립 함수 검토용 단일 파일은 `supabase/dashboard/dot-snapshot-direct.ts`이며 `npm run build:supabase`가 소스에서 재생성합니다. 기존 서버 번들 `public/connect/workspace.ts`는 변경하지 않습니다.
