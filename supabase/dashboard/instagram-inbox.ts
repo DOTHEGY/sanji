@@ -267,8 +267,8 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
         const observedAt = (/* @__PURE__ */ new Date()).toISOString(), detail = await get(m.id, new URLSearchParams({ fields: "id,created_time,from,to,message" }));
         reason = "invalid_provider_response";
         detailsChecked++;
-        const peer = String(detail.from?.id || ""), at2 = Date.parse(detail.created_time), body = typeof detail.message === "string" ? detail.message : "";
-        if (detail.id !== m.id || !/^\d+$/.test(peer) || peer === a.id || !detail.to?.data?.some((x) => String(x.id) === a.id) || !Number.isFinite(at2) || at2 > Date.now() + 3e5) {
+        const peer = typeof detail.from?.id === "string" ? detail.from.id : "", at2 = Date.parse(detail.created_time), body = typeof detail.message === "string" ? detail.message : "";
+        if (detail.id !== m.id || !/^\d+$/.test(peer) || peer === a.id || !detail.to?.data?.some((x) => typeof x.id === "string" && x.id === a.id) || !Number.isFinite(at2) || at2 > Date.now() + 3e5) {
           detailsSkipped++;
           continue;
         }
@@ -325,7 +325,7 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
     const version = env2("META_GRAPH_VERSION") || "v24.0";
     if (!/^v\d+\.\d+$/.test(version)) throw Error("invalid version");
     const observedAt = (/* @__PURE__ */ new Date()).toISOString(), profile = await remote2("https://graph.instagram.com/" + version + "/" + encodeURIComponent(peerId) + "?" + new URLSearchParams({ fields: "name,username" }), { method: "GET", headers: { Authorization: "Bearer " + a.token }, signal: AbortSignal.timeout(3500) }, "Instagram \uC0C1\uB300 \uACC4\uC815 \uC870\uD68C");
-    if (profile?.id != null && String(profile.id) !== peerId) throw Error("\uC0C1\uB300 \uACC4\uC815\uC774 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4");
+    if (profile?.id != null && (typeof profile.id !== "string" || profile.id !== peerId)) throw Error("\uC0C1\uB300 \uACC4\uC815\uC774 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4");
     const safe = safePeer(profile);
     if (!safe.username && !safe.name) return { found: false };
     const saved = await observe(owner, a.id, peerId, inbound[0].message_id, profile, observedAt);
