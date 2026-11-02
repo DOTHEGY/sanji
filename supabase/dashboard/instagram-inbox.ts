@@ -59,7 +59,24 @@ function functionRoute(requestUrl, projectUrl) {
   };
 }
 
-// supabase/functions/_shared/creator-instagram-oauth.ts
+// supabase/functions/instagram-inbox/oauth.ts
+var stages = /* @__PURE__ */ new Set(["state", "short_exchange", "long_exchange", "profile", "account", "save", "capabilities"]);
+function fail(stage, cause) {
+  const error = Error("Instagram \uC5F0\uACB0\uC744 \uC644\uB8CC\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+  error.oauthStage = stages.has(stage) ? stage : "state";
+  for (const key2 of ["httpStatus", "metaCode", "metaSubcode"]) {
+    const n = cause?.[key2];
+    if (Number.isSafeInteger(n) && n >= 0 && n <= 2147483647) error[key2] = n;
+  }
+  return error;
+}
+async function at(stage, fn) {
+  try {
+    return await fn();
+  } catch (e) {
+    throw fail(stage, e);
+  }
+}
 function creatorInstagramOauth({ sb: sb2, query: query2, env: env2, key: key2, digest: digest2, encrypt: encrypt2, remote: remote2, resolveSession, capabilities: capabilities2, audit: audit2, oauthStateProblem: oauthStateProblem2, oauthLifetimeMs: oauthLifetimeMs2 }) {
   const provider = "instagram_message_connect", expected = "valu_est";
   async function prepare(owner, base) {
@@ -71,26 +88,43 @@ function creatorInstagramOauth({ sb: sb2, query: query2, env: env2, key: key2, d
     return { url: "https://www.instagram.com/oauth/authorize?" + params, expectedHandle: expected, scopes: ["instagram_business_basic", "instagram_business_manage_messages"], notice: "Meta\uC5D0\uC11C @valu_est\uC640 \uC694\uCCAD \uAD8C\uD55C\uC744 \uD655\uC778\uD55C \uB4A4 \uC9C1\uC811 \uC2B9\uC778\uD558\uC138\uC694. \uC2B9\uC778 \uC804 \uC5F0\uACB0\uC740 \uC0DD\uC131\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4." };
   }
   async function callback(url, base, owner) {
-    const state = url.searchParams.get("state") || "";
-    const row = await query2(sb2.from("sanji_oauth_states").select("*").eq("state", await digest2(state)).eq("provider", provider).maybeSingle());
-    const problem = oauthStateProblem2(state, row);
-    if (problem) throw Error(problem);
-    if (!owner || row.owner !== owner) throw Error("\uC778\uC99D \uC694\uCCAD \uACC4\uC815\uC774 \uD604\uC7AC \uB85C\uADF8\uC778\uACFC \uB2E4\uB985\uB2C8\uB2E4.");
-    const consumed = await query2(sb2.from("sanji_oauth_states").delete().eq("state", row.state).eq("provider", provider).eq("owner", owner).select("state"));
-    if (!consumed.length) throw Error("\uC774\uBBF8 \uC0AC\uC6A9\uB41C \uC778\uC99D \uC694\uCCAD");
-    const code = url.searchParams.get("code");
-    if (!code) throw Error("\uACF5\uC2DD \uC778\uC99D\uC774 \uCDE8\uC18C\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
+    const row = await at("state", async () => {
+      const state = url.searchParams.get("state") || "", r = await query2(sb2.from("sanji_oauth_states").select("*").eq("state", await digest2(state)).eq("provider", provider).maybeSingle());
+      const problem = oauthStateProblem2(state, r);
+      if (problem || !owner || r.owner !== owner) throw Error("invalid state");
+      const consumed = await query2(sb2.from("sanji_oauth_states").delete().eq("state", r.state).eq("provider", provider).eq("owner", owner).select("state"));
+      if (!consumed.length || !url.searchParams.get("code")) throw Error("invalid state");
+      return r;
+    });
     const form = new FormData();
-    for (const [k, v] of Object.entries({ client_id: env2("META_APP_ID"), client_secret: env2("META_APP_SECRET"), code, grant_type: "authorization_code", redirect_uri: base + "/oauth/instagram/callback" })) form.set(k, String(v));
-    const token = await remote2("https://api.instagram.com/oauth/access_token", { method: "POST", body: form }, "Instagram \uACF5\uC2DD \uC778\uC99D");
-    const session = await resolveSession(token, remote2, env2("META_APP_SECRET"), env2("META_GRAPH_VERSION") || "v24.0");
-    if (String(session.username || "").replace(/^@/, "").toLowerCase() !== expected || !/^\d+$/.test(String(session.id || ""))) throw Error("\uC5F0\uACB0 \uB300\uC0C1\uC740 @valu_est\uC785\uB2C8\uB2E4. \uB85C\uADF8\uC778\uD55C \uACC4\uC815\uC744 \uD655\uC778\uD558\uC138\uC694.");
-    if (session.tokenMode === "short") throw Error("\uC7A5\uAE30 \uC778\uC99D\uC744 \uD655\uC778\uD558\uC9C0 \uBABB\uD574 \uAE30\uC874 \uC5F0\uACB0\uC744 \uC720\uC9C0\uD588\uC2B5\uB2C8\uB2E4.");
-    const checked = await capabilities2(session, remote2, env2("META_GRAPH_VERSION") || "v24.0");
+    for (const [k, v] of Object.entries({ client_id: env2("META_APP_ID"), client_secret: env2("META_APP_SECRET"), code: url.searchParams.get("code"), grant_type: "authorization_code", redirect_uri: base + "/oauth/instagram/callback" })) form.set(k, String(v));
+    const token = await at("short_exchange", async () => instagramTokenResponse(await remote2("https://api.instagram.com/oauth/access_token", { method: "POST", body: form }, "Instagram \uACF5\uC2DD \uC778\uC99D")));
+    let longFailure = null;
+    const sessionRemote = async (address, options, label) => {
+      const stage = new URL(address).pathname === "/access_token" ? "long_exchange" : "profile";
+      try {
+        return await remote2(address, options, label);
+      } catch (e) {
+        const safe2 = fail(stage, e);
+        if (stage === "long_exchange") longFailure = safe2;
+        throw safe2;
+      }
+    };
+    let session;
+    try {
+      session = await resolveSession(token, sessionRemote, env2("META_APP_SECRET"), env2("META_GRAPH_VERSION") || "v24.0");
+    } catch (e) {
+      throw e?.oauthStage ? e : fail("profile", e);
+    }
+    if (String(session.username || "").replace(/^@/, "").toLowerCase() !== expected || !/^\d+$/.test(String(session.id || ""))) throw fail("account", null);
+    if (session.tokenMode === "short") throw longFailure || fail("long_exchange", null);
+    const checked = await at("capabilities", () => capabilities2(session, remote2, env2("META_GRAPH_VERSION") || "v24.0"));
     const safe = { profileVerified: checked.profileVerified === true, messagesReadable: checked.messagesReadable === true, webhookSubscribed: false, webhookSubscriptionStatus: "unverified", checked: checked.checked || null };
     session.capabilities = safe;
-    await query2(sb2.from("sanji_connections").upsert({ owner: row.owner, provider: "instagram:" + session.id, encrypted: await encrypt2(session), summary: { username: session.username, accountId: session.id, connected: true, apiVerified: true, expires: session.expires || null, tokenMode: session.tokenMode || "long", warning: session.warning || "", expiryKnown: session.expiryKnown !== false, capabilities: safe, profileChecked: session.profileChecked || null, webhookSetupRequested: false } }, { onConflict: "owner,provider" }));
-    await audit2(row.owner, "creator_instagram_connected", { username: expected, profileVerified: true, messagesReadable: safe.messagesReadable, webhookSetupRequested: false });
+    await at("save", async () => {
+      await query2(sb2.from("sanji_connections").upsert({ owner: row.owner, provider: "instagram:" + session.id, encrypted: await encrypt2(session), summary: { username: session.username, accountId: session.id, connected: true, apiVerified: true, expires: session.expires || null, tokenMode: session.tokenMode || "long", warning: session.warning || "", expiryKnown: session.expiryKnown !== false, capabilities: safe, profileChecked: session.profileChecked || null, webhookSetupRequested: false } }, { onConflict: "owner,provider" }));
+      await audit2(row.owner, "creator_instagram_connected", { username: expected, profileVerified: true, messagesReadable: safe.messagesReadable, webhookSetupRequested: false });
+    });
     return { username: expected, messagesReadable: safe.messagesReadable };
   }
   return { prepare, callback };
@@ -163,13 +197,13 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
       const m = messages[i];
       if (typeof m?.id !== "string" || !m.id || m.id.length > 500) throw Error("\uBA54\uC2DC\uC9C0 \uC2DD\uBCC4\uC790\uB97C \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4");
       const detail = await get(m.id, new URLSearchParams({ fields: "id,created_time,from,to,message" }));
-      const peer = String(detail.from?.id || ""), at = Date.parse(detail.created_time), body = typeof detail.message === "string" ? detail.message : "";
-      if (detail.id !== m.id || !/^\d+$/.test(peer) || peer === a.id || !detail.to?.data?.some((x) => String(x.id) === a.id) || !Number.isFinite(at) || at > Date.now() + 3e5) continue;
-      if (at < Date.now() - 90 * 864e5 || body.length > 1e4) {
+      const peer = String(detail.from?.id || ""), at2 = Date.parse(detail.created_time), body = typeof detail.message === "string" ? detail.message : "";
+      if (detail.id !== m.id || !/^\d+$/.test(peer) || peer === a.id || !detail.to?.data?.some((x) => String(x.id) === a.id) || !Number.isFinite(at2) || at2 > Date.now() + 3e5) continue;
+      if (at2 < Date.now() - 90 * 864e5 || body.length > 1e4) {
         partialMessages = true;
         continue;
       }
-      if (await capture(owner, { accountId: a.id, peerId: peer, messageId: detail.id, text: body.trim() ? body : "\uBCF8\uBB38 \uC5C6\uC74C \uB610\uB294 \uC870\uD68C \uBD88\uAC00 \xB7 Instagram\uC5D0\uC11C \uD655\uC778 \uD544\uC694", receivedAt: new Date(at).toISOString() })) inserted++;
+      if (await capture(owner, { accountId: a.id, peerId: peer, messageId: detail.id, text: body.trim() ? body : "\uBCF8\uBB38 \uC5C6\uC74C \uB610\uB294 \uC870\uD68C \uBD88\uAC00 \xB7 Instagram\uC5D0\uC11C \uD655\uC778 \uD544\uC694", receivedAt: new Date(at2).toISOString() })) inserted++;
     }
     let nextCursor = null;
     if (end < Math.min(messages.length, 20)) {
@@ -284,6 +318,12 @@ function instagramInboxHandler({ sb: sb2, query: query2, env: env2, key: key2, d
       if (path === "/creator-instagram/reply" && req.method === "POST") return json(await inbox.reply(owner, await input()));
       return json({ error: "\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uACBD\uB85C" }, 404);
     } catch (e) {
+      const safe = e;
+      if (["state", "short_exchange", "long_exchange", "profile", "account", "save", "capabilities"].includes(safe?.oauthStage)) {
+        const record = { event: "instagram_oauth_failure", stage: safe.oauthStage, response_http_status: 400 };
+        for (const [key3, name] of [["httpStatus", "http_status"], ["metaCode", "meta_code"], ["metaSubcode", "meta_subcode"]]) if (Number.isSafeInteger(safe[key3]) && safe[key3] >= 0 && safe[key3] <= 2147483647) record[name] = safe[key3];
+        console.error(JSON.stringify(record));
+      }
       const status = Number(e?.status);
       if (status === 429) return json({ error: "Meta \uC694\uCCAD \uD55C\uB3C4\uC5D0 \uB3C4\uB2EC\uD588\uC2B5\uB2C8\uB2E4. \uC7A0\uC2DC \uD6C4 \uC9C1\uC811 \uB2E4\uC2DC \uD655\uC778\uD558\uC138\uC694." }, 429);
       if (status === 401 || status === 403) return json({ error: "Meta \uACC4\uC815 \uC5F0\uACB0 \uB610\uB294 \uBA54\uC2DC\uC9C0 \uAD8C\uD55C\uC744 \uD655\uC778\uD558\uC138\uC694." }, 403);
@@ -326,6 +366,15 @@ async function remote(url, options = {}) {
   if (!response.ok) {
     const failure = Error("provider request failed");
     failure.status = response.status;
+    failure.httpStatus = response.status;
+    try {
+      const data = await response.json();
+      for (const [source, target2] of [["code", "metaCode"], ["error_subcode", "metaSubcode"]]) {
+        const n = data?.error?.[source] ?? data?.[source];
+        if (Number.isSafeInteger(n) && n >= 0 && n <= 2147483647) failure[target2] = n;
+      }
+    } catch {
+    }
     throw failure;
   }
   return response.json();
