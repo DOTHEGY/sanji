@@ -61,7 +61,12 @@ var projectDotSnapshot = (snapshot, now) => {
     const entry = q[group(k)];
     return typeof entry === "string" ? entry : entry?.status || entry?.quality || "unavailable";
   }, v = (k) => quality(k) === "complete" && typeof m[k] === "number" && Number.isFinite(m[k]) ? m[k] : null, observed = p.login?.observed_at, age = observed ? Date.parse(now) - Date.parse(observed) : Infinity, loginState = age >= 0 && age <= 9e5 && !p.login?.stale ? p.login?.current_state : "unknown";
-  return { day: p.day, checked: v("checked_attempts"), uniqueHandles: v("unique_handles"), failed: v("unresolved_failures"), goal: v("target"), remaining: v("available_remaining"), existing: v("existing_on_import"), preskipped: v("duplicates_preskipped"), newSaved: v("new_saved"), failedAttempts: v("failed_attempts"), recoveredFailures: v("recovered_failures"), pending: v("pending_submissions"), reserved: v("reserved_remaining"), state: Date.parse(now) - Date.parse(p.source_as_of) <= 9e5 ? p.execution?.state || "unavailable" : "unavailable", loginState, stateObservedAt: observed || null, sourceAsOf: p.source_as_of, receivedAt: snapshot.received_at, coverage: q };
+  const partialKeys = ["checked_attempts", "unique_handles", "new_saved", "existing_on_import", "duplicates_preskipped", "failed_attempts", "recovered_failures", "unresolved_failures", "available_remaining"];
+  const partialMetrics = Object.fromEntries(partialKeys.filter((k) => quality(k) === "partial" && Number.isSafeInteger(m[k]) && m[k] >= 0).map((k) => [k, m[k]]));
+  return { partialMetrics, day: p.day, checked: v("checked_attempts"), uniqueHandles: v("unique_handles"), failed: v("unresolved_failures"), goal: v("target"), remaining: v("available_remaining"), existing: v("existing_on_import"), preskipped: v("duplicates_preskipped"), newSaved: v("new_saved"), failedAttempts: v("failed_attempts"), recoveredFailures: v("recovered_failures"), pending: v("pending_submissions"), reserved: v("reserved_remaining"), state: Date.parse(now) - Date.parse(p.source_as_of) <= 9e5 ? p.execution?.state || "unavailable" : "unavailable", loginState, stateObservedAt: observed || null, sourceAsOf: p.source_as_of, receivedAt: snapshot.received_at, coverage: Object.fromEntries(["checked_attempts", "unique_handles", "outcomes", "usage_cost"].map((k) => {
+    const item = q[k], status = typeof item === "string" ? item : item?.status || item?.quality;
+    return [k, ["complete", "partial", "unavailable"].includes(status) ? status : "unavailable"];
+  })) };
 };
 
 // supabase/functions/dot-snapshot-direct/handler.ts
