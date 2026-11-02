@@ -1,5 +1,5 @@
 // supabase/functions/dot-snapshot-direct/index.ts
-import { createClient } from "npm:@supabase/supabase-js@2";
+import { createClient } from "npm:@supabase/supabase-js@2.118.0";
 import { Buffer } from "node:buffer";
 
 // supabase/functions/_shared/function-route.ts

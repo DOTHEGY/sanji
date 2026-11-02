@@ -1,4 +1,4 @@
-import {createClient} from 'npm:@supabase/supabase-js@2';
+import {createClient} from 'npm:@supabase/supabase-js@2.118.0';
 import {Buffer} from 'node:buffer';
 import {dotSnapshotHandler} from './handler.ts';
 const env=(name:string)=>Deno.env.get(name)||'';
