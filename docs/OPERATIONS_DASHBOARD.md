@@ -4,41 +4,24 @@
 
 브랜드의 후보·주소는 기존 `sanji_discovery_history`이며 후보 레코드 수와 법인 고유 수는 다를 수 있습니다. 주소는 최초 확인일의 중복 제거 수로, 유효성이나 소유자 일치 검증의 증거는 아닙니다. Gmail 접수는 확정된 브랜드/제조사/공식 유통사 후보에 연결된 이메일 outbox `accepted` 행 수이며 크리에이터 제안 유형을 제외합니다. Gmail 접수는 수신함 도착 성공이 아닙니다. 예약·처리·확인 필요는 현재 조회된 이메일 jobs의 상태이며 대상이 확인되지 않는 건은 제외하고 따로 알립니다. 반송 주소는 최근 조회된 브랜드 대화에서 `delivery_status`의 영구 오류를 받은 당일 고유 주소이고, 발송건 귀속은 같은 대상·주소·발송 이후 시각과 원본 Message-ID 참조가 모두 맞는 outbox 건수입니다. 미확인이나 0건은 정상 전달 증거가 아닙니다. 최근 30일 outbox/배치 최대 5000건, 미완료·확인 필요 jobs 최대 5000건, 최근 대화 최대 500건을 조회하며 상한에 닿으면 해당 합계는 확인 불가로 표시합니다. 기록은 서버 반환 시점의 스냅샷이며 자동 새로고침하지 않습니다.
 
-## dot 원장 스냅샷 제안 (미구현)
+## dot 원장 스냅샷 전달과 저장 (운영 미적용)
 
-실제 dot 수집 확인 횟수와 일일 잔여는 별도 원장에 있으므로 아래 계약을 인증된 소유자 UI/API로 가져오는 후속 저장 경로가 필요합니다. 이 변경에는 스냅샷을 보관할 DB 구조와 소유자 검증·버전 제어가 필요하며 배포 전에 명시적 검토가 필요합니다. 새 장기 자격증명, collector 잠금 제어 및 비밀값은 필요하지 않습니다. 현재 코드에는 수신 API나 저장소가 없고, 예시 숫자를 운영 화면에 넣지 않습니다.
+실제 dot 수집 확인 횟수와 일일 잔여는 별도 원장에 있으므로 아래 계약을 인증된 소유자 UI/API로 가져오는 후속 저장 경로가 필요합니다. 이 변경에는 스냅샷을 보관할 DB 구조와 소유자 검증·버전 제어가 필요하며 배포 전에 명시적 검토가 필요합니다. 새 장기 자격증명, collector 잠금 제어 및 비밀값은 필요하지 않습니다. 이 별도 브랜치는 수신 API와 저장 마이그레이션을 준비하지만 운영에 적용하지 않았으며, 예시 숫자를 운영 화면에 넣지 않습니다.
 
 ```json
 {
-  "schema_version": 1,
-  "snapshot_id": "stable-export-id",
-  "ledger_generation_id": "stable-ledger-id",
-  "revision": 1,
-  "day": "YYYY-MM-DD",
-  "timezone": "Asia/Seoul",
-  "target": null,
-  "cap": null,
-  "checked_attempts": null,
-  "unique_handles": null,
-  "new_saved": null,
-  "existing_on_import": null,
-  "duplicates_preskipped": null,
-  "failed_attempts": null,
-  "recovered_failures": null,
-  "unresolved_failures": null,
-  "pending_submissions": null,
-  "reserved_remaining": null,
-  "available_remaining": null,
-  "state": "unavailable",
-  "blocker_code": null,
-  "state_observed_at": null,
-  "source_as_of": null,
-  "exported_at": null,
-  "server_received_at": null,
-  "metrics_quality": {},
-  "runs": [{"run_id":"stable-run-id","batch_id":"stable-batch-id"}]
+  "schema_version": "sanji.collection.snapshot.v1",
+  "snapshot_id": "stable-export-id", "ledger_generation_id": "stable-ledger-id",
+  "revision": "content-hash", "day": "YYYY-MM-DD", "timezone": "Asia/Seoul",
+  "source_as_of": "2026-11-02T04:00:00Z", "last_profile_observed_at": null,
+  "exported_at": "2026-11-02T04:01:00Z", "sources": [],
+  "metrics": {"target":null,"checked_attempts":null,"unique_handles":null,"known_unique_handles":null,"new_saved":null,"existing_on_import":null,"duplicates_preskipped":null,"failed_attempts":null,"recovered_failures":null,"unresolved_failures":null,"pending_submissions":null,"reserved_remaining":null,"available_remaining":null,"usage_cost":null},
+  "coverage": {}, "execution": {}, "login": {}, "database_audit": {}, "warnings": [], "runs": []
 }
 ```
+
+위 수치와 날짜는 계약 검수용 예시입니다. 지표는 coverage에 `complete`로 확인된 경우에만 숫자로 표시합니다. 그 외에는 저장된 값이 있어도 확인 불가로 표시하며, source_as_of나 로그인 확인이 15분보다 오래되면 현재 상태를 추정하지 않습니다. 서버는 수신 시각을 별도로 기록합니다.
+
 
 각 수치는 `complete`·`partial`·`unavailable`과 누락 사유를 함께 전달합니다. `server_received_at`은 서버가 정하고 클라이언트 값을 신뢰하지 않습니다. 날짜·ledger generation·revision과 snapshot ID를 묶어 동일 snapshot 재전송을 멱등 처리하고 낮은 revision이나 이전 세대의 지연 스냅샷은 최신 상태를 덮지 못하게 해야 합니다. 원장의 baseline과 run 범위를 중복 합산하지 않으며, 고유 handle 상세가 없는 baseline은 고유 수를 null/partial로 둡니다. 실패 횟수는 복구 여부와 분리합니다. 상태 관찰 시각이 오래되거나 빠지면 현재 로그인 상태를 추론하지 않습니다. 이 계약은 기록 전달만 다루며 collector 실행·잠금·예약·메일이나 DM 발송을 요청하지 않습니다.
 
@@ -54,3 +37,11 @@
 - [모바일 미리보기](previews/operations-dashboard-mobile.png)
 - [통합 대화함 데스크톱 미리보기](previews/inbox-compact-desktop.png)
 - [통합 대화함 모바일 미리보기](previews/inbox-compact-mobile.png)
+
+## dot 스냅샷 수신 작업 (별도 변경, 운영 미적용)
+
+인증된 소유자가 dot exporter의 `sanji.collection.snapshot.v1` 집계 JSON을 미리보기한 뒤 저장합니다. `revision`은 숫자 순서가 아니라 내용 해시이므로 순서 판단에 사용하지 않습니다. `source_as_of`는 원장 관찰 시각, `exported_at`은 내보낸 시각, `received_at`은 서버 저장 시각으로 각각 보관합니다. 동일 snapshot ID와 내용은 멱등이며 서로 다른 내용의 ID 재사용을 거부합니다. 동일 세대의 관찰 시각이 같거나 이전이면 안전하게 거부합니다. 이미 나타났던 이전 세대로 되돌아갈 수 없고 세대가 바뀌면 새 관찰 시각이 이전보다 늦어야 합니다. 각 날짜와 소유자에 대한 변경은 DB 트랜잭션 및 advisory lock으로 직렬화합니다.
+
+운영 적용 시 새 테이블 `sanji_dot_snapshot`, `sanji_dot_snapshot_head`, `security definer` 함수 `sanji_store_dot_snapshot(uuid,jsonb)`가 필요합니다. 테이블에 RLS를 적용하고 anon/authenticated 권한은 부여하지 않으며 service_role은 읽기와 함수 실행만 허용합니다. 함수는 멤버 여부를 재검증하고 소유자를 인증된 API에서 전달받습니다. DB 구조와 함수 권한 적용은 별도 승인과 보안 검토가 필요합니다. collector 계정·자격증명·잠금 또는 실행 설정은 전달하거나 변경하지 않습니다. 스냅샷의 새 저장 수는 DB 실제 신규 저장 수와 별도로 취급합니다. 이 변경은 아직 운영에 적용되지 않았습니다.
+
+실제 dot exporter의 비식별 출력 한 건과 맞대는 계약 검증은 아직 수행하지 않았습니다. 특히 coverage 내부의 지표별 `complete` 표기와 run·source 객체의 필드 모양을 최종 대조해야 합니다. 미확인 상태에서는 수치가 확인 불가로 표시될 수 있고, 이 브랜치의 적용이나 자료 전송을 진행하면 안 됩니다.

@@ -1,4 +1,45 @@
+// supabase/functions/_shared/dot-snapshot.ts
+var metrics = ["target", "checked_attempts", "unique_handles", "new_saved", "existing_on_import", "duplicates_preskipped", "failed_attempts", "recovered_failures", "unresolved_failures", "pending_submissions", "reserved_remaining", "available_remaining"];
+var id = /^[a-zA-Z0-9._:-]{1,128}$/;
+function validateDotSnapshot(value, now2 = Date.now()) {
+  if (!value || Array.isArray(value) || typeof value !== "object") throw Error("\uC2A4\uB0C5\uC0F7 \uAC1D\uCCB4\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.");
+  const permitted = /* @__PURE__ */ new Set(["schema_version", "snapshot_id", "ledger_generation_id", "revision", "day", "timezone", "source_as_of", "last_profile_observed_at", "sources", "metrics", "coverage", "execution", "login", "database_audit", "warnings", "exported_at", "runs"]);
+  if (Object.keys(value).some((k) => !permitted.has(k))) throw Error("\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uD544\uB4DC\uAC00 \uC788\uC2B5\uB2C8\uB2E4.");
+  if (value.schema_version !== "sanji.collection.snapshot.v1" || value.timezone !== "Asia/Seoul" || !id.test(value.snapshot_id || "") || !id.test(value.ledger_generation_id || "") || !id.test(value.revision || "")) throw Error("\uC2A4\uB0C5\uC0F7 \uC2DD\uBCC4 \uC815\uBCF4\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+  if (typeof value.day !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value.day) || (/* @__PURE__ */ new Date(value.day + "T00:00:00Z")).toISOString().slice(0, 10) !== value.day) throw Error("\uB0A0\uC9DC\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+  if (!value.metrics || Array.isArray(value.metrics) || typeof value.metrics !== "object") throw Error("\uC9C0\uD45C\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.");
+  const keys = [...metrics, "known_unique_handles", "usage_cost"];
+  if (Object.keys(value.metrics).some((k) => !keys.includes(k))) throw Error("\uC54C \uC218 \uC5C6\uB294 \uC9C0\uD45C\uC785\uB2C8\uB2E4.");
+  for (const k of keys) {
+    const n = value.metrics[k];
+    if (n !== null && (typeof n !== "number" || !Number.isFinite(n) || n < 0 || k !== "usage_cost" && !Number.isSafeInteger(n))) throw Error(k + " \uAC12\uC774 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+  }
+  const stamp = (s) => typeof s === "string" && Number.isFinite(Date.parse(s)) && /(Z|[+-]\d\d:\d\d)$/.test(s) && Date.parse(s) <= now2 + 3e5;
+  if (!stamp(value.source_as_of) || !stamp(value.exported_at) || Date.parse(value.source_as_of) > Date.parse(value.exported_at)) throw Error("\uAD00\uCC30 \uC2DC\uAC01\uC774 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+  if (value.last_profile_observed_at !== null && !stamp(value.last_profile_observed_at)) throw Error("\uD504\uB85C\uD544 \uAD00\uCC30 \uC2DC\uAC01\uC774 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+  for (const k of ["coverage", "execution", "login", "database_audit"]) if (!value[k] || Array.isArray(value[k]) || typeof value[k] !== "object") throw Error(k + " \uC815\uBCF4\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.");
+  for (const k of ["sources", "warnings", "runs"]) if (!Array.isArray(value[k]) || value[k].length > 1e3) throw Error(k + " \uC815\uBCF4\uAC00 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+  const inspect = (x, depth = 0) => {
+    if (depth > 8) throw Error("\uC2A4\uB0C5\uC0F7 \uAD6C\uC870\uAC00 \uB108\uBB34 \uAE4A\uC2B5\uB2C8\uB2E4.");
+    if (typeof x === "string" && (x.length > 1e3 || /[\w.+-]+@[\w.-]+\.[a-z]{2,}/i.test(x) || /\b(?:sk-|bearer\s+|eyJ[a-zA-Z0-9_-]{16})/i.test(x) || /(?:\/workspace\/|\/home\/|\/tmp\/)/i.test(x))) throw Error("\uC9D1\uACC4\uC5D0 \uAC1C\uC778 \uC815\uBCF4\uB098 \uBE44\uBC00\uAC12\uC744 \uD3EC\uD568\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+    if (Array.isArray(x)) {
+      if (x.length > 1e3) throw Error("\uBAA9\uB85D\uC774 \uB108\uBB34 \uAE41\uB2C8\uB2E4.");
+      for (const v of x) inspect(v, depth + 1);
+    } else if (x && typeof x === "object") for (const [k, v] of Object.entries(x)) {
+      if (/token|secret|password|cookie|email|handle|path/i.test(k) && !["unique_handles", "known_unique_handles"].includes(k)) throw Error("\uAC1C\uC778\uC815\uBCF4\uB098 \uBE44\uBC00 \uD544\uB4DC\uB294 \uC800\uC7A5\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      inspect(v, depth + 1);
+    }
+  };
+  inspect(value);
+  if (JSON.stringify(value).length > 25e4) throw Error("\uC2A4\uB0C5\uC0F7\uC774 \uB108\uBB34 \uD07D\uB2C8\uB2E4.");
+  return value;
+}
+
 // supabase/functions/_shared/operations-dashboard.ts
+var projectDotSnapshot = (snapshot, now2) => {
+  const p = snapshot.payload, m = p.metrics || {}, q = p.coverage || {}, quality = (k) => typeof q[k] === "string" ? q[k] : q[k]?.status || q[k]?.quality || "unavailable", v = (k) => quality(k) === "complete" && typeof m[k] === "number" && Number.isFinite(m[k]) ? m[k] : null, observed = p.login?.observed_at, age = observed ? Date.parse(now2) - Date.parse(observed) : Infinity, loginState = age >= 0 && age <= 9e5 && !p.login?.stale ? p.login?.current_state : "unknown";
+  return { day: p.day, checked: v("checked_attempts"), uniqueHandles: v("unique_handles"), failed: v("unresolved_failures"), goal: v("target"), remaining: v("available_remaining"), existing: v("existing_on_import"), preskipped: v("duplicates_preskipped"), newSaved: v("new_saved"), failedAttempts: v("failed_attempts"), recoveredFailures: v("recovered_failures"), pending: v("pending_submissions"), reserved: v("reserved_remaining"), state: Date.parse(now2) - Date.parse(p.source_as_of) <= 9e5 ? p.execution?.state || "unavailable" : "unavailable", loginState, stateObservedAt: observed || null, sourceAsOf: p.source_as_of, receivedAt: snapshot.received_at, coverage: q };
+};
 var kst = (value) => {
   const date2 = new Date(value);
   return Number.isFinite(date2.getTime()) ? new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" }).format(date2) : null;
@@ -15,7 +56,7 @@ function aggregateOperations({ batches, outbox, candidates, jobs, drafts, thread
     d.batches++;
     byDay.set(day3, d);
   }
-  const kinds = new Map(candidates.map((r) => [r.id, r.data?.kind])), brand = (id) => ["\uBE0C\uB79C\uB4DC", "\uC81C\uC870\uC0AC", "\uACF5\uC2DD \uC720\uD1B5\uC0AC"].includes(String(kinds.get(id) || "")), known = (id) => brand(id) || kinds.get(id) === "\uD06C\uB9AC\uC5D0\uC774\uD130", outbound = outbox.filter((o) => o.channel === "email" && brand(o.target) && o.data?.proposalType !== "creator_product_proposal");
+  const kinds = new Map(candidates.map((r) => [r.id, r.data?.kind])), brand = (id2) => ["\uBE0C\uB79C\uB4DC", "\uC81C\uC870\uC0AC", "\uACF5\uC2DD \uC720\uD1B5\uC0AC"].includes(String(kinds.get(id2) || "")), known = (id2) => brand(id2) || kinds.get(id2) === "\uD06C\uB9AC\uC5D0\uC774\uD130", outbound = outbox.filter((o) => o.channel === "email" && brand(o.target) && o.data?.proposalType !== "creator_product_proposal");
   const sendDays = /* @__PURE__ */ new Map();
   for (const o of outbound) if (o.status === "accepted") {
     const day3 = kst(o.created);
@@ -50,7 +91,7 @@ function aggregateOperations({ batches, outbox, candidates, jobs, drafts, thread
       }
     }
   }
-  return { creator: { today: byDay.get(today) || null, days: [...byDay.values()].sort((a, b) => b.day.localeCompare(a.day)), telemetry: { checked: null, uniqueHandles: null, failed: null, goal: null, remaining: null, state: "unavailable" } }, brand: { today, yesterday, discoveryHistory: discovery2, acceptedToday: sendDays.get(today) || 0, acceptedYesterday: sendDays.get(yesterday) || 0, sendDays: [...sendDays].sort(([a], [b]) => b.localeCompare(a)).map(([day3, accepted]) => ({ day: day3, accepted })), queued: brandJobs.filter((j) => j.status === "queued").length, processing: brandJobs.filter((j) => j.status === "processing").length, review: brandJobs.filter((j) => ["failed", "review_pending", "outcome_unknown"].includes(j.status)).length, bounceAddressesToday: addr.size, bounceAttributedToday: exact.size, unclassifiedOutbox: outbox.filter((o) => o.channel === "email" && !known(o.target)).length, unclassifiedJobs: jobs.filter((j) => {
+  return { creator: { telemetryDays: [], today: byDay.get(today) || null, days: [...byDay.values()].sort((a, b) => b.day.localeCompare(a.day)), telemetry: { checked: null, uniqueHandles: null, failed: null, goal: null, remaining: null, state: "unavailable" } }, brand: { today, yesterday, discoveryHistory: discovery2, acceptedToday: sendDays.get(today) || 0, acceptedYesterday: sendDays.get(yesterday) || 0, sendDays: [...sendDays].sort(([a], [b]) => b.localeCompare(a)).map(([day3, accepted]) => ({ day: day3, accepted })), queued: brandJobs.filter((j) => j.status === "queued").length, processing: brandJobs.filter((j) => j.status === "processing").length, review: brandJobs.filter((j) => ["failed", "review_pending", "outcome_unknown"].includes(j.status)).length, bounceAddressesToday: addr.size, bounceAttributedToday: exact.size, unclassifiedOutbox: outbox.filter((o) => o.channel === "email" && !known(o.target)).length, unclassifiedJobs: jobs.filter((j) => {
     const d = draftMap.get(j.draft_id);
     return !d || !d.channel || !known(d.target);
   }).length } };
@@ -79,6 +120,11 @@ function operationsDashboard({ sb: sb2, query: query2 }) {
     const ids = [...new Set([...outbox.rows.map((o) => o.target), ...drafts.map((d) => d.data?.target), ...threads.rows.map((t) => t.data?.target)].filter((x) => typeof x === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(x)))], candidates = [];
     for (let i = 0; i < ids.length; i += 100) candidates.push(...await query2(sb2.from("sanji_records").select("id,data").eq("owner", owner).eq("kind", "candidate").in("id", ids.slice(i, i + 100))));
     const result = aggregateOperations({ batches: batches.rows, outbox: outbox.rows, candidates, jobs: jobs.rows, drafts, threads: threads.rows.filter((t) => t.data?.messages), discovery: discovery2, now: now2 });
+    const heads = await query2(sb2.from("sanji_dot_snapshot_head").select("snapshot_id,day").eq("owner", owner).order("day", { ascending: false }).range(0, 29));
+    const snapshots = heads.length ? await query2(sb2.from("sanji_dot_snapshot").select("snapshot_id,payload,received_at").eq("owner", owner).in("snapshot_id", heads.map((h) => h.snapshot_id))) : [];
+    result.creator.telemetryDays = snapshots.map((row) => projectDotSnapshot(row, now2)).sort((a, b) => b.day.localeCompare(a.day));
+    const snapshot = result.creator.telemetryDays.find((d) => d.day === kst(now2));
+    if (snapshot) result.creator.telemetry = snapshot;
     return { ...result, creator: { ...result.creator, total: totalResult.count, newStoredToday: newResult.count, complete: batches.complete }, brand: { ...result.brand, complete: { outbox: outbox.complete, jobs: jobs.complete, threads: threads.complete } }, checkedAt: now2 };
   };
 }
@@ -111,9 +157,9 @@ function creatorInstagramInbox({ sb: sb2, query: query2, connection: connection2
     const rows = await query2(sb2.from("sanji_connections").select("provider,summary").eq("owner", owner).like("provider", "instagram:%"));
     const valid = rows.filter((r) => r.summary?.connected === true && r.summary?.apiVerified === true && String(r.summary?.username || "").toLowerCase() === "valu_est" && r.provider === "instagram:" + r.summary?.accountId && /^\d+$/.test(String(r.summary?.accountId)));
     if (valid.length !== 1) throw Error("@valu_est \uACF5\uC2DD \uC5F0\uACB0\uC744 \uD655\uC778\uD558\uC138\uC694");
-    const id = String(valid[0].summary.accountId), session = await connection2(owner, valid[0].provider);
-    if (!session?.access_token || String(session.id) !== id || String(session.username || "").toLowerCase() !== "valu_est" || !Number.isFinite(Number(session.expires)) || Number(session.expires) <= Date.now()) throw Error("Instagram \uC5F0\uACB0\uC774 \uB9CC\uB8CC\uB410\uAC70\uB098 \uACC4\uC815\uC774 \uB2E4\uB985\uB2C8\uB2E4");
-    return { id, token: session.access_token };
+    const id2 = String(valid[0].summary.accountId), session = await connection2(owner, valid[0].provider);
+    if (!session?.access_token || String(session.id) !== id2 || String(session.username || "").toLowerCase() !== "valu_est" || !Number.isFinite(Number(session.expires)) || Number(session.expires) <= Date.now()) throw Error("Instagram \uC5F0\uACB0\uC774 \uB9CC\uB8CC\uB410\uAC70\uB098 \uACC4\uC815\uC774 \uB2E4\uB985\uB2C8\uB2E4");
+    return { id: id2, token: session.access_token };
   }
   async function capture(owner, e) {
     return query2(sb2.rpc("sanji_instagram_capture", { p_owner: owner, p_account: e.accountId, p_peer: e.peerId, p_mid: e.messageId, p_at: e.receivedAt, p_body: e.text }));
@@ -253,9 +299,9 @@ function creatorInstagramReadiness(rows, expected = "valu_est") {
 // supabase/functions/_shared/creator-manual-dm.ts
 function creatorManualDmService({ sb: sb2, query: query2, audit: audit2 }) {
   return async (path, owner, input) => {
-    const b = await input(), id = String(b.creatorId || ""), version = Number(b.version);
-    if (!/^[0-9a-f-]{36}$/i.test(id) || !Number.isInteger(version) || version < 1) throw Error("\uD06C\uB9AC\uC5D0\uC774\uD130\uC640 \uAC80\uD1A0 \uBC84\uC804\uC744 \uD655\uC778\uD558\uC138\uC694.");
-    const row = await query2(sb2.from("sanji_creator_contact_review").select("creator_id,version,data").eq("owner", owner).eq("creator_id", id).maybeSingle()), creator = await query2(sb2.from("sanji_creator_recovery").select("id,handle,profile_url").eq("owner", owner).eq("id", id).maybeSingle());
+    const b = await input(), id2 = String(b.creatorId || ""), version = Number(b.version);
+    if (!/^[0-9a-f-]{36}$/i.test(id2) || !Number.isInteger(version) || version < 1) throw Error("\uD06C\uB9AC\uC5D0\uC774\uD130\uC640 \uAC80\uD1A0 \uBC84\uC804\uC744 \uD655\uC778\uD558\uC138\uC694.");
+    const row = await query2(sb2.from("sanji_creator_contact_review").select("creator_id,version,data").eq("owner", owner).eq("creator_id", id2).maybeSingle()), creator = await query2(sb2.from("sanji_creator_recovery").select("id,handle,profile_url").eq("owner", owner).eq("id", id2).maybeSingle());
     if (!row || !creator) throw Error("\uD574\uB2F9 \uD06C\uB9AC\uC5D0\uC774\uD130\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
     if (row.version !== version) throw Error("\uB2E4\uB978 \uACF3\uC5D0\uC11C \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uBD88\uB7EC\uC624\uC138\uC694.");
     const dm = row.data?.dm || {}, events = Array.isArray(dm.manualEvents) ? dm.manualEvents : [];
@@ -286,9 +332,9 @@ function creatorManualDmService({ sb: sb2, query: query2, audit: audit2 }) {
       if (text3.length > 5e3) throw Error("\uB2F5\uC7A5 \uCD08\uC548\uC740 5000\uC790 \uC774\uD558\uC785\uB2C8\uB2E4.");
       next = { ...dm, replyDraft: text3 };
     } else throw Error("\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uC791\uC5C5");
-    const changed = await query2(sb2.from("sanji_creator_contact_review").update({ data: { ...row.data, dm: next }, version: row.version + 1, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("creator_id", id).eq("version", version).select("creator_id"));
+    const changed = await query2(sb2.from("sanji_creator_contact_review").update({ data: { ...row.data, dm: next }, version: row.version + 1, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("creator_id", id2).eq("version", version).select("creator_id"));
     if (!changed.length) throw Error("\uB2E4\uB978 \uACF3\uC5D0\uC11C \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uBD88\uB7EC\uC624\uC138\uC694.");
-    await audit2(owner, "creator_dm_manual_recorded", { creator: id, kind: path.endsWith("dm-event") ? b.event.kind : "reply_draft", noDispatch: true });
+    await audit2(owner, "creator_dm_manual_recorded", { creator: id2, kind: path.endsWith("dm-event") ? b.event.kind : "reply_draft", noDispatch: true });
     return { ok: true, duplicate: false, version: version + 1 };
   };
 }
@@ -303,7 +349,7 @@ function assertCreatorProposalSnapshot(owner, candidate2, review, creator, input
   if (["scheduled", "sent", "unknown"].includes(e.observation?.status)) throw Error("\uC774\uBBF8 \uC678\uBD80 \uC608\uC57D\xB7\uBC1C\uC1A1\uB410\uAC70\uB098 \uD655\uC778\uC774 \uD544\uC694\uD569\uB2C8\uB2E4.");
   if (!Array.isArray(input.dealIds) || input.dealIds.length < 1 || input.dealIds.length > 3 || new Set(input.dealIds).size !== input.dealIds.length) throw Error("\uC81C\uC548 \uC0C1\uD488 1~3\uAC1C\uB97C \uD655\uC778\uD558\uC138\uC694.");
   const approved = e.productIds;
-  if (!Array.isArray(approved) || approved.length !== input.dealIds.length || new Set(approved).size !== approved.length || approved.some((id) => !input.dealIds.includes(id))) throw Error("\uC2B9\uC778\uD55C \uC0C1\uD488\uACFC \uC81C\uC548 \uC0C1\uD488\uC774 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
+  if (!Array.isArray(approved) || approved.length !== input.dealIds.length || new Set(approved).size !== approved.length || approved.some((id2) => !input.dealIds.includes(id2))) throw Error("\uC2B9\uC778\uD55C \uC0C1\uD488\uACFC \uC81C\uC548 \uC0C1\uD488\uC774 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
   return { creatorReviewId: creator.id, creatorReviewVersion: review.version, proposalType: "creator_product_proposal" };
 }
 
@@ -312,10 +358,10 @@ async function tagbyBatchPreview(owner, rows, sb2, query2) {
   if (!Array.isArray(rows) || !rows.length || rows.length > 30) throw Error("\uAD00\uCC30 \uC790\uB8CC\uB294 1~30\uD589\uC774\uC5B4\uC57C \uD569\uB2C8\uB2E4.");
   const normalized = [], seen = /* @__PURE__ */ new Set();
   for (const x of rows) {
-    const id = String(x.creatorId || ""), handle2 = String(x.handle || "").replace(/^@/, "").toLowerCase(), version = Number(x.version), o = x.observation || {}, counts = x.deliveryCounts || {}, reason = String(x.failureError || "").trim(), account = String(x.sourceAccount || "").replace(/^@/, "").toLowerCase(), sender = String(x.senderAccount || "").replace(/^@/, "").toLowerCase();
-    if (!/^[0-9a-f-]{36}$/i.test(id) || !/^[a-z0-9._]{1,30}$/.test(handle2) || !Number.isInteger(version) || version < 1 || !account || !sender || !/^[a-z0-9._]{1,30}$/.test(sender) || seen.has(id)) throw Error("\uC544\uC774\uB514\xB7\uBC84\uC804\xB7\uBC1C\uC2E0 \uACC4\uC815 \uB610\uB294 \uC911\uBCF5\uC744 \uD655\uC778\uD558\uC138\uC694.");
-    seen.add(id);
-    const review = await query2(sb2.from("sanji_creator_contact_review").select("creator_id,version,data").eq("owner", owner).eq("creator_id", id).maybeSingle()), creator = await query2(sb2.from("sanji_creator_recovery").select("id,handle").eq("owner", owner).eq("id", id).maybeSingle());
+    const id2 = String(x.creatorId || ""), handle2 = String(x.handle || "").replace(/^@/, "").toLowerCase(), version = Number(x.version), o = x.observation || {}, counts = x.deliveryCounts || {}, reason = String(x.failureError || "").trim(), account = String(x.sourceAccount || "").replace(/^@/, "").toLowerCase(), sender = String(x.senderAccount || "").replace(/^@/, "").toLowerCase();
+    if (!/^[0-9a-f-]{36}$/i.test(id2) || !/^[a-z0-9._]{1,30}$/.test(handle2) || !Number.isInteger(version) || version < 1 || !account || !sender || !/^[a-z0-9._]{1,30}$/.test(sender) || seen.has(id2)) throw Error("\uC544\uC774\uB514\xB7\uBC84\uC804\xB7\uBC1C\uC2E0 \uACC4\uC815 \uB610\uB294 \uC911\uBCF5\uC744 \uD655\uC778\uD558\uC138\uC694.");
+    seen.add(id2);
+    const review = await query2(sb2.from("sanji_creator_contact_review").select("creator_id,version,data").eq("owner", owner).eq("creator_id", id2).maybeSingle()), creator = await query2(sb2.from("sanji_creator_recovery").select("id,handle").eq("owner", owner).eq("id", id2).maybeSingle());
     if (!review || !creator || review.version !== version || creator.handle.toLowerCase() !== handle2 || review.data?.dm?.campaignUrl !== x.campaignUrl || String(review.data?.dm?.sourceAccount || "").replace(/^@/, "").toLowerCase() !== account) throw Error("\uC800\uC7A5\uB41C \uACC4\uC815\xB7\uCEA0\uD398\uC778\xB7\uBC84\uC804\uC774 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
     let u;
     try {
@@ -336,7 +382,7 @@ async function tagbyBatchPreview(owner, rows, sb2, query2) {
     const count = { success: n(counts.success), failed: n(counts.failed), waiting: n(counts.waiting) }, raw = String(o.status || "").trim();
     if (!raw || raw.length > 120 || reason.length > 500 || String(o.body || "").length > 5e3) throw Error("\uC6D0\uBCF8 \uC0C1\uD0DC \uB610\uB294 \uC2E4\uD328 \uC0AC\uC720\uB97C \uD655\uC778\uD558\uC138\uC694.");
     const state = /발송\s*여부.{0,15}확인.{0,10}(?:없|불가)/.test(reason + " " + raw) ? "delivery_unknown" : /대상\s*계정.{0,20}(?:찾지|없)/.test(reason + " " + raw) ? "failed" : reason && /^(?:FAIL|실패)$/i.test(raw) ? "failed" : /^(?:user_reported_sent|사용자 발송 확인|발송 일시 정지 · 사용자 수동발송 완료 진술\(제공사 성공 증거 아님\))$/i.test(raw) ? "user_reported_sent" : /^발송 일시 정지 · 새 재시도 중지\(이전 시도 미발송 사용자 확인\)$/.test(raw) ? "user_reported_not_sent" : /^발송 일시 정지 · 미시도 · 사용자 요청 중지$/.test(raw) && count.success === 0 && count.failed === 0 && count.waiting === 1 ? "paused_unattempted" : /^(?:중지|정지|취소|paused|cancelled|not_attempted)$/i.test(raw) && count.success === 0 && count.failed === 0 && count.waiting === 0 ? "not_attempted" : /^(?:대기|pending)$/i.test(raw) ? "pending" : /^(?:수신자 발송 성공|recipient_sent)$/i.test(raw) && count.success === 1 && count.failed === 0 && count.waiting === 0 ? "success" : "delivery_unknown";
-    normalized.push({ creatorId: id, version, handle: handle2, campaignUrl: x.campaignUrl, sourceAccount: account, senderAccount: sender, observation: { status: raw, observedAt: new Date(o.observedAt).toISOString(), sourceUrl: u.toString(), body: String(o.body || ""), actualScheduledAt: actual?.toISOString() || null }, deliveryCounts: count, failureError: reason, deliveryState: state, source: ["user_reported_sent", "user_reported_not_sent", "paused_unattempted"].includes(state) ? "user_reported" : "operator_observation" });
+    normalized.push({ creatorId: id2, version, handle: handle2, campaignUrl: x.campaignUrl, sourceAccount: account, senderAccount: sender, observation: { status: raw, observedAt: new Date(o.observedAt).toISOString(), sourceUrl: u.toString(), body: String(o.body || ""), actualScheduledAt: actual?.toISOString() || null }, deliveryCounts: count, failureError: reason, deliveryState: state, source: ["user_reported_sent", "user_reported_not_sent", "paused_unattempted"].includes(state) ? "user_reported" : "operator_observation" });
   }
   return normalized;
 }
@@ -429,7 +475,7 @@ function cleanCreatorReview(input) {
   const body = content(e.body, 15e3);
   if (sig && (!sig.text || sig.text !== String(e.signatureText || "") || !body.includes(sig.text))) throw Error("\uC11C\uBA85\uACFC \uBCF8\uBB38\uC774 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
   const productIds = e.productIds === void 0 ? [] : e.productIds;
-  if (!Array.isArray(productIds) || productIds.length > 3 || new Set(productIds).size !== productIds.length || productIds.some((id) => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id)))) throw Error("\uC81C\uC548 \uC0C1\uD488\uC744 \uD655\uC778\uD558\uC138\uC694.");
+  if (!Array.isArray(productIds) || productIds.length > 3 || new Set(productIds).size !== productIds.length || productIds.some((id2) => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id2)))) throw Error("\uC81C\uC548 \uC0C1\uD488\uC744 \uD655\uC778\uD558\uC138\uC694.");
   const email = text(e.address, 254).toLowerCase();
   if (email && !/^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(email)) throw Error("\uC774\uBA54\uC77C \uD615\uC2DD\uC744 \uD655\uC778\uD558\uC138\uC694.");
   if ((o.status || o.actualScheduledAt || o.body) && (!o.sourceUrl || !o.observedAt)) throw Error("\uD0DC\uADF8\uBC14\uC774 \uAD00\uCC30 \uCD9C\uCC98\uC640 \uD655\uC778 \uC2DC\uAC01\uC774 \uD544\uC694\uD569\uB2C8\uB2E4.");
@@ -466,8 +512,8 @@ function creatorContactReviewService({ sb: sb2, query: query2, audit: audit2 }) 
       return { count };
     }
     if (path === "/creator-contact-review/receipt" && method === "POST") {
-      const b = await input(), id = String(b.creatorId || ""), o = b.observation || {};
-      const old = await query2(sb2.from("sanji_creator_contact_review").select("*").eq("owner", owner).eq("creator_id", id).maybeSingle());
+      const b = await input(), id2 = String(b.creatorId || ""), o = b.observation || {};
+      const old = await query2(sb2.from("sanji_creator_contact_review").select("*").eq("owner", owner).eq("creator_id", id2).maybeSingle());
       if (!old || Number(b.version) !== old.version) throw Error("\uAC80\uD1A0 \uC790\uB8CC\uAC00 \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uBD88\uB7EC\uC624\uC138\uC694.");
       const email = old.data?.email || {};
       if (o.provider !== "gmail" || !["scheduled", "sent", "failed", "cancelled", "unknown"].includes(o.status)) throw Error("Gmail \uAD00\uCC30 \uC0C1\uD0DC\uB97C \uD655\uC778\uD558\uC138\uC694.");
@@ -484,14 +530,14 @@ function creatorContactReviewService({ sb: sb2, query: query2, audit: audit2 }) 
       const receipt = { provider: "gmail", status: o.status, scheduledAt: date(o.scheduledAt), observedAt: date(o.observedAt), providerMessageId: text(o.providerMessageId, 200), draftId: text(o.draftId, 200), recipient: String(o.recipient).toLowerCase(), subjectHash: String(o.subjectHash).toLowerCase(), bodyHash: String(o.bodyHash).toLowerCase(), sourceUrl: url2.toString() };
       if (receipt.status === "scheduled" && !receipt.scheduledAt) throw Error("\uC2E4\uC81C \uC608\uC57D \uC2DC\uAC01\uC774 \uD544\uC694\uD569\uB2C8\uB2E4.");
       if (!receipt.providerMessageId && !receipt.draftId) throw Error("\uBA54\uC2DC\uC9C0 \uB610\uB294 \uCD08\uC548 ID\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.");
-      const updated = await query2(sb2.from("sanji_creator_contact_review").update({ data: { ...old.data, email: { ...email, observation: receipt } }, version: old.version + 1, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("creator_id", id).eq("version", old.version).select("creator_id"));
+      const updated = await query2(sb2.from("sanji_creator_contact_review").update({ data: { ...old.data, email: { ...email, observation: receipt } }, version: old.version + 1, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("creator_id", id2).eq("version", old.version).select("creator_id"));
       if (!updated.length) throw Error("\uAC80\uD1A0 \uC790\uB8CC\uAC00 \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
-      await audit2(owner, "creator_gmail_receipt_recorded", { creator: id, status: receipt.status, noDispatch: true });
+      await audit2(owner, "creator_gmail_receipt_recorded", { creator: id2, status: receipt.status, noDispatch: true });
       return { ok: true, version: old.version + 1 };
     }
     if (path === "/creator-contact-review" && method === "POST") {
-      const b = await input(), id = String(b.creatorId || "");
-      const creator = await query2(sb2.from("sanji_creator_recovery").select("id,emails,profile_url").eq("owner", owner).eq("id", id).maybeSingle());
+      const b = await input(), id2 = String(b.creatorId || "");
+      const creator = await query2(sb2.from("sanji_creator_recovery").select("id,emails,profile_url").eq("owner", owner).eq("id", id2).maybeSingle());
       if (!creator) throw Error("\uD06C\uB9AC\uC5D0\uC774\uD130\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
       const data = cleanCreatorReview(b.data);
       for (const productId of data.email.productIds) {
@@ -507,7 +553,7 @@ function creatorContactReviewService({ sb: sb2, query: query2, audit: audit2 }) 
         }
         if (source.protocol !== "https:" || !["instagram.com", "www.instagram.com"].includes(source.hostname) || !creator.profile_url || source.pathname.replace(/\/$/, "").toLowerCase() !== new URL(creator.profile_url).pathname.replace(/\/$/, "").toLowerCase()) throw Error("\uD574\uB2F9 \uACC4\uC815\uC758 \uACF5\uAC1C \uC18C\uAC1C\uB780 \uCD9C\uCC98\uAC00 \uD544\uC694\uD569\uB2C8\uB2E4.");
       }
-      const previous = await query2(sb2.from("sanji_creator_contact_review").select("version,data").eq("owner", owner).eq("creator_id", id).maybeSingle());
+      const previous = await query2(sb2.from("sanji_creator_contact_review").select("version,data").eq("owner", owner).eq("creator_id", id2).maybeSingle());
       if (previous && Number(b.version) !== previous.version) throw Error("\uB2E4\uB978 \uACF3\uC5D0\uC11C \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uBD88\uB7EC\uC624\uC138\uC694.");
       if (previous?.data?.email?.observation) data.email.observation = previous.data.email.observation;
       if (b.data?.email?.productIds === void 0 && previous?.data?.email?.productIds) data.email.productIds = previous.data.email.productIds;
@@ -516,10 +562,10 @@ function creatorContactReviewService({ sb: sb2, query: query2, audit: audit2 }) 
       if (previous?.data?.dm?.replyDraft !== void 0) data.dm.replyDraft = previous.data.dm.replyDraft;
       const version = (previous?.version || 0) + 1;
       if (previous) {
-        const changed = await query2(sb2.from("sanji_creator_contact_review").update({ data, version, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("creator_id", id).eq("version", previous.version).select("creator_id"));
+        const changed = await query2(sb2.from("sanji_creator_contact_review").update({ data, version, updated: (/* @__PURE__ */ new Date()).toISOString() }).eq("owner", owner).eq("creator_id", id2).eq("version", previous.version).select("creator_id"));
         if (!changed.length) throw Error("\uB2E4\uB978 \uACF3\uC5D0\uC11C \uBCC0\uACBD\uB418\uC5C8\uC2B5\uB2C8\uB2E4. \uB2E4\uC2DC \uBD88\uB7EC\uC624\uC138\uC694.");
-      } else await query2(sb2.from("sanji_creator_contact_review").insert({ owner, creator_id: id, data, version }));
-      await audit2(owner, "creator_contact_review_saved", { creator: id, version });
+      } else await query2(sb2.from("sanji_creator_contact_review").insert({ owner, creator_id: id2, data, version }));
+      await audit2(owner, "creator_contact_review_saved", { creator: id2, version });
       return { ok: true, version };
     }
     if (path === "/creator-contact-review/move" && method === "POST") {
@@ -3076,19 +3122,19 @@ function discoveryService(deps) {
       await audit2(u, "discovery_cycle_completed", { processed, emails, companies, error, durationMs: Date.now() - cycleStarted });
     }
   }
-  async function enrich(u, id) {
-    const lead = await query2(sb2.from("sanji_discovery_leads").select("*").eq("owner", u).eq("id", id).single());
+  async function enrich(u, id2) {
+    const lead = await query2(sb2.from("sanji_discovery_leads").select("*").eq("owner", u).eq("id", id2).single());
     const source = lead.data.website || (lead.data.contacts || []).find((c) => c.discoveryMethod === "public_page" && c.source)?.source;
     const checked = (/* @__PURE__ */ new Date()).toISOString();
     if (!source || editorialSource(source, lead.data.publicEvidence || []) || !validBrandName(lead.data.name)) {
-      await query2(sb2.from("sanji_discovery_leads").update({ status: "blocked", data: { ...lead.data, officialRecheckRequested: false, officialRecheck: { status: "discovery_only", checked, reason: "\uC5B8\uB860\uC0AC\xB7\uAE30\uC0AC\xB7\uC911\uAC04 \uC0AC\uC774\uD2B8\uB294 \uBE0C\uB79C\uB4DC \uBC1C\uACAC \uCD9C\uCC98 \uC804\uC6A9" } } }).eq("owner", u).eq("id", id));
+      await query2(sb2.from("sanji_discovery_leads").update({ status: "blocked", data: { ...lead.data, officialRecheckRequested: false, officialRecheck: { status: "discovery_only", checked, reason: "\uC5B8\uB860\uC0AC\xB7\uAE30\uC0AC\xB7\uC911\uAC04 \uC0AC\uC774\uD2B8\uB294 \uBE0C\uB79C\uB4DC \uBC1C\uACAC \uCD9C\uCC98 \uC804\uC6A9" } } }).eq("owner", u).eq("id", id2));
       return { status: "discovery_only", name: lead.data.name };
     }
     const result = await crawl(publicUrl(source).origin + "/", 4), contacts = /* @__PURE__ */ new Map();
     for (const c of [...(lead.data.contacts || []).filter((c2) => !editorialSource(c2.source, lead.data.publicEvidence || [])), ...result.contacts || []]) contacts.set(String(c.email).toLowerCase() + "|" + c.source, c);
     const evidence = Array.from(new Map([...lead.data.publicEvidence || [], ...result.publicEvidence || []].map((p) => [p.url, p])).values());
-    await query2(sb2.from("sanji_discovery_leads").update({ ...lead.status === "new" ? { status: "review" } : {}, data: { ...lead.data, contacts: [...contacts.values()], publicEvidence: evidence, pages: result.pages, sourceAttempts: result.sourceAttempts || [], checked: result.checked || checked, error: result.error || "", evidenceError: result.error || "", evidenceChecked: checked, officialRecheckRequested: false, officialRecheck: { status: result.pages ? "checked" : "failed", checked, pages: result.pages, error: result.error || "" } }, updated: checked }).eq("owner", u).eq("id", id));
-    await audit2(u, "official_page_rechecked", { lead: id, pages: result.pages, emailCandidates: result.contacts?.length || 0, error: result.error || "", paidApiCalls: 0 });
+    await query2(sb2.from("sanji_discovery_leads").update({ ...lead.status === "new" ? { status: "review" } : {}, data: { ...lead.data, contacts: [...contacts.values()], publicEvidence: evidence, pages: result.pages, sourceAttempts: result.sourceAttempts || [], checked: result.checked || checked, error: result.error || "", evidenceError: result.error || "", evidenceChecked: checked, officialRecheckRequested: false, officialRecheck: { status: result.pages ? "checked" : "failed", checked, pages: result.pages, error: result.error || "" } }, updated: checked }).eq("owner", u).eq("id", id2));
+    await audit2(u, "official_page_rechecked", { lead: id2, pages: result.pages, emailCandidates: result.contacts?.length || 0, error: result.error || "", paidApiCalls: 0 });
     return { status: "official_rechecked", name: lead.data.name, pages: result.pages, emailCandidates: result.contacts?.length || 0, evidenceCount: result.publicEvidence?.length || 0, error: result.error || "" };
   }
   async function researchNext(u, requestedId = "", productOnly = false) {
@@ -3483,7 +3529,7 @@ function validateIntro(value, context) {
       "\uB3C4\uC785\uBD80\uC5D0 \uBBF8\uD655\uC778 \uD6A8\uB2A5\xB7\uBBFC\uAC10\uC815\uBCF4\xB7\uAC70\uB798 \uC870\uAC74\uC774 \uD3EC\uD568\uB418\uC5B4 \uC7AC\uC791\uC131\uC774 \uD544\uC694\uD569\uB2C8\uB2E4."
     );
   const ids = Array.isArray(value.evidenceIds) ? value.evidenceIds : [];
-  if (!ids.length || ids.some((id) => !context.evidence.some((e) => e.id === id)))
+  if (!ids.length || ids.some((id2) => !context.evidence.some((e) => e.id === id2)))
     throw new Error("\uB3C4\uC785\uBD80\uC758 \uACF5\uAC1C \uCD9C\uCC98 \uADFC\uAC70\uAC00 \uD655\uC778\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4.");
   return {
     intro,
@@ -3784,8 +3830,8 @@ async function remote(url2, options = {}, stage = "") {
   }
   return d;
 }
-async function owned(u, id, kind) {
-  let q = sb.from("sanji_records").select("*").eq("owner", u).eq("id", id);
+async function owned(u, id2, kind) {
+  let q = sb.from("sanji_records").select("*").eq("owner", u).eq("id", id2);
   if (kind) q = q.eq("kind", kind);
   const r = await query(q.maybeSingle());
   if (!r) fail(404, "\uD56D\uBAA9\uC744 \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
@@ -3820,15 +3866,15 @@ async function isBlocked(u, c) {
     sb.from("sanji_suppression").select("identity").eq("owner", u).in("identity", ids)
   )).length > 0;
 }
-async function putRecord(u, kind, data, id, expectedVersion) {
+async function putRecord(u, kind, data, id2, expectedVersion) {
   const clean2 = { ...data };
   delete clean2.id;
   delete clean2.version;
   delete clean2.updated;
-  const row = id ? { data: clean2, version: data.version + 1, updated: now() } : { owner: u, kind, data: clean2 };
-  if (id && expectedVersion !== void 0) return await query(sb.from("sanji_records").update(row).eq("id", id).eq("owner", u).eq("kind", kind).eq("version", expectedVersion).select().maybeSingle());
-  return id ? await query(
-    sb.from("sanji_records").update(row).eq("id", id).eq("owner", u).select().single()
+  const row = id2 ? { data: clean2, version: data.version + 1, updated: now() } : { owner: u, kind, data: clean2 };
+  if (id2 && expectedVersion !== void 0) return await query(sb.from("sanji_records").update(row).eq("id", id2).eq("owner", u).eq("kind", kind).eq("version", expectedVersion).select().maybeSingle());
+  return id2 ? await query(
+    sb.from("sanji_records").update(row).eq("id", id2).eq("owner", u).select().single()
   ) : await query(sb.from("sanji_records").insert(row).select().single());
 }
 async function gmailToken(u) {
@@ -4326,6 +4372,26 @@ Deno.serve(async (req) => {
       return text3 ? JSON.parse(text3) : {};
     };
     if (path === "/operations-dashboard" && req.method === "GET") return json(await readOperationsDashboard(u));
+    if (path === "/dot-snapshot/preview" && req.method === "POST") {
+      try {
+        const snapshot = validateDotSnapshot(await input());
+        const previewHash = await digest3(u + "\n" + JSON.stringify(snapshot));
+        return json({ snapshot, previewHash });
+      } catch (e) {
+        fail(400, String(e.message || "\uC2A4\uB0C5\uC0F7 \uC624\uB958"));
+      }
+    }
+    if (path === "/dot-snapshot/commit" && req.method === "POST") {
+      try {
+        const body = await input(), snapshot = validateDotSnapshot(body.snapshot);
+        const previewHash = await digest3(u + "\n" + JSON.stringify(snapshot));
+        if (body.previewHash !== previewHash) throw Error("\uB2E4\uC2DC \uBBF8\uB9AC\uBCF4\uAE30\uB97C \uD655\uC778\uD558\uC138\uC694.");
+        const result = await query(sb.rpc("sanji_store_dot_snapshot", { p_owner: u, p_data: snapshot }));
+        return json(result);
+      } catch (e) {
+        fail(400, String(e.message || "\uC2A4\uB0C5\uC0F7 \uC800\uC7A5 \uC624\uB958"));
+      }
+    }
     if (path === "/manual-reply" && req.method === "POST") {
       try {
         return json(await saveManualReply(u, await input()));
@@ -4783,7 +4849,7 @@ Deno.serve(async (req) => {
         fail(400, "\uACF5\uC2DD \uC5F0\uB77D\uCC98 \uD655\uC778\uC774 \uD544\uC694\uD569\uB2C8\uB2E4.");
       if (c.kind === "\uD06C\uB9AC\uC5D0\uC774\uD130" && inputData.channel !== "email" && !inputData.replyTo && c.contact?.verified && c.contact?.email) fail(400, "\uACF5\uAC1C \uC774\uBA54\uC77C\uC774 \uD655\uC778\uB41C \uD06C\uB9AC\uC5D0\uC774\uD130\uB294 \uC774\uBA54\uC77C\uB85C \uBA3C\uC800 \uC81C\uC548\uD558\uC138\uC694. DM \uC911\uBCF5 \uC81C\uC548\uC740 \uC9C4\uD589\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
       const deals = await Promise.all(
-        inputData.dealIds.map((id) => owned(u, id, "deal"))
+        inputData.dealIds.map((id2) => owned(u, id2, "deal"))
       );
       if (deals.some((d2) => d2.state !== "\uD655\uC815" && !(inputData.proposalType === "creator_product_proposal" && d2.state === "\uD611\uC758 \uC911")))
         fail(400, "\uC0C1\uD488\uC758 \uD604\uC7AC \uC0C1\uD0DC\uB85C\uB294 \uC81C\uC548\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");

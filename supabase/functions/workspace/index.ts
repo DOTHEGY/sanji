@@ -1,3 +1,4 @@
+import {validateDotSnapshot} from '../_shared/dot-snapshot.ts';
 import {operationsDashboard} from '../_shared/operations-dashboard.ts';
 import {creatorInstagramInbox} from '../_shared/creator-instagram-inbox.ts';
 import {templateLibraryService} from '../_shared/template-library.ts';
@@ -862,6 +863,9 @@ Deno.serve(async (req: Request) => {
       return text ? JSON.parse(text) : {};
     };
     if(path==="/operations-dashboard"&&req.method==="GET")return json(await readOperationsDashboard(u));
+    if(path==='/dot-snapshot/preview'&&req.method==='POST'){try{const snapshot=validateDotSnapshot(await input());const previewHash=await digest(u+'\n'+JSON.stringify(snapshot));return json({snapshot,previewHash});}catch(e){fail(400,String(e.message||'스냅샷 오류'));}}
+    if(path==='/dot-snapshot/commit'&&req.method==='POST'){try{const body=await input(),snapshot=validateDotSnapshot(body.snapshot);const previewHash=await digest(u+'\n'+JSON.stringify(snapshot));if(body.previewHash!==previewHash)throw Error('다시 미리보기를 확인하세요.');const result=await query(sb.rpc('sanji_store_dot_snapshot',{p_owner:u,p_data:snapshot}));return json(result);}catch(e){fail(400,String(e.message||'스냅샷 저장 오류'));}}
+
     if(path==="/manual-reply"&&req.method==="POST"){
       try{return json(await saveManualReply(u,await input()));}catch(e){fail(400,String(e.message||"수동 회신 저장 실패"));}
     }
