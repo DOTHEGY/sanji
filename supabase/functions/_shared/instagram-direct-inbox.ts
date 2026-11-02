@@ -17,28 +17,30 @@ export function instagramDirectInbox({sb,query,connection,remote,env}:any){
  }
  async function sync(owner:string,cursor?:string){
   const a=await account(owner),version=env('META_GRAPH_VERSION')||'v24.0';if(!/^v\d+\.\d+$/.test(version))throw Error('invalid version');
-  if(cursor!==undefined&&(typeof cursor!=='string'||cursor.includes('://')||!/^[A-Za-z0-9._~:+\/=-]{1,512}$/.test(cursor)))throw Error('잘못된 페이지');
-  const get=async(path:string,fields:URLSearchParams)=>remote('https://graph.instagram.com/'+version+'/'+(path==='me/conversations'?path:encodeURIComponent(path))+'?'+fields.toString(),{headers:{Authorization:'Bearer '+a.token}},'Instagram 대화 조회');
-  const params=new URLSearchParams({platform:'instagram',limit:'10'});if(cursor)params.set('after',cursor);
-  const conversations=await get('me/conversations',params);if(!Array.isArray(conversations?.data)||conversations.data.length>10)throw Error('대화 목록 확인 실패');let inserted=0,partialMessages=false;
-  for(const c of conversations.data.slice(0,10)){
-   if(typeof c.id!=='string'||!c.id||c.id.length>500)continue;
-   const thread=await get(c.id,new URLSearchParams({fields:'messages'}));if(!Array.isArray(thread?.messages?.data))throw Error('메시지 목록 확인 실패');
-   if(thread.messages.data.length>20||thread.messages.paging?.next)partialMessages=true;
-   for(const m of thread.messages.data.slice(0,20)){
-    if(typeof m.id!=='string'||!m.id||m.id.length>500)continue;
-    const detail=await get(m.id,new URLSearchParams({fields:'id,created_time,from,to,message'}));
-    const peer=String(detail.from?.id||''),at=Date.parse(detail.created_time),body=typeof detail.message==='string'?detail.message:'';
-    if(detail.id!==m.id||!/^\d+$/.test(peer)||peer===a.id||!detail.to?.data?.some((x:any)=>String(x.id)===a.id)||!Number.isFinite(at)||at>Date.now()+300000)continue;
-    if(at<Date.now()-90*86400000||body.length>10000){partialMessages=true;continue;}
-    const safeBody=body.trim()?body:'본문 없음 또는 조회 불가 · Instagram에서 확인 필요';
-    if(await capture(owner,{accountId:a.id,peerId:peer,messageId:detail.id,text:safeBody,receivedAt:new Date(at).toISOString()}))inserted++;
-   }
+  const validCursor=(x:any)=>typeof x==='string'&&!x.includes('://')&&/^[A-Za-z0-9._~:+\/=-]{1,512}$/.test(x);
+  let page:string|undefined,offset=0,threadId:string|undefined,prefix:string[]=[];
+  if(cursor?.startsWith('r1.')){try{const data=JSON.parse(atob(cursor.slice(3).replace(/-/g,'+').replace(/_/g,'/')));if((data.page!==null&&!validCursor(data.page))||typeof data.thread!=='string'||!data.thread||data.thread.length>500||!Number.isSafeInteger(data.offset)||data.offset<1||data.offset>19||!Array.isArray(data.prefix)||data.prefix.length!==data.offset||data.prefix.some((x:any)=>typeof x!=='string'||!x||x.length>500))throw Error('invalid');page=data.page||undefined;offset=data.offset;threadId=data.thread;prefix=data.prefix;}catch{throw Error('잘못된 이어보기');}}
+  else if(cursor!==undefined){if(!validCursor(cursor))throw Error('잘못된 페이지');page=cursor;}
+  const get=async(path:string,fields:URLSearchParams)=>remote('https://graph.instagram.com/'+version+'/'+(path==='me/conversations'?path:encodeURIComponent(path))+'?'+fields.toString(),{headers:{Authorization:'Bearer '+a.token},signal:AbortSignal.timeout(3500)},'Instagram 대화 조회');
+  const params=new URLSearchParams({platform:'instagram',limit:'1'});if(page)params.set('after',page);
+  const conversations=await get('me/conversations',params);if(!Array.isArray(conversations?.data)||conversations.data.length>1)throw Error('대화 목록 확인 실패');
+  const c=conversations.data[0];if(!c){if(offset||conversations?.paging?.next)throw Error('페이지가 변경되어 다시 확인해야 합니다');return {inserted:0,nextCursor:null,partialMessages:false};}
+  if(typeof c.id!=='string'||!c.id||c.id.length>500||(threadId&&threadId!==c.id))throw Error('대화가 변경되어 다시 확인해야 합니다');
+  const thread=await get(c.id,new URLSearchParams({fields:'messages'})),messages=thread?.messages?.data;if(!Array.isArray(messages))throw Error('메시지 목록 확인 실패');
+  if(prefix.some((id,i)=>messages[i]?.id!==id))throw Error('메시지가 변경되어 처음부터 다시 확인해야 합니다');
+  let inserted=0,partialMessages=messages.length>20||!!thread.messages.paging?.next;const end=Math.min(messages.length,20,offset+5);
+  for(let i=offset;i<end;i++){
+   const m=messages[i];if(typeof m?.id!=='string'||!m.id||m.id.length>500)throw Error('메시지 식별자를 확인할 수 없습니다');
+   const detail=await get(m.id,new URLSearchParams({fields:'id,created_time,from,to,message'}));
+   const peer=String(detail.from?.id||''),at=Date.parse(detail.created_time),body=typeof detail.message==='string'?detail.message:'';
+   if(detail.id!==m.id||!/^\d+$/.test(peer)||peer===a.id||!detail.to?.data?.some((x:any)=>String(x.id)===a.id)||!Number.isFinite(at)||at>Date.now()+300000)continue;
+   if(at<Date.now()-90*86400000||body.length>10000){partialMessages=true;continue;}
+   if(await capture(owner,{accountId:a.id,peerId:peer,messageId:detail.id,text:body.trim()?body:'본문 없음 또는 조회 불가 · Instagram에서 확인 필요',receivedAt:new Date(at).toISOString()}))inserted++;
   }
-  const after=conversations?.paging?.next?conversations?.paging?.cursors?.after:null;
-  if(after!=null&&(typeof after!=='string'||after.includes('://')||!/^[A-Za-z0-9._~:+\/=-]{1,512}$/.test(after)))throw Error('다음 페이지 확인 실패');
-  if(conversations?.paging?.next&&!after)throw Error('다음 페이지 확인 실패');
-  return {inserted,nextCursor:after||null,partialMessages};
+  let nextCursor:string|null=null;
+  if(end<Math.min(messages.length,20)){const ids=messages.slice(0,end).map((m:any)=>m?.id);if(ids.some((x:any)=>typeof x!=='string'||!x||x.length>500))throw Error('메시지 식별자를 확인할 수 없습니다');nextCursor='r1.'+btoa(JSON.stringify({page:page||null,thread:c.id,offset:end,prefix:ids})).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
+  else if(conversations?.paging?.next){const after=conversations?.paging?.cursors?.after;if(!validCursor(after))throw Error('다음 페이지 확인 실패');nextCursor=after;}
+  return {inserted,nextCursor,partialMessages};
  }
  async function reply(owner:string,b:any){
   if(env('INSTAGRAM_DIRECT_REPLY_ENABLED')!=='true')throw Error('Instagram 답장 발송이 비활성화되어 있습니다.');
