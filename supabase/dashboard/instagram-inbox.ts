@@ -55,7 +55,7 @@ var stages = /* @__PURE__ */ new Set(["state", "short_exchange", "long_exchange"
 function fail(stage, cause) {
   const error = Error("Instagram \uC5F0\uACB0\uC744 \uC644\uB8CC\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
   error.oauthStage = stages.has(stage) ? stage : "state";
-  if (["unsupported_user_id_field", "unsupported_username_field", "unsupported_get_request", "invalid_parameter"].includes(cause?.compatibility)) error.compatibility = cause.compatibility;
+  if (["unsupported_user_id_field", "unsupported_username_field", "unsupported_get_request", "invalid_parameter", "invalid_access_token", "invalid_client_secret", "invalid_grant_type"].includes(cause?.compatibility)) error.compatibility = cause.compatibility;
   if (Number.isSafeInteger(cause?.status) && cause.status >= 100 && cause.status <= 599) error.status = cause.status;
   for (const key2 of ["httpStatus", "metaCode", "metaSubcode"]) {
     const n = cause?.[key2];
@@ -366,12 +366,14 @@ function instagramInboxHandler({ sb: sb2, query: query2, env: env2, key: key2, d
           const previous = safe.previousLongFailure;
           if (previous && ["invalid_response", "provider_or_network_failure"].includes(previous.failureKind)) {
             record.long_exchange_failure_kind = previous.failureKind;
+            if (["invalid_access_token", "invalid_client_secret", "invalid_grant_type", "invalid_parameter"].includes(previous.compatibility)) record.long_exchange_error_kind = previous.compatibility;
             for (const [key3, name] of [["httpStatus", "long_exchange_http_status"], ["metaCode", "long_exchange_meta_code"], ["metaSubcode", "long_exchange_meta_subcode"]]) if (Number.isSafeInteger(previous[key3]) && previous[key3] >= 0 && previous[key3] <= 2147483647) record[name] = previous[key3];
           }
           record.profile_request = "versioned_me_user_id_username";
           record.profile_version = !env2("META_GRAPH_VERSION") || env2("META_GRAPH_VERSION") === "v24.0" ? "v24_default_or_configured" : "configured_other";
           if (["unsupported_user_id_field", "unsupported_username_field", "unsupported_get_request", "invalid_parameter"].includes(safe.compatibility)) record.profile_error_kind = safe.compatibility;
         }
+        if (safe.oauthStage === "long_exchange" && ["invalid_access_token", "invalid_client_secret", "invalid_grant_type", "invalid_parameter"].includes(safe.compatibility)) record.long_exchange_error_kind = safe.compatibility;
         for (const [key3, name] of [["httpStatus", "http_status"], ["metaCode", "meta_code"], ["metaSubcode", "meta_subcode"]]) if (Number.isSafeInteger(safe[key3]) && safe[key3] >= 0 && safe[key3] <= 2147483647) record[name] = safe[key3];
         console.error(JSON.stringify(record));
       }
@@ -385,12 +387,16 @@ function instagramInboxHandler({ sb: sb2, query: query2, env: env2, key: key2, d
 
 // supabase/functions/instagram-inbox/meta-compatibility.ts
 function metaCompatibility(data) {
-  const e = data?.error;
-  if (e?.code !== 100 || typeof e?.message !== "string") return null;
-  const s = e.message.slice(0, 300);
+  const e = data?.error && typeof data.error === "object" ? data.error : data;
+  const message = typeof e?.message === "string" ? e.message : e?.error_message;
+  if (e?.code !== 100 || typeof message !== "string") return null;
+  const s = message.slice(0, 300);
   if (/^\s*(?:\(#100\)\s*)?tried accessing nonexisting field\s*\(user_id\)\s+on node type\b/i.test(s)) return "unsupported_user_id_field";
   if (/^\s*(?:\(#100\)\s*)?tried accessing nonexisting field\s*\(username\)\s+on node type\b/i.test(s)) return "unsupported_username_field";
   if (/^\s*(?:\(#100\)\s*)?unsupported get request\b/i.test(s)) return "unsupported_get_request";
+  if (/^\s*(?:\(#100\)\s*)?invalid (?:oauth )?access token\b/i.test(s) || /^\s*(?:\(#100\)\s*)?error validating access token\b/i.test(s)) return "invalid_access_token";
+  if (/^\s*(?:\(#100\)\s*)?invalid client secret\b/i.test(s)) return "invalid_client_secret";
+  if (/^\s*(?:\(#100\)\s*)?invalid grant[_ ]type\b/i.test(s)) return "invalid_grant_type";
   if (/^\s*(?:\(#100\)\s*)?invalid (?:parameter|argument)\b/i.test(s)) return "invalid_parameter";
   return null;
 }
