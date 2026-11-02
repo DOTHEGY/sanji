@@ -44,4 +44,4 @@
 
 운영 적용 시 새 테이블 `sanji_dot_snapshot`, `sanji_dot_snapshot_head`, `security definer` 함수 `sanji_store_dot_snapshot(uuid,jsonb)`가 필요합니다. 테이블에 RLS를 적용하고 anon/authenticated 권한은 부여하지 않으며 service_role을 포함한 기존 테이블 직접 권한을 명시적으로 회수한 뒤 service_role에 SELECT와 저장 함수 실행만 허용합니다. 함수는 멤버 여부를 재검증하고 소유자를 인증된 API에서 전달받습니다. DB 구조와 함수 권한 적용은 별도 승인과 보안 검토가 필요합니다. collector 계정·자격증명·잠금 또는 실행 설정은 전달하거나 변경하지 않습니다. 스냅샷의 새 저장 수는 DB 실제 신규 저장 수와 별도로 취급합니다. 이 변경은 아직 운영에 적용되지 않았습니다.
 
-실제 dot exporter의 비식별 출력 한 건과 맞대는 계약 검증은 아직 수행하지 않았습니다. 특히 coverage 내부의 지표별 `complete` 표기와 run·source 객체의 필드 모양을 최종 대조해야 합니다. 미확인 상태에서는 수치가 확인 불가로 표시될 수 있고, 이 브랜치의 적용이나 자료 전송을 진행하면 안 됩니다.
+독립 검토에서 실제 dot exporter의 10월 30일·11월 2일 비식별 출력으로 validator와 수치 projection을 대조했습니다. 부분 고유 수와 빈 DB audit, 로그인 대기·오래된 상태도 확인했습니다. SQL 실행과 권한 테스트는 이 브랜치의 로컬 PGlite 검사에서 수행했으며 독립 검토자가 별도로 SQL을 실행한 것은 아닙니다. 이 검증은 운영 적용이나 자료 전송을 뜻하지 않습니다.
