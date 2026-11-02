@@ -3,7 +3,7 @@ const kst=(value:any)=>{const date=new Date(value);return Number.isFinite(date.g
 export function aggregateOperations({batches,outbox,candidates,jobs,drafts,threads,discovery,now}:any){
  const today=kst(now),yesterday=kst(new Date(Date.parse(now)-86400000)),byDay=new Map<string,any>();
  for(const b of batches){const day=kst(b.created);if(!day)continue;const d=byDay.get(day)||{day,received:0,added:0,existing:0,batches:0};d.received+=Number(b.processed)||0;d.added+=Number(b.added)||0;d.existing+=Number(b.existing)||0;d.batches++;byDay.set(day,d);}
- const kinds=new Map(candidates.map((r:any)=>[r.id,r.data?.kind])),brand=(id:any)=>['브랜드','제조사','공식 유통사'].includes(String(kinds.get(id)||'')),known=(id:any)=>brand(id)||kinds.get(id)==='크리에이터',outbound=outbox.filter((o:any)=>o.channel==='email'&&brand(o.target));
+ const kinds=new Map(candidates.map((r:any)=>[r.id,r.data?.kind])),brand=(id:any)=>['브랜드','제조사','공식 유통사'].includes(String(kinds.get(id)||'')),known=(id:any)=>brand(id)||kinds.get(id)==='크리에이터',outbound=outbox.filter((o:any)=>o.channel==='email'&&brand(o.target)&&o.data?.proposalType!=='creator_product_proposal');
  const sendDays=new Map<string,number>();for(const o of outbound)if(o.status==='accepted'){const day=kst(o.created);if(day)sendDays.set(day,(sendDays.get(day)||0)+1);}
  const draftMap=new Map(drafts.map((d:any)=>[d.id,d.data||{}])),brandJobs=jobs.filter((j:any)=>{const d:any=draftMap.get(j.draft_id);return d?.channel==='email'&&brand(d.target)&&d?.proposalType!=='creator_product_proposal';});
  const acceptedByTarget=new Map<string,any[]>();for(const o of outbound){if(o.status!=='accepted')continue;const rows=acceptedByTarget.get(o.target)||[];rows.push(o);acceptedByTarget.set(o.target,rows);}

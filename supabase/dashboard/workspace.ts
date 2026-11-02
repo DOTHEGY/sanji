@@ -15,7 +15,7 @@ function aggregateOperations({ batches, outbox, candidates, jobs, drafts, thread
     d.batches++;
     byDay.set(day3, d);
   }
-  const kinds = new Map(candidates.map((r) => [r.id, r.data?.kind])), brand = (id) => ["\uBE0C\uB79C\uB4DC", "\uC81C\uC870\uC0AC", "\uACF5\uC2DD \uC720\uD1B5\uC0AC"].includes(String(kinds.get(id) || "")), known = (id) => brand(id) || kinds.get(id) === "\uD06C\uB9AC\uC5D0\uC774\uD130", outbound = outbox.filter((o) => o.channel === "email" && brand(o.target));
+  const kinds = new Map(candidates.map((r) => [r.id, r.data?.kind])), brand = (id) => ["\uBE0C\uB79C\uB4DC", "\uC81C\uC870\uC0AC", "\uACF5\uC2DD \uC720\uD1B5\uC0AC"].includes(String(kinds.get(id) || "")), known = (id) => brand(id) || kinds.get(id) === "\uD06C\uB9AC\uC5D0\uC774\uD130", outbound = outbox.filter((o) => o.channel === "email" && brand(o.target) && o.data?.proposalType !== "creator_product_proposal");
   const sendDays = /* @__PURE__ */ new Map();
   for (const o of outbound) if (o.status === "accepted") {
     const day3 = kst(o.created);
