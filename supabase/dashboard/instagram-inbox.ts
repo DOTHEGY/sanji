@@ -324,7 +324,7 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
     if (!Array.isArray(inbound) || !inbound.length) throw Error("\uD655\uC778\uB41C \uC218\uC2E0 \uB300\uD654\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4");
     const version = env2("META_GRAPH_VERSION") || "v24.0";
     if (!/^v\d+\.\d+$/.test(version)) throw Error("invalid version");
-    const observedAt = (/* @__PURE__ */ new Date()).toISOString(), profile = await remote2("https://graph.instagram.com/" + version + "/" + encodeURIComponent(peerId) + "?" + new URLSearchParams({ fields: "name,username" }), { headers: { Authorization: "Bearer " + a.token }, signal: AbortSignal.timeout(3500) }, "Instagram \uC0C1\uB300 \uACC4\uC815 \uC870\uD68C");
+    const observedAt = (/* @__PURE__ */ new Date()).toISOString(), profile = await remote2("https://graph.instagram.com/" + version + "/" + encodeURIComponent(peerId) + "?" + new URLSearchParams({ fields: "name,username" }), { method: "GET", headers: { Authorization: "Bearer " + a.token }, signal: AbortSignal.timeout(3500) }, "Instagram \uC0C1\uB300 \uACC4\uC815 \uC870\uD68C");
     if (profile?.id != null && String(profile.id) !== peerId) throw Error("\uC0C1\uB300 \uACC4\uC815\uC774 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4");
     const safe = safePeer(profile);
     if (!safe.username && !safe.name) return { found: false };
