@@ -1,0 +1,317 @@
+// supabase/functions/instagram-inbox/index.ts
+import { createClient } from "npm:@supabase/supabase-js@2.118.0";
+import { Buffer } from "node:buffer";
+
+// supabase/functions/_shared/instagram-token.ts
+function instagramTokenResponse(response, requireExpiry = false) {
+  const token = typeof response?.access_token === "string" ? response : Array.isArray(response?.data) ? response.data[0] : null;
+  if (!token || typeof token.access_token !== "string" || !token.access_token.trim())
+    throw new Error("Instagram \uC751\uB2F5\uC5D0 \uC720\uD6A8\uD55C \uD1A0\uD070\uC774 \uC5C6\uC2B5\uB2C8\uB2E4. \uACC4\uC815 \uC5F0\uACB0\uC744 \uB2E4\uC2DC \uC2DC\uC791\uD558\uC138\uC694.");
+  if (requireExpiry && (!Number.isFinite(Number(token.expires_in)) || Number(token.expires_in) <= 0))
+    throw new Error("Instagram \uC7A5\uAE30 \uD1A0\uD070\uC758 \uC720\uD6A8\uAE30\uAC04\uC744 \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uAE30\uC874 \uC5F0\uACB0\uC740 \uC720\uC9C0\uB429\uB2C8\uB2E4.");
+  return token;
+}
+
+// supabase/functions/_shared/instagram-session.ts
+function instagramPermissions(value) {
+  return Array.isArray(value) ? value.map(String) : String(value || "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+async function instagramProfile(token, request, version) {
+  const paths = [version + "/me", "me", .../^\d+$/.test(String(token.user_id || token.id || "")) ? [version + "/" + (token.user_id || token.id)] : [], ...version !== "v24.0" ? ["v24.0/me"] : []];
+  let error;
+  for (const path of paths) {
+    try {
+      const profile = await request("https://graph.instagram.com/" + path + "?" + new URLSearchParams({ fields: "user_id,username", access_token: token.access_token }), { method: "GET" }, "Instagram \uACC4\uC815 \uC870\uD68C");
+      if (!/^\d+$/.test(String(profile.user_id || profile.id || "")) || !profile.username) throw Error("Instagram \uACC4\uC815 ID\xB7\uC774\uB984\uC744 \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      return { ...profile, id: String(profile.user_id || profile.id) };
+    } catch (e) {
+      error = e;
+      if (!/Unsupported request|Unsupported get request|Unknown path|nonexisting field/i.test(String(e?.message || ""))) throw e;
+    }
+  }
+  throw error;
+}
+async function resolveInstagramSession(response, request, appSecret, version, time = Date.now()) {
+  const token = instagramTokenResponse(response);
+  let session = token, warning = "", mode = "long";
+  try {
+    session = instagramTokenResponse(await request("https://graph.instagram.com/access_token?" + new URLSearchParams({ grant_type: "ig_exchange_token", client_secret: appSecret, access_token: token.access_token }), { method: "GET" }, "Instagram \uC7A5\uAE30 \uD1A0\uD070 \uAD50\uD658"), true);
+  } catch (e) {
+    mode = "short";
+    warning = "\uC7A5\uAE30 \uD1A0\uD070 \uAD50\uD658 \uBBF8\uC644\uB8CC \xB7 \uC784\uC2DC \uC138\uC158 \uCD5C\uB300 15\uBD84. " + String(e?.message || "").slice(0, 350);
+  }
+  const profile = await instagramProfile({ ...token, ...session }, request, version);
+  const duration = mode === "long" ? Number(session.expires_in) * 1e3 : Math.min(Number(token.expires_in) > 0 ? Number(token.expires_in) * 1e3 : 9e5, 9e5);
+  return { ...token, ...session, ...profile, expires: time + duration, tokenMode: mode, warning, expiryKnown: mode === "long" || Number(token.expires_in) > 0, permissions: instagramPermissions(token.permissions), apiVerified: true, profileChecked: new Date(time).toISOString() };
+}
+
+// supabase/functions/_shared/function-route.ts
+function functionRoute(requestUrl, projectUrl) {
+  const url = new URL(requestUrl), parts = url.pathname.split("/").filter(Boolean);
+  const offset = parts[0] === "functions" && parts[1] === "v1" ? 2 : 0;
+  const name = parts[offset];
+  if (!name || !/^[A-Za-z0-9_-]+$/.test(name))
+    throw new Error("Invalid function route");
+  return {
+    name,
+    path: "/" + parts.slice(offset + 1).join("/"),
+    base: projectUrl.replace(/\/$/, "") + "/functions/v1/" + name
+  };
+}
+
+// supabase/functions/_shared/creator-instagram-oauth.ts
+function creatorInstagramOauth({ sb: sb2, query: query2, env: env2, key: key2, digest: digest2, encrypt: encrypt2, remote: remote2, resolveSession, capabilities: capabilities2, audit: audit2, oauthStateProblem: oauthStateProblem2, oauthLifetimeMs: oauthLifetimeMs2 }) {
+  const provider = "instagram_message_connect", expected = "valu_est";
+  async function prepare(owner, base) {
+    if (!env2("META_APP_ID") || !env2("META_APP_SECRET")) throw Error("Instagram \uACF5\uC2DD \uC571 \uC124\uC815 \uD655\uC778 \uD544\uC694");
+    await key2();
+    const state = crypto.randomUUID() + crypto.randomUUID();
+    await query2(sb2.from("sanji_oauth_states").insert({ state: await digest2(state), owner, provider, verifier: crypto.randomUUID(), expires: new Date(Date.now() + oauthLifetimeMs2).toISOString() }));
+    const params = new URLSearchParams({ enable_fb_login: "false", client_id: env2("META_APP_ID"), redirect_uri: base + "/oauth/instagram/callback", response_type: "code", scope: "instagram_business_basic,instagram_business_manage_messages", state });
+    return { url: "https://www.instagram.com/oauth/authorize?" + params, expectedHandle: expected, scopes: ["instagram_business_basic", "instagram_business_manage_messages"], notice: "Meta\uC5D0\uC11C @valu_est\uC640 \uC694\uCCAD \uAD8C\uD55C\uC744 \uD655\uC778\uD55C \uB4A4 \uC9C1\uC811 \uC2B9\uC778\uD558\uC138\uC694. \uC2B9\uC778 \uC804 \uC5F0\uACB0\uC740 \uC0DD\uC131\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4." };
+  }
+  async function callback(url, base, owner) {
+    const state = url.searchParams.get("state") || "";
+    const row = await query2(sb2.from("sanji_oauth_states").select("*").eq("state", await digest2(state)).eq("provider", provider).maybeSingle());
+    const problem = oauthStateProblem2(state, row);
+    if (problem) throw Error(problem);
+    if (!owner || row.owner !== owner) throw Error("\uC778\uC99D \uC694\uCCAD \uACC4\uC815\uC774 \uD604\uC7AC \uB85C\uADF8\uC778\uACFC \uB2E4\uB985\uB2C8\uB2E4.");
+    const consumed = await query2(sb2.from("sanji_oauth_states").delete().eq("state", row.state).eq("provider", provider).eq("owner", owner).select("state"));
+    if (!consumed.length) throw Error("\uC774\uBBF8 \uC0AC\uC6A9\uB41C \uC778\uC99D \uC694\uCCAD");
+    const code = url.searchParams.get("code");
+    if (!code) throw Error("\uACF5\uC2DD \uC778\uC99D\uC774 \uCDE8\uC18C\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
+    const form = new FormData();
+    for (const [k, v] of Object.entries({ client_id: env2("META_APP_ID"), client_secret: env2("META_APP_SECRET"), code, grant_type: "authorization_code", redirect_uri: base + "/oauth/instagram/callback" })) form.set(k, String(v));
+    const token = await remote2("https://api.instagram.com/oauth/access_token", { method: "POST", body: form }, "Instagram \uACF5\uC2DD \uC778\uC99D");
+    const session = await resolveSession(token, remote2, env2("META_APP_SECRET"), env2("META_GRAPH_VERSION") || "v24.0");
+    if (String(session.username || "").replace(/^@/, "").toLowerCase() !== expected || !/^\d+$/.test(String(session.id || ""))) throw Error("\uC5F0\uACB0 \uB300\uC0C1\uC740 @valu_est\uC785\uB2C8\uB2E4. \uB85C\uADF8\uC778\uD55C \uACC4\uC815\uC744 \uD655\uC778\uD558\uC138\uC694.");
+    if (session.tokenMode === "short") throw Error("\uC7A5\uAE30 \uC778\uC99D\uC744 \uD655\uC778\uD558\uC9C0 \uBABB\uD574 \uAE30\uC874 \uC5F0\uACB0\uC744 \uC720\uC9C0\uD588\uC2B5\uB2C8\uB2E4.");
+    const checked = await capabilities2(session, remote2, env2("META_GRAPH_VERSION") || "v24.0");
+    const safe = { profileVerified: checked.profileVerified === true, messagesReadable: checked.messagesReadable === true, webhookSubscribed: false, webhookSubscriptionStatus: "unverified", checked: checked.checked || null };
+    session.capabilities = safe;
+    await query2(sb2.from("sanji_connections").upsert({ owner: row.owner, provider: "instagram:" + session.id, encrypted: await encrypt2(session), summary: { username: session.username, accountId: session.id, connected: true, apiVerified: true, expires: session.expires || null, tokenMode: session.tokenMode || "long", warning: session.warning || "", expiryKnown: session.expiryKnown !== false, capabilities: safe, profileChecked: session.profileChecked || null, webhookSetupRequested: false } }, { onConflict: "owner,provider" }));
+    await audit2(row.owner, "creator_instagram_connected", { username: expected, profileVerified: true, messagesReadable: safe.messagesReadable, webhookSetupRequested: false });
+    return { username: expected, messagesReadable: safe.messagesReadable };
+  }
+  return { prepare, callback };
+}
+
+// supabase/functions/_shared/instagram-direct-inbox.ts
+function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2, remote: remote2, env: env2 }) {
+  async function account(owner) {
+    const rows = await query2(sb2.from("sanji_connections").select("provider,summary").eq("owner", owner).like("provider", "instagram:%"));
+    const valid = rows.filter((r) => r.summary?.connected === true && r.summary?.apiVerified === true && String(r.summary?.username || "").toLowerCase() === "valu_est" && r.provider === "instagram:" + r.summary?.accountId && /^\d+$/.test(String(r.summary?.accountId)));
+    if (valid.length !== 1) throw Error("@valu_est \uACF5\uC2DD \uC5F0\uACB0\uC744 \uD655\uC778\uD558\uC138\uC694");
+    const id = String(valid[0].summary.accountId), session = await connection2(owner, valid[0].provider);
+    if (!session?.access_token || String(session.id) !== id || String(session.username || "").toLowerCase() !== "valu_est" || !Number.isFinite(Number(session.expires)) || Number(session.expires) <= Date.now()) throw Error("Instagram \uC5F0\uACB0\uC774 \uB9CC\uB8CC\uB410\uAC70\uB098 \uACC4\uC815\uC774 \uB2E4\uB985\uB2C8\uB2E4");
+    return { id, token: session.access_token };
+  }
+  async function capture(owner, e) {
+    return query2(sb2.rpc("sanji_instagram_capture", { p_owner: owner, p_account: e.accountId, p_peer: e.peerId, p_mid: e.messageId, p_at: e.receivedAt, p_body: e.text }));
+  }
+  async function list(owner, offset = 0) {
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > 1e5) throw Error("\uC798\uBABB\uB41C \uD398\uC774\uC9C0");
+    const a = await account(owner);
+    const rows = await query2(sb2.from("sanji_instagram_inbound").select("account_id,peer_id,message_id,received_at,body").eq("owner", owner).eq("account_id", a.id).order("received_at", { ascending: false }).order("message_id", { ascending: false }).range(offset, offset + 500));
+    if (!Array.isArray(rows)) throw Error("\uB300\uD654 \uBAA9\uB85D \uD655\uC778 \uC2E4\uD328");
+    const hasMore = rows.length > 500, items = rows.slice(0, 500), ids = items.map((x) => x.message_id);
+    const attempts = [];
+    for (let i = 0; i < ids.length; i += 20) {
+      const page = await query2(sb2.from("sanji_instagram_reply_attempts").select("account_id,peer_id,inbound_id,body,status,created_at").eq("owner", owner).eq("account_id", a.id).in("inbound_id", ids.slice(i, i + 20)));
+      if (!Array.isArray(page)) throw Error("\uB2F5\uC7A5 \uBAA9\uB85D \uD655\uC778 \uC2E4\uD328");
+      attempts.push(...page);
+    }
+    return { items, attempts, offset, hasMore, account: "valu_est", sendingEnabled: env2("INSTAGRAM_DIRECT_REPLY_ENABLED") === "true" };
+  }
+  async function sync(owner, cursor) {
+    const a = await account(owner), version = env2("META_GRAPH_VERSION") || "v24.0";
+    if (!/^v\d+\.\d+$/.test(version)) throw Error("invalid version");
+    if (cursor !== void 0 && (typeof cursor !== "string" || cursor.includes("://") || !/^[A-Za-z0-9._~:+\/=-]{1,512}$/.test(cursor))) throw Error("\uC798\uBABB\uB41C \uD398\uC774\uC9C0");
+    const get = async (path, fields) => remote2("https://graph.instagram.com/" + version + "/" + (path === "me/conversations" ? path : encodeURIComponent(path)) + "?" + fields.toString(), { headers: { Authorization: "Bearer " + a.token } }, "Instagram \uB300\uD654 \uC870\uD68C");
+    const params = new URLSearchParams({ platform: "instagram", limit: "10" });
+    if (cursor) params.set("after", cursor);
+    const conversations = await get("me/conversations", params);
+    if (!Array.isArray(conversations?.data) || conversations.data.length > 10) throw Error("\uB300\uD654 \uBAA9\uB85D \uD655\uC778 \uC2E4\uD328");
+    let inserted = 0, partialMessages = false;
+    for (const c of conversations.data.slice(0, 10)) {
+      if (typeof c.id !== "string" || !c.id || c.id.length > 500) continue;
+      const thread = await get(c.id, new URLSearchParams({ fields: "messages" }));
+      if (!Array.isArray(thread?.messages?.data)) throw Error("\uBA54\uC2DC\uC9C0 \uBAA9\uB85D \uD655\uC778 \uC2E4\uD328");
+      if (thread.messages.data.length > 20 || thread.messages.paging?.next) partialMessages = true;
+      for (const m of thread.messages.data.slice(0, 20)) {
+        if (typeof m.id !== "string" || !m.id || m.id.length > 500) continue;
+        const detail = await get(m.id, new URLSearchParams({ fields: "id,created_time,from,to,message" }));
+        const peer = String(detail.from?.id || ""), at = Date.parse(detail.created_time), body = typeof detail.message === "string" ? detail.message : "";
+        if (detail.id !== m.id || !/^\d+$/.test(peer) || peer === a.id || !detail.to?.data?.some((x) => String(x.id) === a.id) || !Number.isFinite(at) || at > Date.now() + 3e5) continue;
+        if (at < Date.now() - 90 * 864e5 || body.length > 1e4) {
+          partialMessages = true;
+          continue;
+        }
+        const safeBody = body.trim() ? body : "\uBCF8\uBB38 \uC5C6\uC74C \uB610\uB294 \uC870\uD68C \uBD88\uAC00 \xB7 Instagram\uC5D0\uC11C \uD655\uC778 \uD544\uC694";
+        if (await capture(owner, { accountId: a.id, peerId: peer, messageId: detail.id, text: safeBody, receivedAt: new Date(at).toISOString() })) inserted++;
+      }
+    }
+    const after = conversations?.paging?.next ? conversations?.paging?.cursors?.after : null;
+    if (after != null && (typeof after !== "string" || after.includes("://") || !/^[A-Za-z0-9._~:+\/=-]{1,512}$/.test(after))) throw Error("\uB2E4\uC74C \uD398\uC774\uC9C0 \uD655\uC778 \uC2E4\uD328");
+    if (conversations?.paging?.next && !after) throw Error("\uB2E4\uC74C \uD398\uC774\uC9C0 \uD655\uC778 \uC2E4\uD328");
+    return { inserted, nextCursor: after || null, partialMessages };
+  }
+  async function reply(owner, b) {
+    if (env2("INSTAGRAM_DIRECT_REPLY_ENABLED") !== "true") throw Error("Instagram \uB2F5\uC7A5 \uBC1C\uC1A1\uC774 \uBE44\uD65C\uC131\uD654\uB418\uC5B4 \uC788\uC2B5\uB2C8\uB2E4.");
+    if (typeof b.messageId !== "string" || !b.messageId || typeof b.body !== "string" || !b.body.trim() || b.body.length > 1e3 || typeof b.requestId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(b.requestId)) throw Error("\uB2F5\uC7A5 \uB0B4\uC6A9\uC744 \uD655\uC778\uD558\uC138\uC694.");
+    const a = await account(owner), r = await query2(sb2.rpc("sanji_instagram_reserve_reply", { p_owner: owner, p_account: a.id, p_mid: b.messageId, p_request: b.requestId, p_body: b.body }));
+    if (!r.reserved) return { status: r.status, duplicate: true, sameRequest: r.sameRequest === true };
+    let status = "outcome_unknown", providerId = null;
+    try {
+      const version = env2("META_GRAPH_VERSION") || "v24.0";
+      if (!/^v\d+\.\d+$/.test(version)) throw Error("invalid version");
+      const res = await remote2("https://graph.instagram.com/" + version + "/" + a.id + "/messages", { method: "POST", headers: { Authorization: "Bearer " + a.token, "Content-Type": "application/json" }, body: JSON.stringify({ recipient: { id: r.peerId }, message: { text: b.body } }) }, "Instagram \uB2F5\uC7A5");
+      if (typeof res?.message_id === "string" && res.message_id) {
+        status = "accepted";
+        providerId = res.message_id;
+      }
+    } catch {
+    }
+    await query2(sb2.rpc("sanji_instagram_finish_reply", { p_owner: owner, p_request: b.requestId, p_status: status, p_provider_id: providerId }));
+    return { status };
+  }
+  return { list, sync, reply };
+}
+
+// supabase/functions/_shared/oauth-status.ts
+var oauthLifetimeMs = 30 * 60 * 1e3;
+function oauthStateProblem(state, row, time = Date.now()) {
+  if (!state) return "\uC778\uC99D \uC694\uCCAD \uC815\uBCF4(state)\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4. \uC11C\uBE44\uC2A4\uC758 \uACC4\uC815 \uC5F0\uACB0 \uBC84\uD2BC\uC5D0\uC11C \uB2E4\uC2DC \uC2DC\uC791\uD558\uC138\uC694.";
+  if (!row) return "\uC774\uBBF8 \uCC98\uB9AC\uB410\uAC70\uB098 \uC720\uD6A8\uD558\uC9C0 \uC54A\uC740 \uC778\uC99D \uC694\uCCAD\uC785\uB2C8\uB2E4. \uC5F0\uACB0\uC774 \uC644\uB8CC\uB410\uB294\uC9C0 \uC5F0\uB3D9 \uC124\uC815\uC5D0\uC11C \uD655\uC778\uD558\uACE0, \uD544\uC694\uD558\uBA74 \uC0C8\uB85C \uC5F0\uACB0\uD558\uC138\uC694.";
+  if (!Number.isFinite(Date.parse(row.expires)) || Date.parse(row.expires) <= time)
+    return "\uC778\uC99D \uC2DC\uC791 \uD6C4 30\uBD84\uC774 \uC9C0\uB0AC\uC2B5\uB2C8\uB2E4. \uC11C\uBE44\uC2A4\uC758 \uACC4\uC815 \uC5F0\uACB0 \uBC84\uD2BC\uC5D0\uC11C \uB2E4\uC2DC \uC2DC\uC791\uD558\uC138\uC694.";
+  return "";
+}
+
+// supabase/functions/instagram-inbox/handler.ts
+function instagramInboxHandler({ sb: sb2, query: query2, env: env2, key: key2, digest: digest2, encrypt: encrypt2, connection: connection2, remote: remote2, resolveSession, capabilities: capabilities2, audit: audit2 }) {
+  const origin = env2("APP_ORIGIN") || "https://dothegy.github.io";
+  const frontend = env2("APP_FRONTEND_URL") || origin + "/sanji/workspace/";
+  const front = new URL(frontend);
+  if (front.origin !== origin || front.protocol !== "https:" || front.username || front.password || front.search || front.hash) throw Error("invalid frontend");
+  const cors = { "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Headers": "authorization,apikey,content-type,x-client-info", "Access-Control-Allow-Methods": "GET,POST,OPTIONS", "Vary": "Origin", "Cache-Control": "no-store" };
+  const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
+  const oauth = creatorInstagramOauth({ sb: sb2, query: query2, env: env2, key: key2, digest: digest2, encrypt: encrypt2, remote: remote2, resolveSession, capabilities: capabilities2, audit: audit2, oauthStateProblem, oauthLifetimeMs });
+  const inbox = instagramDirectInbox({ sb: sb2, query: query2, connection: connection2, remote: remote2, env: env2 });
+  return async (req) => {
+    try {
+      const url = new URL(req.url), { path, base } = functionRoute(req.url, env2("SUPABASE_URL"));
+      if (req.headers.get("origin") && req.headers.get("origin") !== origin) return json({ error: "\uD5C8\uC6A9\uB418\uC9C0 \uC54A\uC740 \uCD9C\uCC98" }, 403);
+      if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+      if (path === "/health" && req.method === "GET") return json({ ok: true });
+      if (path === "/oauth/instagram/callback") {
+        if (req.method !== "GET") return json({ error: "\uD5C8\uC6A9\uB418\uC9C0 \uC54A\uC740 \uC694\uCCAD \uBC29\uC2DD" }, 405);
+        const state = url.searchParams.get("state") || "", code = url.searchParams.get("code") || "";
+        const destination = new URL(frontend);
+        if (state && code && state.length <= 256 && code.length <= 4096) destination.hash = "instagram-connect?" + new URLSearchParams({ state, code });
+        else {
+          destination.searchParams.set("oauth_error", "Instagram \uC5F0\uACB0\uC774 \uCDE8\uC18C\uB418\uC5C8\uAC70\uB098 \uB9CC\uB8CC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.");
+          destination.hash = "creators";
+        }
+        return new Response(null, { status: 302, headers: { Location: destination.toString(), "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff" } });
+      }
+      const authorization = req.headers.get("authorization") || "";
+      if (!authorization.startsWith("Bearer ")) return json({ error: "\uB85C\uADF8\uC778\uC774 \uD544\uC694\uD569\uB2C8\uB2E4." }, 401);
+      const auth = await sb2.auth.getUser(authorization.slice(7)), user = auth?.data?.user;
+      if (auth?.error || !user) return json({ error: "\uB85C\uADF8\uC778 \uC138\uC158\uC744 \uD655\uC778\uD558\uC138\uC694." }, 401);
+      const member = await query2(sb2.from("sanji_members").select("user_id").eq("user_id", user.id).maybeSingle());
+      if (!member) return json({ error: "\uC811\uADFC \uAD8C\uD55C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4." }, 403);
+      const owner = user.id;
+      const input = async () => {
+        const raw = await req.text();
+        if (new TextEncoder().encode(raw).length > 2e4) throw Error("\uC694\uCCAD \uD06C\uAE30 \uCD08\uACFC");
+        return raw ? JSON.parse(raw) : {};
+      };
+      if (path === "/creator-instagram/oauth/prepare" && req.method === "POST") {
+        if (!env2("META_APP_ID") || !env2("META_APP_SECRET") || !env2("TOKEN_ENCRYPTION_KEY")) return json({ error: "\uAD00\uB9AC\uC790\uC758 Instagram \uACF5\uC2DD \uC571\uACFC \uC554\uD638\uD654 \uC124\uC815\uC744 \uD655\uC778\uD558\uC138\uC694." }, 503);
+        return json(await oauth.prepare(owner, base));
+      }
+      if (path === "/creator-instagram/oauth/complete" && req.method === "POST") {
+        const b = await input();
+        if (typeof b.state !== "string" || typeof b.code !== "string" || !b.state || !b.code || b.state.length > 256 || b.code.length > 4096) throw Error("\uC778\uC99D \uC694\uCCAD \uC624\uB958");
+        const handoff = new URL(base + "/oauth/instagram/callback");
+        handoff.searchParams.set("state", b.state);
+        handoff.searchParams.set("code", b.code);
+        return json(await oauth.callback(handoff, base, owner));
+      }
+      if (path === "/creator-instagram/message-status" && req.method === "GET") {
+        const rows = await query2(sb2.from("sanji_connections").select("provider,summary").eq("owner", owner).like("provider", "instagram:%"));
+        const matches = rows.filter((r) => r.summary?.connected === true && r.summary?.apiVerified === true && String(r.summary?.username || "").toLowerCase() === "valu_est" && r.provider === "instagram:" + r.summary?.accountId);
+        const m = matches.length === 1 ? matches[0].summary : null;
+        return json({ configured: !!env2("META_APP_ID") && !!env2("META_APP_SECRET") && !!env2("TOKEN_ENCRYPTION_KEY"), expectedHandle: "valu_est", accountMatched: !!m, profileVerified: !!m, messagesReadable: m?.capabilities?.messagesReadable === true, lastChecked: m?.capabilities?.checked || null, officialRoutesEnabled: true, sendEnabled: env2("INSTAGRAM_DIRECT_REPLY_ENABLED") === "true", notice: "\uC800\uC7A5\uB41C \uC5F0\uACB0 \uC0C1\uD0DC\uC785\uB2C8\uB2E4. \uD604\uC7AC \uAD8C\uD55C\uACFC \uB300\uD654\uB294 \uC9C1\uC811 \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4." });
+      }
+      if (path === "/creator-instagram/inbox" && req.method === "GET") {
+        const raw = url.searchParams.get("offset") || "0";
+        if (!/^(0|[1-9]\d{0,5})$/.test(raw)) throw Error("invalid offset");
+        return json(await inbox.list(owner, Number(raw)));
+      }
+      if (path === "/creator-instagram/sync" && req.method === "POST") {
+        const b = await input();
+        return json(await inbox.sync(owner, b.cursor));
+      }
+      if (path === "/creator-instagram/reply" && req.method === "POST") return json(await inbox.reply(owner, await input()));
+      return json({ error: "\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uACBD\uB85C" }, 404);
+    } catch (e) {
+      const status = Number(e?.status);
+      if (status === 429) return json({ error: "Meta \uC694\uCCAD \uD55C\uB3C4\uC5D0 \uB3C4\uB2EC\uD588\uC2B5\uB2C8\uB2E4. \uC7A0\uC2DC \uD6C4 \uC9C1\uC811 \uB2E4\uC2DC \uD655\uC778\uD558\uC138\uC694." }, 429);
+      if (status === 401 || status === 403) return json({ error: "Meta \uACC4\uC815 \uC5F0\uACB0 \uB610\uB294 \uBA54\uC2DC\uC9C0 \uAD8C\uD55C\uC744 \uD655\uC778\uD558\uC138\uC694." }, 403);
+      if (status >= 500 && status <= 599) return json({ error: "Meta \uC11C\uBE44\uC2A4\uAC00 \uC77C\uC2DC\uC801\uC73C\uB85C \uC751\uB2F5\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. \uC7A0\uC2DC \uD6C4 \uC9C1\uC811 \uB2E4\uC2DC \uD655\uC778\uD558\uC138\uC694." }, 503);
+      return json({ error: "Instagram \uC694\uCCAD\uC744 \uC644\uB8CC\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uACC4\uC815 \uC5F0\uACB0\uACFC \uAD8C\uD55C\uC744 \uD655\uC778\uD558\uC138\uC694." }, 400);
+    }
+  };
+}
+
+// supabase/functions/instagram-inbox/index.ts
+var env = (name) => Deno.env.get(name) || "";
+var sb = createClient(env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY"), { auth: { persistSession: false, autoRefreshToken: false } });
+async function query(p) {
+  const { data, error } = await p;
+  if (error) throw Error("database request failed");
+  return data;
+}
+var digest = async (s) => Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s))).toString("hex");
+async function key() {
+  const secret = env("TOKEN_ENCRYPTION_KEY");
+  if (!secret) throw Error("encryption key unavailable");
+  return crypto.subtle.importKey("raw", await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret)), "AES-GCM", false, ["encrypt", "decrypt"]);
+}
+async function encrypt(value) {
+  const iv = crypto.getRandomValues(new Uint8Array(12)), bytes = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await key(), new TextEncoder().encode(JSON.stringify(value)));
+  return Buffer.concat([Buffer.from(iv), Buffer.from(bytes)]).toString("base64");
+}
+async function decrypt(value) {
+  const b = Buffer.from(value, "base64");
+  return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: b.subarray(0, 12) }, await key(), b.subarray(12))));
+}
+async function connection(owner, provider) {
+  const r = await query(sb.from("sanji_connections").select("encrypted").eq("owner", owner).eq("provider", provider).maybeSingle());
+  return r ? decrypt(r.encrypted) : null;
+}
+async function remote(url, options = {}) {
+  const target = new URL(url);
+  if (target.protocol !== "https:" || !["graph.instagram.com", "api.instagram.com"].includes(target.hostname) || target.username || target.password) throw Error("invalid provider");
+  const response = await fetch(url, { ...options, redirect: "error", signal: AbortSignal.timeout(2e4) });
+  if (!response.ok) {
+    const failure = Error("provider request failed");
+    failure.status = response.status;
+    throw failure;
+  }
+  return response.json();
+}
+async function capabilities(session, request, version) {
+  try {
+    await request("https://graph.instagram.com/" + version + "/me/conversations?platform=instagram&limit=1", { headers: { Authorization: "Bearer " + session.access_token } });
+    return { profileVerified: true, messagesReadable: true, checked: (/* @__PURE__ */ new Date()).toISOString() };
+  } catch {
+    return { profileVerified: true, messagesReadable: false, checked: (/* @__PURE__ */ new Date()).toISOString() };
+  }
+}
+async function audit(owner, action, data) {
+  await query(sb.from("sanji_audit").insert({ owner, action, data }));
+}
+Deno.serve(instagramInboxHandler({ sb, query, env, key, digest, encrypt, connection, remote, resolveSession: resolveInstagramSession, capabilities, audit }));
