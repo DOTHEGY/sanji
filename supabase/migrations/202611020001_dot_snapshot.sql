@@ -25,7 +25,7 @@ begin
  perform pg_advisory_xact_lock(hashtextextended(p_owner::text||d::text,746));
  select * into existing from public.sanji_dot_snapshot where owner=p_owner and snapshot_id=sid;
  if found then
-  if existing.payload=p_data then return jsonb_build_object('duplicate',true,'received_at',existing.received_at); end if;
+  if (existing.payload - 'exported_at')=(p_data - 'exported_at') then return jsonb_build_object('duplicate',true,'received_at',existing.received_at); end if;
   raise exception '스냅샷 ID가 다른 내용에 이미 사용되었습니다';
  end if;
  select s.* into old from public.sanji_dot_snapshot_head h join public.sanji_dot_snapshot s on s.owner=h.owner and s.snapshot_id=h.snapshot_id where h.owner=p_owner and h.day=d;

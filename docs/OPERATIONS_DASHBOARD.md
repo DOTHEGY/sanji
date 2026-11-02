@@ -20,7 +20,7 @@
 }
 ```
 
-위 수치와 날짜는 계약 검수용 예시입니다. 지표는 coverage에 `complete`로 확인된 경우에만 숫자로 표시합니다. 그 외에는 저장된 값이 있어도 확인 불가로 표시하며, source_as_of나 로그인 확인이 15분보다 오래되면 현재 상태를 추정하지 않습니다. 서버는 수신 시각을 별도로 기록합니다.
+위 수치와 날짜는 계약 검수용 예시입니다. 지표는 해당 coverage 그룹이 `complete`로 확인된 경우에만 숫자로 표시합니다. `checked_attempts` 그룹은 확인 횟수·목표·제출 대기·예약·잔여, `unique_handles` 그룹은 고유 수, `outcomes` 그룹은 신규·기존·사전 중복·실패·복구 수, `usage_cost` 그룹은 비용에 적용합니다. 그룹 값은 `complete` 문자열 또는 `status`/`quality`가 `complete`인 객체를 지원합니다. 그 외에는 저장된 값이 있어도 확인 불가로 표시하며, source_as_of나 로그인 확인이 15분보다 오래되면 현재 상태를 추정하지 않습니다. 서버는 수신 시각을 별도로 기록합니다.
 
 
 각 수치는 `complete`·`partial`·`unavailable`과 누락 사유를 함께 전달합니다. `server_received_at`은 서버가 정하고 클라이언트 값을 신뢰하지 않습니다. 날짜·ledger generation·revision과 snapshot ID를 묶어 동일 snapshot 재전송을 멱등 처리하고 낮은 revision이나 이전 세대의 지연 스냅샷은 최신 상태를 덮지 못하게 해야 합니다. 원장의 baseline과 run 범위를 중복 합산하지 않으며, 고유 handle 상세가 없는 baseline은 고유 수를 null/partial로 둡니다. 실패 횟수는 복구 여부와 분리합니다. 상태 관찰 시각이 오래되거나 빠지면 현재 로그인 상태를 추론하지 않습니다. 이 계약은 기록 전달만 다루며 collector 실행·잠금·예약·메일이나 DM 발송을 요청하지 않습니다.
@@ -40,7 +40,7 @@
 
 ## dot 스냅샷 수신 작업 (별도 변경, 운영 미적용)
 
-인증된 소유자가 dot exporter의 `sanji.collection.snapshot.v1` 집계 JSON을 미리보기한 뒤 저장합니다. `revision`은 숫자 순서가 아니라 내용 해시이므로 순서 판단에 사용하지 않습니다. `source_as_of`는 원장 관찰 시각, `exported_at`은 내보낸 시각, `received_at`은 서버 저장 시각으로 각각 보관합니다. 동일 snapshot ID와 내용은 멱등이며 서로 다른 내용의 ID 재사용을 거부합니다. 동일 세대의 관찰 시각이 같거나 이전이면 안전하게 거부합니다. 이미 나타났던 이전 세대로 되돌아갈 수 없고 세대가 바뀌면 새 관찰 시각이 이전보다 늦어야 합니다. 각 날짜와 소유자에 대한 변경은 DB 트랜잭션 및 advisory lock으로 직렬화합니다.
+인증된 소유자가 dot exporter의 `sanji.collection.snapshot.v1` 집계 JSON을 미리보기한 뒤 저장합니다. `revision`은 숫자 순서가 아니라 내용 해시이므로 순서 판단에 사용하지 않습니다. `source_as_of`는 원장 관찰 시각, `exported_at`은 내보낸 시각, `received_at`은 서버 저장 시각으로 각각 보관합니다. 동일 snapshot ID와 원장 내용은 `exported_at`만 다른 재내보내기를 포함해 멱등 처리하며 첫 수신 기록을 보존합니다. 다른 필드가 달라지면 ID 재사용을 거부합니다. 동일 세대의 관찰 시각이 같거나 이전이면 안전하게 거부합니다. 이미 나타났던 이전 세대로 되돌아갈 수 없고 세대가 바뀌면 새 관찰 시각이 이전보다 늦어야 합니다. 각 날짜와 소유자에 대한 변경은 DB 트랜잭션 및 advisory lock으로 직렬화합니다.
 
 운영 적용 시 새 테이블 `sanji_dot_snapshot`, `sanji_dot_snapshot_head`, `security definer` 함수 `sanji_store_dot_snapshot(uuid,jsonb)`가 필요합니다. 테이블에 RLS를 적용하고 anon/authenticated 권한은 부여하지 않으며 service_role은 읽기와 함수 실행만 허용합니다. 함수는 멤버 여부를 재검증하고 소유자를 인증된 API에서 전달받습니다. DB 구조와 함수 권한 적용은 별도 승인과 보안 검토가 필요합니다. collector 계정·자격증명·잠금 또는 실행 설정은 전달하거나 변경하지 않습니다. 스냅샷의 새 저장 수는 DB 실제 신규 저장 수와 별도로 취급합니다. 이 변경은 아직 운영에 적용되지 않았습니다.
 

@@ -37,7 +37,10 @@ function validateDotSnapshot(value, now2 = Date.now()) {
 
 // supabase/functions/_shared/operations-dashboard.ts
 var projectDotSnapshot = (snapshot, now2) => {
-  const p = snapshot.payload, m = p.metrics || {}, q = p.coverage || {}, quality = (k) => typeof q[k] === "string" ? q[k] : q[k]?.status || q[k]?.quality || "unavailable", v = (k) => quality(k) === "complete" && typeof m[k] === "number" && Number.isFinite(m[k]) ? m[k] : null, observed = p.login?.observed_at, age = observed ? Date.parse(now2) - Date.parse(observed) : Infinity, loginState = age >= 0 && age <= 9e5 && !p.login?.stale ? p.login?.current_state : "unknown";
+  const p = snapshot.payload, m = p.metrics || {}, q = p.coverage || {}, group = (k) => ({ target: "checked_attempts", checked_attempts: "checked_attempts", pending_submissions: "checked_attempts", reserved_remaining: "checked_attempts", available_remaining: "checked_attempts", unique_handles: "unique_handles", known_unique_handles: "unique_handles", new_saved: "outcomes", existing_on_import: "outcomes", duplicates_preskipped: "outcomes", failed_attempts: "outcomes", recovered_failures: "outcomes", unresolved_failures: "outcomes", usage_cost: "usage_cost" })[k] || k, quality = (k) => {
+    const entry = q[group(k)];
+    return typeof entry === "string" ? entry : entry?.status || entry?.quality || "unavailable";
+  }, v = (k) => quality(k) === "complete" && typeof m[k] === "number" && Number.isFinite(m[k]) ? m[k] : null, observed = p.login?.observed_at, age = observed ? Date.parse(now2) - Date.parse(observed) : Infinity, loginState = age >= 0 && age <= 9e5 && !p.login?.stale ? p.login?.current_state : "unknown";
   return { day: p.day, checked: v("checked_attempts"), uniqueHandles: v("unique_handles"), failed: v("unresolved_failures"), goal: v("target"), remaining: v("available_remaining"), existing: v("existing_on_import"), preskipped: v("duplicates_preskipped"), newSaved: v("new_saved"), failedAttempts: v("failed_attempts"), recoveredFailures: v("recovered_failures"), pending: v("pending_submissions"), reserved: v("reserved_remaining"), state: Date.parse(now2) - Date.parse(p.source_as_of) <= 9e5 ? p.execution?.state || "unavailable" : "unavailable", loginState, stateObservedAt: observed || null, sourceAsOf: p.source_as_of, receivedAt: snapshot.received_at, coverage: q };
 };
 var kst = (value) => {
