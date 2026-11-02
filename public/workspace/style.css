@@ -895,3 +895,9 @@ nav {
 .creator-dm-event-form input,.creator-dm-event-form select,.creator-dm-event-form textarea,.creator-dm-draft-form textarea{box-sizing:border-box;width:100%;max-width:100%;min-width:0}
 .creator-dm-event-form textarea,.creator-dm-draft-form textarea{min-height:140px;resize:vertical;line-height:1.65}
 .creator-dm-event-form button,.creator-dm-draft-form button{justify-self:start}
+
+/* Label text accompanies color so the folders remain distinguishable without color vision. */
+.inbox-kind { display:inline-block; border-radius:999px; padding:3px 8px; margin-right:5px; font-size:11px; font-weight:700; line-height:1.4; }
+.inbox-kind--brand { color:#174e35; background:#d8f0df; }
+.inbox-kind--creator { color:#48357f; background:#ede5ff; }
+.inbox-kind--unknown { color:#4c535c; background:#e9edf1; }
