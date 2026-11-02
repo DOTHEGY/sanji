@@ -247,8 +247,8 @@ function recommendationKey(day){return me?.id&&/^\d{4}-\d{2}-\d{2}$/.test(day)?'
 function readRecommendationTarget(day){const memory=recommendationMemory.get(recommendationMemoryKey(day));if(memory!==undefined)return memory;try{const key=recommendationKey(day),value=key?localStorage.getItem(key):null,n=Number(value);return value!==null&&Number.isInteger(n)&&n>=1&&n<=500?n:null;}catch{return null;}}
 function saveRecommendationTarget(day,value){const n=Number(value);if(value===''||!Number.isInteger(n)||n<1||n>500)return;recommendationMemory.set(recommendationMemoryKey(day),n);try{const key=recommendationKey(day);if(key)localStorage.setItem(key,String(n));}catch{}}
 function recommendationScheduleKey(){return me?.id?'sanji.creator.recommendSchedule.v1.'+me.id:null;}
-function readRecommendSchedulePolicy(){try{const key=recommendationScheduleKey(),v=key?JSON.parse(localStorage.getItem(key)||'null'):null;return v?.enabled===true&&['yes','no'].includes(v.kind)?{enabled:true,kind:v.kind}:{enabled:false,kind:''};}catch{return {enabled:false,kind:''};}}
-function saveRecommendSchedulePolicy(enabled,kind){const key=recommendationScheduleKey();if(!key)throw Error('로그인 계정을 확인하세요.');if(enabled&&!['yes','no'].includes(kind))throw Error('메일 유형을 선택하세요.');try{localStorage.setItem(key,JSON.stringify(enabled?{enabled:true,kind}:{enabled:false}));}catch{throw Error('이 기기에 설정을 저장하지 못했습니다.');}}
+function readRecommendSchedulePolicy(){try{const key=recommendationScheduleKey(),v=key?JSON.parse(localStorage.getItem(key)||'null'):null;return v?.enabled===true&&['yes','no'].includes(v.kind)&&typeof v.revision==='string'&&v.revision?{enabled:true,kind:v.kind,revision:v.revision}:{enabled:false,kind:''};}catch{return {enabled:false,kind:''};}}
+function saveRecommendSchedulePolicy(enabled,kind){const key=recommendationScheduleKey();if(!key)throw Error('로그인 계정을 확인하세요.');if(enabled&&!['yes','no'].includes(kind))throw Error('메일 유형을 선택하세요.');try{localStorage.setItem(key,JSON.stringify(enabled?{enabled:true,kind,revision:crypto.randomUUID()}:{enabled:false}));}catch{throw Error('이 기기에 설정을 저장하지 못했습니다.');}}
 function recommendationTomorrowNine(day){if(!/^\d{4}-\d{2}-\d{2}$/.test(String(day||'')))throw Error('추천 날짜를 확인하세요.');const ms=Date.parse(day+'T00:00:00Z');if(!Number.isFinite(ms)||new Date(ms).toISOString().slice(0,10)!==day)throw Error('추천 날짜를 확인하세요.');return new Date(ms+86400000).toISOString().slice(0,10)+'T09:00';}
 let creatorReceipts={profile:null,imported:null,recommendation:null,recommendationOwner:null};
 function creatorReceiptPanel(){const x=creatorReceipts.profile,y=creatorReceipts.imported,z=creatorReceipts.recommendationOwner===me?creatorReceipts.recommendation:null;return (x?'<section class="panel"><h2>최근 공식 조회 결과</h2><p>'+esc(x)+'</p></section>':'')+(y?'<section class="panel"><h2>최근 가져오기 결과</h2><p>'+esc(y)+'</p></section>':'')+(z?'<section class="panel"><h2>최근 추천·예약 결과</h2><p>'+esc(z)+'</p></section>':'');}
@@ -297,7 +297,7 @@ async function creatorBatchSchedule(items,runAt,call,active,onResult){
 }
 
 // Explicit owner-scoped browser setting; rechecked before every mutation.
-function recommendPolicyMatches(start,current){return !!start&&!!current&&start.enabled===current.enabled&&(!start.enabled||start.kind===current.kind);}
+function recommendPolicyMatches(start,current){return !!start&&!!current&&start.enabled===current.enabled&&(!start.enabled||(start.kind===current.kind&&start.revision===current.revision));}
 let recommendScheduleBusy=false;
 async function recommendThenSchedule({n,day,account,view,policy,call,active,refresh,report}){
  if(recommendScheduleBusy)throw Error('추천 처리 중입니다.');
