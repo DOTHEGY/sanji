@@ -18,7 +18,7 @@ test('search disabled by default: no network or DB insert',async()=>{
  const service=creatorDiscoveryService({sb:{from:()=>chain},query:x=>x,audit:async()=>{},env:()=>''});
  assert.deepEqual(await service.collect('owner'),{status:'disabled'});
 });
-test('creator screen shows recovery recommendations and does not offer automatic outreach',async()=>{
+test('creator screen shows recovery recommendations and keeps unsupported DM actions hidden',async()=>{
  const {chromium}=require('@playwright/test'),browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
  try{const page=await browser.newPage();await page.setContent('<main id="app"></main>');const source=fs.readFileSync('private/ui/app.js','utf8'),start=source.indexOf('let recoveryView=null'),end=source.indexOf('\nfunction creatorDirectory(',start);
  await page.addScriptTag({content:`let me={id:'owner'};const $=s=>document.querySelector(s),esc=v=>String(v??''),tag=v=>v,head=v=>'<h1>'+v+'</h1>',button=(s,a)=>'<button data-action="'+a+'">'+s+'</button>',api=async()=>({config:{enabled:false,target:2,run_time:'09:00',daily_lookup_limit:0,retry_limit:0,paid_limit_usd:0},recommendations:[{id:'1',handle:'public_creator',profile_url:'https://www.instagram.com/public_creator/',followers:0,status:'new',emails:[],email_status:'이메일 없음',reasons:['공개 주제']}],review:[],shortfall:1,shortfallReason:'후보 부족',sourceNotice:'과거 정보'});`+source.slice(start,end)+';creatorDiscoveryPage();'});

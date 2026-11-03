@@ -1,5 +1,4 @@
-'use strict';
-const {createHash}=require('node:crypto');
+import {createHash} from 'node:crypto';
 const SUBJECT='도합 300만 크리에이터와 함께 일하는 남준혁 변리사입니다';
 // Template must come from a trusted, versioned approval record; no default text.
 function renderApprovedTemplate(template,plan){
@@ -11,4 +10,4 @@ function renderApprovedTemplate(template,plan){
  if(/\{\{(?!아이디\}\}|상품명\}\})[^{}]+\}\}/.test(body))throw Error('미지원 템플릿 변수');
  return {subject:SUBJECT,body:body.replaceAll('{{아이디}}',()=>plan.handle).replaceAll('{{상품명}}',()=>plan.products[0].name),templateSha256:digest};
 }
-module.exports={renderApprovedTemplate,SUBJECT};
+export {renderApprovedTemplate,SUBJECT};
