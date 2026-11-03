@@ -668,7 +668,7 @@ async function prototypeOpen(){
   if(instagramProposalContext!==marker||!prototypeCurrentThread()||!$('#modal')?.open)return;
   if(!result?.matched||typeof result.peerUsername!=='string'||result.peerUsername.toLowerCase()!==marker.verifiedPeer||String(result.creator?.handle||'').toLowerCase()!==marker.verifiedPeer){$('#instagram-prototype-result').textContent='저장된 크리에이터를 정확히 확인하지 못했습니다. 상대 계정명과 기존 기록을 확인해 주세요.';return;}
   const creator=result.creator,topics=prototypeAutoTopics(creator,data.deals||[]),groups=prototypeCatalog(data.deals||[],{topics}),recommended=groups.filter(g=>g.available&&g.score>0).slice(0,3);marker.creator=creator;marker.groups=groups;
-  if(!recommended.length){$('#instagram-prototype-result').textContent='저장된 공개 소개·분류와 일치하는 상품 근거가 부족합니다. 공개 정보를 확인한 뒤 다시 준비해 주세요.';return;}
+  if(!recommended.length){$('#instagram-prototype-result').innerHTML='<p>공개 채널과 상품이 일치한다는 근거가 부족합니다. 확인된 근거 없이 상품을 추천하지 않았습니다.</p><details><summary>불러온 상품 검토 목록</summary><ul>'+groups.map(g=>'<li>'+esc(g.product)+' · '+esc(g.items.map(x=>x.stock+' · '+x.reason).join(' / '))+'</li>').join('')+'</ul></details>';return;}
   marker.draftSelection=JSON.stringify(recommended.map(g=>String(g.id)).sort());
   const items=recommended.map(g=>({group:g,item:g.items.find(x=>!x.stock.startsWith('품절')&&x.score===g.score)||g.items[0]}));
   const list=items.map(({group,item})=>'- '+group.product+(item.claim?' · '+item.claim.text:' · 상품 설명 확인 후 안내')).join('\n');
