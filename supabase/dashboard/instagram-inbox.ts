@@ -228,12 +228,14 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
       if (!Array.isArray(profilesPage)) throw Error("\uC0C1\uB300 \uACC4\uC815 \uD655\uC778 \uC2E4\uD328");
       profiles.push(...profilesPage);
     }
-    const byPeer = new Map(profiles.map((x) => [x.peer_id, x])), order = new Map(ids.map((id, i) => [id, i]));
+    const finalProof = permittedPeers.length ? await query2(sb2.rpc("sanji_tagby_evidence_for_peers", { p_owner: owner, p_account: a.id, p_peers: permittedPeers })) : [];
+    if (!Array.isArray(finalProof)) throw Error("\uBC1C\uC1A1 \uADFC\uAC70 \uD655\uC778 \uC2E4\uD328");
+    const currentProof = new Map(finalProof.map((x) => [x.peer_id, x])), byPeer = new Map(profiles.map((x) => [x.peer_id, x])), order = new Map(ids.map((id, i) => [id, i]));
     items.sort((x, y) => order.get(x.message_id) - order.get(y.message_id));
-    return { items: items.map((x) => {
-      const e = byProof.get(x.peer_id);
+    return { items: items.filter((x) => currentProof.has(x.peer_id)).map((x) => {
+      const e = currentProof.get(x.peer_id);
       return { ...x, peerProfile: byPeer.get(x.peer_id) || null, tagbyEvidence: e ? { source: "tagby", recommended: true, reportedStatus: "SUCCESS", attested: true, handle: e.handle, provenance: "operator_attested" } : null };
-    }), attempts, offset, hasMore, account: "valu_est", sendingEnabled: env2("INSTAGRAM_DIRECT_REPLY_ENABLED") === "true" };
+    }), attempts: attempts.filter((x) => currentProof.has(x.peer_id)), offset, hasMore, account: "valu_est", sendingEnabled: env2("INSTAGRAM_DIRECT_REPLY_ENABLED") === "true" };
   }
   async function sync(owner, cursor) {
     let stage = "account", reason = "account_unavailable";
@@ -279,16 +281,26 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
       if (typeof c.id !== "string" || !c.id || c.id.length > 500 || threadId && threadId !== c.id) throw Error("\uB300\uD654\uAC00 \uBCC0\uACBD\uB418\uC5B4 \uB2E4\uC2DC \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4");
       stage = "thread";
       reason = "provider_request";
-      const thread = await get(c.id, new URLSearchParams({ fields: "participants,messages" })), messages = thread?.messages?.data;
+      const participantResult = await get(c.id, new URLSearchParams({ fields: "participants" }));
       reason = "invalid_provider_response";
-      if (!Array.isArray(messages)) throw Error("\uBA54\uC2DC\uC9C0 \uBAA9\uB85D \uD655\uC778 \uC2E4\uD328");
-      const participants = thread?.participants?.data, ids = Array.isArray(participants) ? participants.map((p) => p?.id) : [], peers = ids.filter((id) => typeof id === "string" && /^\d+$/.test(id) && id !== a.id);
-      let eligible = false;
+      const participants = participantResult?.participants?.data, ids = Array.isArray(participants) ? participants.map((p) => p?.id) : [], peers = ids.filter((id) => typeof id === "string" && /^\d+$/.test(id) && id !== a.id);
+      const participant = Array.isArray(participants) ? participants.find((p) => p?.id === peers[0]) : null, handle = safePeer(participant).username?.toLowerCase() || null;
+      let eligible = false, bootstrap = false;
+      const bootstrapCheck = () => query2(sb2.rpc("sanji_tagby_bootstrap_allowed", { p_owner: owner, p_account: a.id, p_peer: peers[0], p_handle: handle }));
       if (ids.length === 2 && ids.filter((id) => id === a.id).length === 1 && peers.length === 1) {
         const evidence = await query2(sb2.rpc("sanji_tagby_evidence_for_peers", { p_owner: owner, p_account: a.id, p_peers: peers }));
         if (!Array.isArray(evidence)) throw Error("\uBC1C\uC1A1 \uADFC\uAC70 \uD655\uC778 \uC2E4\uD328");
         eligible = evidence.some((e) => e.peer_id === peers[0]);
+        if (!eligible && handle) {
+          bootstrap = await bootstrapCheck() === true;
+          eligible = bootstrap;
+        }
       }
+      const stillAuthorized = async () => {
+        if (bootstrap) return await bootstrapCheck() === true;
+        const current = await query2(sb2.rpc("sanji_tagby_evidence_for_peers", { p_owner: owner, p_account: a.id, p_peers: peers }));
+        return Array.isArray(current) && current.some((e) => e.peer_id === peers[0]);
+      };
       if (!eligible) {
         let nextCursor2 = null;
         if (conversations?.paging?.next) {
@@ -296,17 +308,23 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
           if (!validCursor(after)) throw Error("\uB2E4\uC74C \uD398\uC774\uC9C0 \uD655\uC778 \uC2E4\uD328");
           nextCursor2 = after === cursor ? null : after;
         }
-        return { inserted: 0, nextCursor: nextCursor2, partialMessages: false, progress: { inputCursorKind: cursorKind, inputResumeOffset: offset, nextCursorKind: nextCursor2 ? "provider" : "none", hasMore: !!nextCursor2, cursorStalled: !!cursor && !nextCursor2, detailsChecked: 0, detailsSkipped: 0, inserted: 0 } };
+        return { inserted: 0, nextCursor: nextCursor2, partialMessages: false, unverifiedConversation: true, progress: { inputCursorKind: cursorKind, inputResumeOffset: offset, nextCursorKind: nextCursor2 ? "provider" : "none", hasMore: !!nextCursor2, cursorStalled: !!cursor && !nextCursor2, detailsChecked: 0, detailsSkipped: 0, inserted: 0 } };
       }
+      stage = "thread";
+      reason = "provider_request";
+      const thread = await get(c.id, new URLSearchParams({ fields: "messages" })), messages = thread?.messages?.data;
+      reason = "invalid_provider_response";
+      if (!Array.isArray(messages)) throw Error("\uBA54\uC2DC\uC9C0 \uBAA9\uB85D \uD655\uC778 \uC2E4\uD328");
       reason = "messages_changed";
       if (prefix.some((id, i) => messages[i]?.id !== id)) throw Error("\uBA54\uC2DC\uC9C0\uAC00 \uBCC0\uACBD\uB418\uC5B4 \uCC98\uC74C\uBD80\uD130 \uB2E4\uC2DC \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4");
       let inserted = 0, detailsChecked = 0, detailsSkipped = 0, partialMessages = messages.length > 20 || !!thread.messages.paging?.next;
-      const end = Math.min(messages.length, 20, offset + 5);
+      const end = Math.min(messages.length, 20, offset + 4);
       for (let i = offset; i < end; i++) {
         stage = "detail";
         reason = "invalid_provider_response";
         const m = messages[i];
         if (typeof m?.id !== "string" || !m.id || m.id.length > 500) throw Error("\uBA54\uC2DC\uC9C0 \uC2DD\uBCC4\uC790\uB97C \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4");
+        if (!await stillAuthorized()) throw Error("\uBC1C\uC1A1 \uADFC\uAC70 \uD655\uC778 \uD544\uC694");
         reason = "provider_request";
         const observedAt = (/* @__PURE__ */ new Date()).toISOString(), detail = await get(m.id, new URLSearchParams({ fields: "id,created_time,from,to,message" }));
         reason = "invalid_provider_response";
@@ -329,8 +347,15 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
         }
         stage = "store";
         reason = "storage_failed";
+        if (!await stillAuthorized()) throw Error("\uBC1C\uC1A1 \uADFC\uAC70 \uD655\uC778 \uD544\uC694");
         if (await capture(owner, { accountId: a.id, peerId: peer, messageId: detail.id, text: body.trim() ? body : "\uBCF8\uBB38 \uC5C6\uC74C \uB610\uB294 \uC870\uD68C \uBD88\uAC00 \xB7 Instagram\uC5D0\uC11C \uD655\uC778 \uD544\uC694", receivedAt: new Date(at2).toISOString() })) inserted++;
-        await observe(owner, a.id, peer, detail.id, detail.from, observedAt);
+        await observe(owner, a.id, peer, detail.id, bootstrap ? participant : detail.from, observedAt);
+        if (bootstrap) {
+          await query2(sb2.rpc("sanji_tagby_bind_peer", { p_owner: owner, p_account: a.id, p_peer: peer, p_handle: handle }));
+          const verified = await query2(sb2.rpc("sanji_tagby_evidence_for_peers", { p_owner: owner, p_account: a.id, p_peers: [peer] }));
+          if (!Array.isArray(verified) || !verified.some((e) => e.peer_id === peer)) throw Error("\uBC1C\uC1A1 \uADFC\uAC70 \uD655\uC778 \uD544\uC694");
+          bootstrap = false;
+        }
       }
       stage = "pagination";
       reason = "invalid_provider_cursor";
