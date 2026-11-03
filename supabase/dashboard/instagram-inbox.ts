@@ -384,7 +384,7 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
   }
   async function importResearch(owner, b) {
     const a = await account(owner);
-    if (b?.attested !== true || Object.keys(b).some((k) => !["attested", "peerId", "profileUrl", "observedAt", "topics", "sources", "summary"].includes(k))) throw Error("\uACF5\uAC1C \uC870\uC0AC \uADFC\uAC70 \uD655\uC778 \uD544\uC694");
+    if (b?.attested !== true || Object.keys(b).some((k) => !["attested", "peerId", "profileUrl", "observedAt", "topics", "sources", "summary"].includes(k)) || typeof b.observedAt !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(b.observedAt) || !Number.isFinite(Date.parse(b.observedAt))) throw Error("\uACF5\uAC1C \uC870\uC0AC \uADFC\uAC70 \uD655\uC778 \uD544\uC694");
     return { inserted: await query2(sb2.rpc("sanji_instagram_research_import", { p_owner: owner, p_account: a.id, p_peer: b.peerId, p_profile_url: b.profileUrl, p_observed: b.observedAt, p_topics: b.topics, p_sources: b.sources, p_summary: b.summary, p_attested: true })), provenance: "operator_attested" };
   }
   async function reply(owner, b) {
