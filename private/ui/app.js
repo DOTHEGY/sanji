@@ -459,6 +459,7 @@ function dealVariantLabel(d) {
   return d.sourceRowKey.split(":")[0] + " · " + (d.discountPercent ? d.discountPercent + "% 할인" : "할인 없음");
 }
 function feeSelect(name,label,value,options){return `<label class="field">${esc(label)}<select name="${esc(name)}">${options.map(([v,l])=>`<option value="${esc(v)}" ${v===value?'selected':''}>${esc(l)}</option>`).join('')}</select></label>`;}
+function dealRetailBasis(d){const text=String(d?.sourceNote||'')+' '+String(d?.note||'');if(/소비자가\s*(?:는|:|=)\s*(?:확인\s*당시\s*)?(?:현재|실제)\s*판매가/.test(text))return '확인 당시 판매가';if(/소비자가\s*(?:는|:|=)\s*(?:가격표(?:의)?\s*)?(?:할인\s*전|정가)/.test(text))return '할인 전 기준';return '기준 확인 필요';}
 function dealProductRow(items, selected) {
   const d = items.find(d => d.id === selected) || items.find(d => d.discountPercent === 10 && d.sourceRowKey?.startsWith("BOX:")) || items[0];
   const fee=d.feeTerms||{}, percent = fee.basis==='creator_only' ? '크리에이터 '+(Number.isFinite(fee.creatorPercent)&&fee.creatorPercent>=0&&fee.creatorPercent<=100?fee.creatorPercent+'%':'미확인') : Number.isFinite(d.commissionPercent) ? '공급사 전체 '+d.commissionPercent+'%' : (d.commission || '미협의');
@@ -466,7 +467,7 @@ function dealProductRow(items, selected) {
   const creatorAmount=validCreator?d.price*fee.creatorPercent/100:null;
   const amount=fee.basis==='creator_only'?(Number.isFinite(creatorAmount)?'크리에이터 '+String(creatorAmount).replace(/^(\d+)(?=\.|$)/,n=>n.replace(/\B(?=(\d{3})+(?!\d))/g,','))+'원 · 공동구매가 × '+fee.creatorPercent+'%':'미확인'):money(d.commissionAmount);
   const note = [Number.isFinite(fee.creatorPercent)&&fee.basis!=='creator_only'?'크리에이터 '+fee.creatorPercent+'%': '',Number.isFinite(fee.companyPercent)?'회사 '+fee.companyPercent+'% · '+({sale_percent:'판매가 기준',vendor_fee_percent:'공급사 수수료 기준',unknown:'기준 미확인'}[fee.companyUnit]||'기준 미확인'):'',d.benefits || d.shipping, ...(d.options || []).map(o => o.name + " 시 " + o.commissionPercent + "% · 세부 조건 확인 필요")].filter(Boolean).join(" / ");
-  return `<tr class="deal-product-row"><td><strong>${esc(dealProductKey(d))}</strong></td><td><select aria-label="${esc(dealProductKey(d))} 구성" data-deal-option>${items.map(o => `<option value="${esc(o.id)}" ${o.id === d.id ? "selected" : ""}>${esc(dealVariantLabel(o))}</option>`).join("")}</select></td><td>${money(d.retail)}</td><td><strong>${money(d.price)}</strong></td><td>${esc(percent)}</td><td>${esc(amount)}</td><td style="max-width:320px;white-space:normal">${esc(note || "미확인")}<div class="fine">${esc(d.state)} · ${esc(d.checked || "확인일 미입력")}</div></td><td>${button("상세", "edit-deal", d.id)}</td></tr>`;
+  return `<tr class="deal-product-row"><td><strong>${esc(dealProductKey(d))}</strong></td><td><select aria-label="${esc(dealProductKey(d))} 구성" data-deal-option>${items.map(o => `<option value="${esc(o.id)}" ${o.id === d.id ? "selected" : ""}>${esc(dealVariantLabel(o))}</option>`).join("")}</select></td><td>${money(d.retail)}<div class="fine">${esc(dealRetailBasis(d))}</div></td><td><strong>${money(d.price)}</strong></td><td>${esc(percent)}</td><td>${esc(amount)}</td><td style="max-width:320px;white-space:normal">${esc(note || "미확인")}<div class="fine">${esc(d.state)} · ${esc(d.checked || "확인일 미입력")}</div></td><td>${button("상세", "edit-deal", d.id)}</td></tr>`;
 }
 function dealsPage() {
   const groups = new Map();
@@ -479,7 +480,7 @@ function dealsPage() {
     `<div class="cards deal-company-list" style="grid-template-columns:1fr">${[...groups.values()].map(items => {
       const products = new Map();
       for (const d of items) { const key = dealProductKey(d); if (!products.has(key)) products.set(key, []); products.get(key).push(d); }
-      return `<details class="panel deal-company"><summary><strong>${esc(targetName(items[0].brand))}</strong> <span class="sub">상품 ${products.size}개</span></summary><p class="fine">용량·할인 조건을 선택하면 가격과 수수료가 바뀝니다. 외부 브랜드 수수료는 공급사 전체 수수료이며, 자사 상품은 크리에이터 수수료를 별도로 표시합니다. 소비자가는 가격표의 할인 전 기준입니다.</p><div class="table-wrap"><table><thead><tr><th>상품</th><th>구성·판매 조건</th><th>소비자가</th><th>공동구매가</th><th>수수료율</th><th>수수료액</th><th>비고</th><th></th></tr></thead><tbody>${[...products.values()].map(items => dealProductRow(items)).join("")}</tbody></table></div><div class="card-footer"><a href="#matching">크리에이터 매칭 ↗</a></div></details>`;
+      return `<details class="panel deal-company"><summary><strong>${esc(targetName(items[0].brand))}</strong> <span class="sub">상품 ${products.size}개</span></summary><p class="fine">용량·할인 조건을 선택하면 가격과 수수료가 바뀝니다. 외부 브랜드 수수료는 공급사 전체 수수료이며, 자사 상품은 크리에이터 수수료를 별도로 표시합니다. 소비자가는 상품별로 등록된 가격입니다. 할인 전 가격 또는 확인 당시 판매가일 수 있으니 상품 상세의 출처 메모를 확인하세요.</p><div class="table-wrap"><table><thead><tr><th>상품</th><th>구성·판매 조건</th><th>소비자가</th><th>공동구매가</th><th>수수료율</th><th>수수료액</th><th>비고</th><th></th></tr></thead><tbody>${[...products.values()].map(items => dealProductRow(items)).join("")}</tbody></table></div><div class="card-footer"><a href="#matching">크리에이터 매칭 ↗</a></div></details>`;
     }).join("") || '<div class="panel empty">실제 협의한 상품을 추가하세요. 미협의 가격은 빈칸으로 남깁니다.</div>'}</div>`;
 }
 
@@ -500,7 +501,7 @@ function dealForm(id = "") {
       .join(
         "",
       )}</select></label>${field("category", "법적 분류", d.category, "text", ["미확인", "건강기능식품", "일반 건강식품"])}${field("state", "협의 상태", d.state, "text", ["협의 중", "확정"])}${field("productName", "상품 묶음 이름", d.productName||"")}${feeSelect("ownership", "브랜드 구분", d.feeTerms?.ownership||"unknown", [["unknown","미확인"],["owned","자사"],["external","외부"]])}${feeSelect("feeBasis", "수수료 기준", d.feeTerms?.basis||"unknown", [["unknown","미확인"],["creator_only","크리에이터 배분율"],["vendor_total","공급사 전체 수수료"]])}${field("creatorPercent", "크리에이터 배분율 (%) · 미확인 시 빈칸", d.feeTerms?.creatorPercent??"", "number")}${field("companyPercent", "회사 배분율 · 미확인 시 빈칸", d.feeTerms?.companyPercent??"", "number")}${feeSelect("companyUnit", "회사 배분율 기준", d.feeTerms?.companyUnit||"unknown", [["unknown","미확인"],["sale_percent","판매가 기준"],["vendor_fee_percent","공급사 수수료 기준"]])}${field("productUrl", "공식 제품 링크", d.productUrl, "url")}${field("image", "사용 허가된 이미지 URL", d.image, "url")}${[
-      ["retail", "정상 판매가"],
+      ["retail", "소비자가 · 등록 가격"],
       ["price", "공동구매가"],
       ["supply", "공급가"],
       ["moq", "최소 수량"],
