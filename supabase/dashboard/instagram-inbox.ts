@@ -360,22 +360,10 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
       return { matched: false, reason: "source_unverified" };
     }
     if (c.link_status !== "source_confirmed" || profileUrl.protocol !== "https:" || !["instagram.com", "www.instagram.com"].includes(profileUrl.hostname) || profileUrl.username || profileUrl.password || profileUrl.search || profileUrl.hash || profileUrl.pathname.replace(/\/$/, "").toLowerCase() !== "/" + name.toLowerCase()) return { matched: false, reason: "source_unverified" };
-    let approvedTemplate = null;
-    try {
-      const templates = await query2(sb2.from("sanji_creator_one_click_templates").select("subject,body,sha256,active").eq("owner", owner).eq("active", true).limit(2));
-      if (Array.isArray(templates) && templates.length === 1) {
-        const t = templates[0];
-        if (t.subject === "\uB3C4\uD569 300\uB9CC \uD06C\uB9AC\uC5D0\uC774\uD130\uC640 \uD568\uAED8 \uC77C\uD558\uB294 \uB0A8\uC900\uD601 \uBCC0\uB9AC\uC0AC\uC785\uB2C8\uB2E4" && typeof t.body === "string" && /^[a-f0-9]{64}$/.test(t.sha256 || "")) {
-          const digest2 = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t.subject + "\n" + t.body))), (x) => x.toString(16).padStart(2, "0")).join("");
-          if (digest2 === t.sha256) approvedTemplate = { subject: t.subject, body: t.body, sha256: t.sha256, userApproved: true };
-        }
-      }
-    } catch {
-    }
     const rowsResearch = await query2(sb2.from("sanji_instagram_public_research").select("handle,profile_url,observed_at,topics,sources,summary").eq("owner", owner).eq("account_id", a.id).eq("peer_id", peerId).order("observed_at", { ascending: false }).limit(1));
     const research = Array.isArray(rowsResearch) ? rowsResearch[0] : null, at2 = Date.parse(research?.observed_at || "");
     const trusted = research && research.handle === name.toLowerCase() && ["https://www.instagram.com/" + name.toLowerCase(), "https://instagram.com/" + name.toLowerCase()].includes(String(research.profile_url || "").replace(/\/$/, "").toLowerCase()) && Number.isFinite(at2) && at2 <= Date.now() + 3e5 && Date.now() - at2 <= 7 * 864e5 && Array.isArray(research.topics) ? { profileUrl: research.profile_url, observedAt: research.observed_at, topics: research.topics, sources: research.sources, summary: research.summary } : null;
-    return { matched: true, peerUsername: name, creator: { id: c.id, handle: c.handle, nickname: c.nickname || "", bio: c.bio || "", category: c.category || "", profileUrl: c.profile_url || "", linkStatus: c.link_status || "", lastVerified: c.last_verified || null, publicResearch: trusted }, approvedTemplate };
+    return { matched: true, peerUsername: name, creator: { id: c.id, handle: c.handle, nickname: c.nickname || "", bio: c.bio || "", category: c.category || "", profileUrl: c.profile_url || "", linkStatus: c.link_status || "", lastVerified: c.last_verified || null, publicResearch: trusted } };
   }
   async function importTagby(owner, b) {
     const a = await account(owner);
