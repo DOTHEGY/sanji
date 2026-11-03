@@ -376,7 +376,7 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
       return { matched: false, reason: "source_unverified" };
     }
     if (c.link_status !== "source_confirmed" || profileUrl.protocol !== "https:" || !["instagram.com", "www.instagram.com"].includes(profileUrl.hostname) || profileUrl.username || profileUrl.password || profileUrl.search || profileUrl.hash || profileUrl.pathname.replace(/\/$/, "").toLowerCase() !== "/" + name.toLowerCase()) return { matched: false, reason: "source_unverified" };
-    const rowsResearch = await query2(sb2.from("sanji_instagram_public_research").select("handle,profile_url,observed_at,topics,sources,capture_sha256").eq("owner", owner).eq("account_id", a.id).eq("peer_id", peerId).order("observed_at", { ascending: false }).limit(1));
+    const rowsResearch = await query2(sb2.from("sanji_instagram_public_research").select("handle,profile_url,observed_at,topics,sources,capture_sha256").eq("owner", owner).eq("account_id", a.id).eq("peer_id", peerId).is("revoked_at", null).order("observed_at", { ascending: false }).limit(1));
     const research = Array.isArray(rowsResearch) ? rowsResearch[0] : null, at2 = Date.parse(research?.observed_at || "");
     const trusted = research && research.handle === name.toLowerCase() && ["https://www.instagram.com/" + name.toLowerCase(), "https://instagram.com/" + name.toLowerCase()].includes(String(research.profile_url || "").replace(/\/$/, "").toLowerCase()) && Number.isFinite(at2) && at2 <= Date.now() + 3e5 && Date.now() - at2 <= 7 * 864e5 && Array.isArray(research.topics) ? { profileUrl: research.profile_url, observedAt: research.observed_at, topics: research.topics, sources: research.sources, captureSha256: research.capture_sha256, provenance: "operator_attested" } : null;
     return { matched: true, peerUsername: name, creator: { id: c.id, handle: c.handle, nickname: c.nickname || "", bio: c.bio || "", category: c.category || "", profileUrl: c.profile_url || "", linkStatus: c.link_status || "", lastVerified: c.last_verified || null, publicResearch: trusted } };
@@ -386,6 +386,19 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
     if (!b || Object.keys(b).some((k) => k !== "rows")) throw Error("\uADFC\uAC70 \uD655\uC778 \uD544\uC694");
     const rows = normalizeTagbyRows(b.rows), previewHash = await tagbyPreviewHash(owner, a.id, rows);
     return { rows, previewHash, provenance: "operator_attested", notice: "\uC6B4\uC601\uC790\uAC00 \uD0DC\uADF8\uBC14\uC774 \uC6D0\uBCF8\uACFC \uB300\uC870\uD55C \uAE30\uB85D\uC785\uB2C8\uB2E4. \uD30C\uC77C \uD574\uC2DC\uB294 \uC81C\uACF5\uC0AC\uC758 \uC11C\uBA85\uC774 \uC544\uB2D9\uB2C8\uB2E4." };
+  }
+  async function evidenceList(owner, offset = 0) {
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > 1e5) throw Error("\uC798\uBABB\uB41C \uD398\uC774\uC9C0");
+    const a = await account(owner), size = 30;
+    const sent = await query2(sb2.from("sanji_tagby_sent_evidence").select("peer_id,handle,campaign_id,campaign_url,evidence_sha256,sheet_row,sent_at_display,observed_at,attested_at,revoked_at,revocation_reason").eq("owner", owner).eq("account_id", a.id).order("attested_at", { ascending: false }).order("peer_id").order("handle").order("campaign_id").order("sheet_row").order("evidence_sha256").range(offset, offset + size));
+    const research = await query2(sb2.from("sanji_instagram_public_research").select("peer_id,handle,profile_url,observed_at,topics,sources,capture_sha256,received_at,revoked_at,revocation_reason").eq("owner", owner).eq("account_id", a.id).order("received_at", { ascending: false }).order("peer_id").order("observed_at").range(offset, offset + size));
+    if (!Array.isArray(sent) || !Array.isArray(research)) throw Error("\uADFC\uAC70 \uBAA9\uB85D \uD655\uC778 \uC2E4\uD328");
+    return { sent: sent.slice(0, size), research: research.slice(0, size), offset, hasMore: sent.length > size || research.length > size };
+  }
+  async function revokeEvidence(owner, b) {
+    const a = await account(owner);
+    if (b?.confirmed !== true || Object.keys(b).some((k) => !["kind", "key", "reason", "confirmed"].includes(k)) || !["tagby", "research"].includes(b.kind) || !["wrong_source", "wrong_identity", "other"].includes(b.reason) || !b.key || typeof b.key !== "object" || Array.isArray(b.key)) throw Error("\uCCA0\uD68C\uD560 \uADFC\uAC70 \uD655\uC778 \uD544\uC694");
+    return { status: await query2(sb2.rpc("sanji_instagram_evidence_revoke", { p_owner: owner, p_account: a.id, p_kind: b.kind, p_key: b.key, p_reason: b.reason })) };
   }
   async function importTagby(owner, b) {
     const a = await account(owner);
@@ -418,7 +431,7 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
     await query2(sb2.rpc("sanji_instagram_finish_reply", { p_owner: owner, p_request: b.requestId, p_status: status, p_provider_id: providerId }));
     return { status };
   }
-  return { list, sync, reply, lookupPeer, creatorContext, previewTagby, importTagby, importResearch };
+  return { list, sync, reply, lookupPeer, creatorContext, previewTagby, importTagby, importResearch, evidenceList, revokeEvidence };
 }
 
 // supabase/functions/_shared/oauth-status.ts
@@ -500,6 +513,14 @@ function instagramInboxHandler({ sb: sb2, query: query2, env: env2, key: key2, d
       if (path === "/creator-instagram/peer-lookup" && req.method === "POST") {
         const b = await input();
         return json(await inbox.lookupPeer(owner, b.peerId));
+      }
+      if (path === "/creator-instagram/evidence" && req.method === "GET") {
+        const n = Number(url.searchParams.get("offset") || 0);
+        return json(await inbox.evidenceList(owner, n));
+      }
+      if (path === "/creator-instagram/evidence/revoke" && req.method === "POST") {
+        const b = await input();
+        return json(await inbox.revokeEvidence(owner, b));
       }
       if (path === "/creator-instagram/tagby-evidence/preview" && req.method === "POST") {
         const b = await input();
