@@ -1,7 +1,7 @@
 'use strict';
 // Pure preparation only. No API calls, storage, scheduling or sending.
-const TOPICS=new Set(['베이킹','요리','푸드','커피','라이프스타일','홈카페','디저트','육아','패션','뷰티','운동','웰니스','건강식품']);
-const topics=x=>new Set((Array.isArray(x)?x:[]).filter(v=>typeof v==='string'&&TOPICS.has(v.trim())).map(v=>v.trim()));
+// Match explicit public content topics, across all deal categories; never infer health conditions.
+const topics=x=>new Set((Array.isArray(x)?x:[]).filter(v=>typeof v==='string').map(v=>v.trim().toLocaleLowerCase()).filter(v=>v.length>=2&&v.length<=40&&!/[\x00-\x1f]/.test(v)&&!/(질병|질환|치료|진단|환자|복용|임신|불임|우울증)/.test(v)));
 function validLink(value){try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&!!u.hostname}catch{return false}}
 function planCreator(row,deals){
  const handle=String(row?.handle||'').replace(/^@/,'').toLowerCase();
@@ -9,9 +9,9 @@ function planCreator(row,deals){
  if(row.status!=='new'||row.bio_status!=='email_present'||!Array.isArray(row.emails)||row.emails.length!==1||!/^([^\s@]+)@([^\s@]+)\.[^\s@]+$/.test(row.emails[0])||!String(row.bio||'').toLowerCase().includes(row.emails[0].toLowerCase()))return {id:row.id,handle,status:'skip',reason:'공개 이메일 확인 필요'};
  let source;try{source=new URL(row.profile_url)}catch{}if(!source||source.protocol!=='https:'||!['instagram.com','www.instagram.com'].includes(source.hostname)||source.username||source.password||source.search||source.hash||source.pathname.replace(/\/$/,'').toLowerCase()!=='/'+handle)return {id:row.id,handle,status:'skip',reason:'이메일 출처 확인 필요'};
  const match=topics(row.topics),found=[];
- for(const d of Array.isArray(deals)?deals:[]){const productTopics=topics(d?.topics),overlap=[...productTopics].filter(t=>match.has(t));if(!d?.id||!d.name||!validLink(d.productUrl)||!['확정','협의 중'].includes(d.state)||!overlap.length||d.stock===0||d.soldOut===true||/품절/.test(String(d.sourceNote||'')+' '+String(d.note||'')))continue;found.push({id:d.id,name:d.name,productUrl:d.productUrl,overlap,wellness:[...productTopics].some(t=>['웰니스','건강식품'].includes(t))});}
+ for(const d of Array.isArray(deals)?deals:[]){const productTopics=topics(d?.topics),overlap=[...productTopics].filter(t=>match.has(t));if(!d?.id||!d.name||!validLink(d.productUrl)||!['확정','협의 중'].includes(d.state)||!overlap.length||d.stock===0||d.soldOut===true||/품절/.test(String(d.sourceNote||'')+' '+String(d.note||'')))continue;found.push({id:d.id,name:d.name,productUrl:d.productUrl,overlap});}
  const unique=[...new Map(found.map(d=>[d.id,d])).values()];
- unique.sort((a,b)=>Number(b.wellness)-Number(a.wellness));
+ unique.sort((a,b)=>b.overlap.length-a.overlap.length||String(a.id).localeCompare(String(b.id)));
  if(!unique.length)return {id:row.id,handle,status:'skip',reason:'적합한 상품 연관 근거 필요'};
  return {id:row.id,handle,status:'ready_for_verification',email:row.emails[0],sourceUrl:row.profile_url,products:[unique[0]]};
 }

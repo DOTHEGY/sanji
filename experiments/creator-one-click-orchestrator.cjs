@@ -6,7 +6,7 @@ const {renderApprovedTemplate}=require('./creator-one-click-template.cjs');
 async function runFrozenBatch({owner,runId,adapter,report=()=>{}}){
  if(!owner||!runId||!adapter)throw Error('run context required');
  const initial=await adapter.getRun(owner,runId);if(!initial||!Array.isArray(initial.items))throw Error('run unavailable');
- const template=await adapter.getApprovedTemplate(owner,initial.templateSha256);if(!template||template.claimsVerified!==true||template.sha256!==initial.templateSha256)throw Error('승인된 템플릿과 사실 확인 필요');
+ const template=await adapter.getApprovedTemplate(owner,initial.templateSha256);if(!template||template.userApproved!==true||template.sha256!==initial.templateSha256)throw Error('사용자가 승인한 템플릿 확인 필요');
  let queued=0,skipped=0;
  for(const frozen of initial.items){
   if(frozen.status==='queued'){queued++;continue}if(frozen.status==='skipped'){skipped++;continue}if(frozen.status!=='pending')return {queued,skipped,stopped:true,reason:'unknown state'};
