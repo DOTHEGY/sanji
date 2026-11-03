@@ -4,7 +4,7 @@ begin;
 create table public.sanji_tagby_sent_evidence (
  owner uuid not null references auth.users(id), account_id text not null, peer_id text not null, handle text not null,
  campaign_id bigint not null, campaign_url text not null, sheet text not null, evidence_sha256 text not null, sheet_row integer not null,
- sent_at_display text not null, observed_at timestamptz not null, attested_at timestamptz not null default now(),
+ sender text not null check(sender='valu_est'), provider_status text not null check(provider_status='SUCCESS'), attested_by uuid not null references auth.users(id), sent_at_display text not null, observed_at timestamptz not null, attested_at timestamptz not null default now(),
  primary key(owner,account_id,handle,campaign_id,evidence_sha256,sheet_row)
 );
 alter table public.sanji_tagby_sent_evidence enable row level security;
@@ -25,7 +25,7 @@ begin
   if (select count(*) from public.sanji_creator_recovery x where x.owner=p_owner and lower(x.handle)=h)<>1 or not exists(select 1 from public.sanji_creator_recovery x join public.sanji_creator_recommendations y on y.owner=x.owner and y.creator_id=x.id where x.owner=p_owner and lower(x.handle)=h) then raise exception 'recommendation not verified';end if;
   select count(distinct p.peer_id),min(p.peer_id) into peer_count,matched_peer from public.sanji_instagram_peer_profiles p where p.owner=p_owner and p.account_id=p_account and lower(p.username)=h and p.username_observed_at between now()-interval '7 days' and now()+interval '5 minutes' and exists(select 1 from public.sanji_instagram_inbound i where i.owner=p_owner and i.account_id=p_account and i.peer_id=p.peer_id);
   if peer_count<>1 then raise exception 'current received peer not verified';end if;
-  insert into public.sanji_tagby_sent_evidence(owner,account_id,peer_id,handle,campaign_id,campaign_url,sheet,evidence_sha256,sheet_row,sent_at_display,observed_at) values(p_owner,p_account,matched_peer,h,c,r->>'campaign_url',r->>'sheet',r->>'evidence_sha256',(r->>'sheet_row')::int,r->>'sent_at_display',(r->>'observed_at')::timestamptz) on conflict do nothing;
+  insert into public.sanji_tagby_sent_evidence(owner,account_id,peer_id,handle,campaign_id,campaign_url,sheet,evidence_sha256,sheet_row,sender,provider_status,attested_by,sent_at_display,observed_at) values(p_owner,p_account,matched_peer,h,c,r->>'campaign_url',r->>'sheet',r->>'evidence_sha256',(r->>'sheet_row')::int,'valu_est','SUCCESS',p_owner,r->>'sent_at_display',(r->>'observed_at')::timestamptz) on conflict do nothing;
   get diagnostics inserted=row_count; if inserted=0 and not exists(select 1 from public.sanji_tagby_sent_evidence where owner=p_owner and account_id=p_account and peer_id=matched_peer and handle=h and campaign_id=c and evidence_sha256=r->>'evidence_sha256' and sheet_row=(r->>'sheet_row')::int and sent_at_display=r->>'sent_at_display') then raise exception 'evidence collision'; end if; n:=n+inserted;
  end loop;
  return n;

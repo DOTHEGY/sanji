@@ -34,7 +34,8 @@ export function instagramInboxHandler({sb,query,env,key,digest,encrypt,connectio
    if(path==='/creator-instagram/inbox'&&req.method==='GET'){const raw=url.searchParams.get('offset')||'0';if(!/^(0|[1-9]\d{0,5})$/.test(raw))throw Error('invalid offset');return json(await inbox.list(owner,Number(raw)));}
    if(path==='/creator-instagram/sync'&&req.method==='POST'){const b=await input();return json(await inbox.sync(owner,b.cursor));}
    if(path==='/creator-instagram/peer-lookup'&&req.method==='POST'){const b=await input();return json(await inbox.lookupPeer(owner,b.peerId));}
-   if(path==='/creator-instagram/tagby-evidence'&&req.method==='POST'){const b=await input();return json(await inbox.importTagby(owner,b));}
+   if(path==='/creator-instagram/tagby-evidence/preview'&&req.method==='POST'){const b=await input();return json(await inbox.previewTagby(owner,b));}
+   if(path==='/creator-instagram/tagby-evidence/commit'&&req.method==='POST'){const b=await input();return json(await inbox.importTagby(owner,b));}
    if(path==='/creator-instagram/public-research'&&req.method==='POST'){const b=await input();return json(await inbox.importResearch(owner,b));}
    if(path==='/creator-instagram/creator-context'&&req.method==='POST'){const b=await input();return json(await inbox.creatorContext(owner,b.peerId));}
    if(path==='/creator-instagram/reply'&&req.method==='POST')return json(await inbox.reply(owner,await input()));
