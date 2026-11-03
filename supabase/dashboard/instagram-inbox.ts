@@ -205,7 +205,16 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
       profiles.push(...page);
     }
     const byPeer = new Map(profiles.map((x) => [x.peer_id, x]));
-    return { items: items.map((x) => ({ ...x, peerProfile: byPeer.get(x.peer_id) || null })), attempts, offset, hasMore, account: "valu_est", sendingEnabled: env2("INSTAGRAM_DIRECT_REPLY_ENABLED") === "true" };
+    let proof = [];
+    if (peers.length) {
+      proof = await query2(sb2.rpc("sanji_tagby_evidence_for_peers", { p_owner: owner, p_account: a.id, p_peers: peers }));
+      if (!Array.isArray(proof)) throw Error("\uBC1C\uC1A1 \uADFC\uAC70 \uD655\uC778 \uC2E4\uD328");
+    }
+    const byProof = new Map(proof.map((x) => [x.peer_id, x]));
+    return { items: items.map((x) => {
+      const e = byProof.get(x.peer_id);
+      return { ...x, peerProfile: byPeer.get(x.peer_id) || null, tagbyEvidence: e ? { source: "tagby", recommended: true, sent: true, verified: true, handle: e.handle, provenance: "operator_attested" } : null };
+    }), attempts, offset, hasMore, account: "valu_est", sendingEnabled: env2("INSTAGRAM_DIRECT_REPLY_ENABLED") === "true" };
   }
   async function sync(owner, cursor) {
     let stage = "account", reason = "account_unavailable";
@@ -331,6 +340,53 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
     const saved = await observe(owner, a.id, peerId, inbound[0].message_id, profile, observedAt);
     return { found: saved === true };
   }
+  async function creatorContext(owner, peerId) {
+    if (typeof peerId !== "string" || !/^\d{1,100}$/.test(peerId)) throw Error("\uC0C1\uB300 \uACC4\uC815\uC744 \uD655\uC778\uD558\uC138\uC694");
+    const a = await account(owner);
+    if (peerId === a.id) throw Error("\uC0C1\uB300 \uACC4\uC815\uC744 \uD655\uC778\uD558\uC138\uC694");
+    const inbound = await query2(sb2.from("sanji_instagram_inbound").select("message_id").eq("owner", owner).eq("account_id", a.id).eq("peer_id", peerId).limit(1));
+    if (!Array.isArray(inbound) || !inbound.length) return { matched: false, reason: "no_inbound" };
+    const profile = await query2(sb2.from("sanji_instagram_peer_profiles").select("username,username_observed_at").eq("owner", owner).eq("account_id", a.id).eq("peer_id", peerId).maybeSingle());
+    const name = safePeer({ username: profile?.username }).username, seen = Date.parse(profile?.username_observed_at || "");
+    if (!name || !Number.isFinite(seen) || seen > Date.now() + 3e5 || Date.now() - seen > 7 * 864e5) return { matched: false, reason: "peer_unverified" };
+    const rows = await query2(sb2.from("sanji_creator_recovery").select("id,handle,nickname,bio,category,profile_url,link_status,last_verified").eq("owner", owner).eq("handle", name.toLowerCase()).limit(2));
+    if (!Array.isArray(rows) || rows.length !== 1) return { matched: false, reason: rows?.length > 1 ? "ambiguous" : "not_found" };
+    const c = rows[0];
+    if (typeof c.handle !== "string" || c.handle.toLowerCase() !== name.toLowerCase()) return { matched: false, reason: "not_found" };
+    let profileUrl;
+    try {
+      profileUrl = new URL(c.profile_url || "");
+    } catch {
+      return { matched: false, reason: "source_unverified" };
+    }
+    if (c.link_status !== "source_confirmed" || profileUrl.protocol !== "https:" || !["instagram.com", "www.instagram.com"].includes(profileUrl.hostname) || profileUrl.username || profileUrl.password || profileUrl.search || profileUrl.hash || profileUrl.pathname.replace(/\/$/, "").toLowerCase() !== "/" + name.toLowerCase()) return { matched: false, reason: "source_unverified" };
+    let approvedTemplate = null;
+    try {
+      const templates = await query2(sb2.from("sanji_creator_one_click_templates").select("subject,body,sha256,active").eq("owner", owner).eq("active", true).limit(2));
+      if (Array.isArray(templates) && templates.length === 1) {
+        const t = templates[0];
+        if (t.subject === "\uB3C4\uD569 300\uB9CC \uD06C\uB9AC\uC5D0\uC774\uD130\uC640 \uD568\uAED8 \uC77C\uD558\uB294 \uB0A8\uC900\uD601 \uBCC0\uB9AC\uC0AC\uC785\uB2C8\uB2E4" && typeof t.body === "string" && /^[a-f0-9]{64}$/.test(t.sha256 || "")) {
+          const digest2 = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t.subject + "\n" + t.body))), (x) => x.toString(16).padStart(2, "0")).join("");
+          if (digest2 === t.sha256) approvedTemplate = { subject: t.subject, body: t.body, sha256: t.sha256, userApproved: true };
+        }
+      }
+    } catch {
+    }
+    const rowsResearch = await query2(sb2.from("sanji_instagram_public_research").select("handle,profile_url,observed_at,topics,sources,summary").eq("owner", owner).eq("account_id", a.id).eq("peer_id", peerId).order("observed_at", { ascending: false }).limit(1));
+    const research = Array.isArray(rowsResearch) ? rowsResearch[0] : null, at2 = Date.parse(research?.observed_at || "");
+    const trusted = research && research.handle === name.toLowerCase() && ["https://www.instagram.com/" + name.toLowerCase(), "https://instagram.com/" + name.toLowerCase()].includes(String(research.profile_url || "").replace(/\/$/, "").toLowerCase()) && Number.isFinite(at2) && at2 <= Date.now() + 3e5 && Date.now() - at2 <= 7 * 864e5 && Array.isArray(research.topics) ? { profileUrl: research.profile_url, observedAt: research.observed_at, topics: research.topics, sources: research.sources, summary: research.summary } : null;
+    return { matched: true, peerUsername: name, creator: { id: c.id, handle: c.handle, nickname: c.nickname || "", bio: c.bio || "", category: c.category || "", profileUrl: c.profile_url || "", linkStatus: c.link_status || "", lastVerified: c.last_verified || null, publicResearch: trusted }, approvedTemplate };
+  }
+  async function importTagby(owner, b) {
+    const a = await account(owner);
+    if (b?.attested !== true || !Array.isArray(b.rows) || b.rows.length < 1 || b.rows.length > 200 || Object.keys(b).some((k) => !["attested", "rows"].includes(k))) throw Error("\uADFC\uAC70 \uD655\uC778 \uD544\uC694");
+    return { inserted: await query2(sb2.rpc("sanji_tagby_evidence_import", { p_owner: owner, p_account: a.id, p_rows: b.rows, p_attested: true })), provenance: "operator_attested" };
+  }
+  async function importResearch(owner, b) {
+    const a = await account(owner);
+    if (b?.attested !== true || Object.keys(b).some((k) => !["attested", "peerId", "profileUrl", "observedAt", "topics", "sources", "summary"].includes(k))) throw Error("\uACF5\uAC1C \uC870\uC0AC \uADFC\uAC70 \uD655\uC778 \uD544\uC694");
+    return { inserted: await query2(sb2.rpc("sanji_instagram_research_import", { p_owner: owner, p_account: a.id, p_peer: b.peerId, p_profile_url: b.profileUrl, p_observed: b.observedAt, p_topics: b.topics, p_sources: b.sources, p_summary: b.summary, p_attested: true })), provenance: "operator_attested" };
+  }
   async function reply(owner, b) {
     if (env2("INSTAGRAM_DIRECT_REPLY_ENABLED") !== "true") throw Error("Instagram \uB2F5\uC7A5 \uBC1C\uC1A1\uC774 \uBE44\uD65C\uC131\uD654\uB418\uC5B4 \uC788\uC2B5\uB2C8\uB2E4.");
     if (typeof b.messageId !== "string" || !b.messageId || typeof b.body !== "string" || !b.body.trim() || b.body.length > 1e3 || typeof b.requestId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(b.requestId)) throw Error("\uB2F5\uC7A5 \uB0B4\uC6A9\uC744 \uD655\uC778\uD558\uC138\uC694.");
@@ -350,7 +406,7 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
     await query2(sb2.rpc("sanji_instagram_finish_reply", { p_owner: owner, p_request: b.requestId, p_status: status, p_provider_id: providerId }));
     return { status };
   }
-  return { list, sync, reply, lookupPeer };
+  return { list, sync, reply, lookupPeer, creatorContext, importTagby, importResearch };
 }
 
 // supabase/functions/_shared/oauth-status.ts
@@ -432,6 +488,18 @@ function instagramInboxHandler({ sb: sb2, query: query2, env: env2, key: key2, d
       if (path === "/creator-instagram/peer-lookup" && req.method === "POST") {
         const b = await input();
         return json(await inbox.lookupPeer(owner, b.peerId));
+      }
+      if (path === "/creator-instagram/tagby-evidence" && req.method === "POST") {
+        const b = await input();
+        return json(await inbox.importTagby(owner, b));
+      }
+      if (path === "/creator-instagram/public-research" && req.method === "POST") {
+        const b = await input();
+        return json(await inbox.importResearch(owner, b));
+      }
+      if (path === "/creator-instagram/creator-context" && req.method === "POST") {
+        const b = await input();
+        return json(await inbox.creatorContext(owner, b.peerId));
       }
       if (path === "/creator-instagram/reply" && req.method === "POST") return json(await inbox.reply(owner, await input()));
       return json({ error: "\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uACBD\uB85C" }, 404);
