@@ -112,7 +112,7 @@ async function submitThroughEngine({ claim, forward, reconcile }) {
 }
 
 // supabase/functions/creator-one-click/plan.mjs
-var topics = (x) => new Set((Array.isArray(x) ? x : []).filter((v) => typeof v === "string").map((v) => v.trim().toLocaleLowerCase()).filter((v) => v.length >= 2 && v.length <= 40 && !/[\x00-\x1f]/.test(v) && !/(질병|질환|치료|진단|환자|복용|임신|불임|우울증)/.test(v)));
+var topics = (x) => new Set((Array.isArray(x) ? x : []).filter((v) => typeof v === "string").map((v) => v.trim().toLocaleLowerCase()).filter((v) => v.length >= 2 && v.length <= 40 && !/[\x00-\x1f]/.test(v) && !/(질병|질환|치료|진단|환자|복용|임신|불임|우울증|pregnan|diabet|disease|illness|patient|medicat|cancer|therapy|depress)/i.test(v)));
 function validLink(value) {
   try {
     const u = new URL(value);

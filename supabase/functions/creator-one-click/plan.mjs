@@ -1,6 +1,6 @@
 // Pure preparation only. No API calls, storage, scheduling or sending.
 // Match explicit public content topics, across all deal categories; never infer health conditions.
-const topics=x=>new Set((Array.isArray(x)?x:[]).filter(v=>typeof v==='string').map(v=>v.trim().toLocaleLowerCase()).filter(v=>v.length>=2&&v.length<=40&&!/[\x00-\x1f]/.test(v)&&!/(질병|질환|치료|진단|환자|복용|임신|불임|우울증)/.test(v)));
+const topics=x=>new Set((Array.isArray(x)?x:[]).filter(v=>typeof v==='string').map(v=>v.trim().toLocaleLowerCase()).filter(v=>v.length>=2&&v.length<=40&&!/[\x00-\x1f]/.test(v)&&!/(질병|질환|치료|진단|환자|복용|임신|불임|우울증|pregnan|diabet|disease|illness|patient|medicat|cancer|therapy|depress)/i.test(v)));
 function validLink(value){try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&!!u.hostname}catch{return false}}
 function planCreator(row,deals){
  const handle=String(row?.handle||'').replace(/^@/,'').toLowerCase();
