@@ -67,7 +67,11 @@ export function instagramDirectInbox({sb,query,connection,remote,env}:any){
   const c=rows[0];if(typeof c.handle!=='string'||c.handle.toLowerCase()!==name.toLowerCase())return {matched:false,reason:'not_found'};
   let profileUrl:URL;try{profileUrl=new URL(c.profile_url||'');}catch{return {matched:false,reason:'source_unverified'};}
   if(c.link_status!=='source_confirmed'||profileUrl.protocol!=='https:'||!['instagram.com','www.instagram.com'].includes(profileUrl.hostname)||profileUrl.username||profileUrl.password||profileUrl.search||profileUrl.hash||profileUrl.pathname.replace(/\/$/,'').toLowerCase()!=='/'+name.toLowerCase())return {matched:false,reason:'source_unverified'};
-  return {matched:true,peerUsername:name,creator:{id:c.id,handle:c.handle,nickname:c.nickname||'',bio:c.bio||'',category:c.category||'',profileUrl:c.profile_url||'',linkStatus:c.link_status||'',lastVerified:c.last_verified||null}};
+  // Optional approved template store: if absent/unavailable, still return the
+  // verified creator but never manufacture or substitute a long proposal.
+  let approvedTemplate:any=null;
+  try{const templates=await query(sb.from('sanji_creator_one_click_templates').select('subject,body,sha256,active').eq('owner',owner).eq('active',true).limit(2));if(Array.isArray(templates)&&templates.length===1){const t=templates[0];if(t.subject==='도합 300만 크리에이터와 함께 일하는 남준혁 변리사입니다'&&typeof t.body==='string'&&/^[a-f0-9]{64}$/.test(t.sha256||'')){const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(t.subject+'\n'+t.body))),x=>x.toString(16).padStart(2,'0')).join('');if(digest===t.sha256)approvedTemplate={subject:t.subject,body:t.body,sha256:t.sha256,userApproved:true};}}}catch{/* No approved template means no generated draft. */}
+  return {matched:true,peerUsername:name,creator:{id:c.id,handle:c.handle,nickname:c.nickname||'',bio:c.bio||'',category:c.category||'',profileUrl:c.profile_url||'',linkStatus:c.link_status||'',lastVerified:c.last_verified||null},approvedTemplate};
  }
  async function reply(owner:string,b:any){
   if(env('INSTAGRAM_DIRECT_REPLY_ENABLED')!=='true')throw Error('Instagram 답장 발송이 비활성화되어 있습니다.');
