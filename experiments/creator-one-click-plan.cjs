@@ -6,7 +6,7 @@ function validLink(value){try{const u=new URL(value);return u.protocol==='https:
 function planCreator(row,deals){
  const handle=String(row?.handle||'').replace(/^@/,'').toLowerCase();
  if(!row?.id||!/^[a-z0-9._]{1,30}$/.test(handle))return {status:'skip',reason:'계정 확인 필요'};
- if(!Array.isArray(row.emails)||row.emails.length!==1||!/^([^\s@]+)@([^\s@]+)\.[^\s@]+$/.test(row.emails[0]))return {id:row.id,handle,status:'skip',reason:'공개 이메일 확인 필요'};
+ if(row.status!=='new'||row.bio_status!=='email_present'||!Array.isArray(row.emails)||row.emails.length!==1||!/^([^\s@]+)@([^\s@]+)\.[^\s@]+$/.test(row.emails[0])||!String(row.bio||'').toLowerCase().includes(row.emails[0].toLowerCase()))return {id:row.id,handle,status:'skip',reason:'공개 이메일 확인 필요'};
  let source;try{source=new URL(row.profile_url)}catch{}if(!source||source.protocol!=='https:'||!['instagram.com','www.instagram.com'].includes(source.hostname)||source.username||source.password||source.search||source.hash||source.pathname.replace(/\/$/,'').toLowerCase()!=='/'+handle)return {id:row.id,handle,status:'skip',reason:'이메일 출처 확인 필요'};
  const match=topics(row.topics),found=[];
  for(const d of Array.isArray(deals)?deals:[]){const overlap=[...topics(d?.topics)].filter(t=>match.has(t));if(!d?.id||!d.name||!validLink(d.productUrl)||!['확정','협의 중'].includes(d.state)||!overlap.length||d.stock===0||d.soldOut===true||/품절/.test(String(d.sourceNote||'')+' '+String(d.note||'')))continue;found.push({id:d.id,name:d.name,productUrl:d.productUrl,overlap});}
