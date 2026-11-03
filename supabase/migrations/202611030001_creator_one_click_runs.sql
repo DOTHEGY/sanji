@@ -2,7 +2,7 @@
 begin;
 create table public.sanji_creator_one_click_runs (
  owner uuid not null references auth.users(id), id uuid not null, day date not null,
- target integer not null check(target between 1 and 500), created timestamptz not null default now(),
+ target integer not null check(target between 1 and 500), template_sha256 text not null check(template_sha256 ~ '^[a-f0-9]{64}$'), created timestamptz not null default now(),
  primary key(owner,id)
 );
 create table public.sanji_creator_one_click_items (
@@ -17,17 +17,17 @@ alter table public.sanji_creator_one_click_runs enable row level security;
 alter table public.sanji_creator_one_click_items enable row level security;
 revoke all on public.sanji_creator_one_click_runs,public.sanji_creator_one_click_items from public,anon,authenticated,service_role;
 grant select on public.sanji_creator_one_click_runs,public.sanji_creator_one_click_items to service_role;
-create function public.sanji_creator_one_click_start(p_owner uuid,p_run uuid,p_day date,p_target integer) returns integer
+create function public.sanji_creator_one_click_start(p_owner uuid,p_run uuid,p_day date,p_target integer,p_template_sha256 text) returns integer
 language plpgsql security definer set search_path='' as $$
 declare prior uuid[]; added integer; frozen integer; existing public.sanji_creator_one_click_runs;
 begin
- if not exists(select 1 from public.sanji_members where user_id=p_owner) or p_run is null or p_day is distinct from (now() at time zone 'Asia/Seoul')::date or p_target is null or p_target not between 1 and 500 then raise exception 'invalid request'; end if;
+ if not exists(select 1 from public.sanji_members where user_id=p_owner) or p_run is null or p_day is distinct from (now() at time zone 'Asia/Seoul')::date or p_target is null or p_target not between 1 and 500 or p_template_sha256 is null or p_template_sha256 !~ '^[a-f0-9]{64}$' then raise exception 'invalid request'; end if;
  perform pg_advisory_xact_lock(hashtextextended(p_owner::text,725));
  select * into existing from public.sanji_creator_one_click_runs where owner=p_owner and id=p_run;
- if found then if existing.day<>p_day or existing.target<>p_target then raise exception 'run parameters mismatch';end if;return (select count(*)::int from public.sanji_creator_one_click_items where owner=p_owner and run_id=p_run);end if;
+ if found then if existing.day<>p_day or existing.target<>p_target or existing.template_sha256<>p_template_sha256 then raise exception 'run parameters mismatch';end if;return (select count(*)::int from public.sanji_creator_one_click_items where owner=p_owner and run_id=p_run);end if;
  select coalesce(array_agg(creator_id),'{}'::uuid[]) into prior from public.sanji_creator_recommendations where owner=p_owner and day=p_day;
  added:=public.sanji_creator_recommend(p_owner,p_day,p_target);
- insert into public.sanji_creator_one_click_runs(owner,id,day,target) values(p_owner,p_run,p_day,p_target);
+ insert into public.sanji_creator_one_click_runs(owner,id,day,target,template_sha256) values(p_owner,p_run,p_day,p_target,p_template_sha256);
  insert into public.sanji_creator_one_click_items(owner,run_id,creator_id) select p_owner,p_run,creator_id from public.sanji_creator_recommendations where owner=p_owner and day=p_day and not (creator_id=any(prior));
  get diagnostics frozen=row_count;if frozen<>added then raise exception 'recommendation snapshot mismatch';end if;
  return frozen;
@@ -60,6 +60,6 @@ begin
  update public.sanji_creator_one_click_items set status='queued',job_id=job.id where owner=p_owner and run_id=p_run and creator_id=p_creator;
  return job.id;
 end $$;
-revoke all on function public.sanji_creator_one_click_start(uuid,uuid,date,integer),public.sanji_creator_one_click_skip(uuid,uuid,uuid,text),public.sanji_creator_one_click_enqueue(uuid,uuid,uuid,uuid,text,timestamptz) from public,anon,authenticated,service_role;
-grant execute on function public.sanji_creator_one_click_start(uuid,uuid,date,integer),public.sanji_creator_one_click_skip(uuid,uuid,uuid,text),public.sanji_creator_one_click_enqueue(uuid,uuid,uuid,uuid,text,timestamptz) to service_role;
+revoke all on function public.sanji_creator_one_click_start(uuid,uuid,date,integer,text),public.sanji_creator_one_click_skip(uuid,uuid,uuid,text),public.sanji_creator_one_click_enqueue(uuid,uuid,uuid,uuid,text,timestamptz) from public,anon,authenticated,service_role;
+grant execute on function public.sanji_creator_one_click_start(uuid,uuid,date,integer,text),public.sanji_creator_one_click_skip(uuid,uuid,uuid,text),public.sanji_creator_one_click_enqueue(uuid,uuid,uuid,uuid,text,timestamptz) to service_role;
 commit;
