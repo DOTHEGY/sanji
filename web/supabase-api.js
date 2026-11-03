@@ -1,3 +1,4 @@
+import { loadStableStateRecords } from "./state-records.mjs";
 import { probeEdge, classifyEdgeResponse } from "./edge-diagnostics.js";
 import { createClient } from "@supabase/supabase-js";
 import {
@@ -153,15 +154,14 @@ export async function workspaceApi(path, method = "GET", body) {
       automation: { configured: false },
     };
   }
-  await member();
+  const session = await member();
   if (path === "/state") {
     const [rows, outbox, suppression] = await Promise.all([
-      result(
-        client
-          .from("sanji_records")
-          .select("*")
-          .order("updated", { ascending: false }),
-      ),
+      loadStableStateRecords({owner:session.user.id,fetchPage:async({owner,cursor,summary,pageSize})=>{
+        let q=client.from("sanji_records").select(summary?"id,owner,version,updated":"*").eq("owner",owner).order("id",{ascending:true}).limit(pageSize);
+        if(cursor)q=q.gt("id",cursor);
+        return await result(q);
+      }}),
       result(
         client
           .from("sanji_outbox")
