@@ -331,6 +331,28 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
     const saved = await observe(owner, a.id, peerId, inbound[0].message_id, profile, observedAt);
     return { found: saved === true };
   }
+  async function creatorContext(owner, peerId) {
+    if (typeof peerId !== "string" || !/^\d{1,100}$/.test(peerId)) throw Error("\uC0C1\uB300 \uACC4\uC815\uC744 \uD655\uC778\uD558\uC138\uC694");
+    const a = await account(owner);
+    if (peerId === a.id) throw Error("\uC0C1\uB300 \uACC4\uC815\uC744 \uD655\uC778\uD558\uC138\uC694");
+    const inbound = await query2(sb2.from("sanji_instagram_inbound").select("message_id").eq("owner", owner).eq("account_id", a.id).eq("peer_id", peerId).limit(1));
+    if (!Array.isArray(inbound) || !inbound.length) return { matched: false, reason: "no_inbound" };
+    const profile = await query2(sb2.from("sanji_instagram_peer_profiles").select("username,username_observed_at").eq("owner", owner).eq("account_id", a.id).eq("peer_id", peerId).maybeSingle());
+    const name = safePeer({ username: profile?.username }).username, seen = Date.parse(profile?.username_observed_at || "");
+    if (!name || !Number.isFinite(seen) || seen > Date.now() + 3e5 || Date.now() - seen > 7 * 864e5) return { matched: false, reason: "peer_unverified" };
+    const rows = await query2(sb2.from("sanji_creator_recovery").select("id,handle,nickname,bio,category,profile_url,link_status,last_verified").eq("owner", owner).eq("handle", name.toLowerCase()).limit(2));
+    if (!Array.isArray(rows) || rows.length !== 1) return { matched: false, reason: rows?.length > 1 ? "ambiguous" : "not_found" };
+    const c = rows[0];
+    if (typeof c.handle !== "string" || c.handle.toLowerCase() !== name.toLowerCase()) return { matched: false, reason: "not_found" };
+    let profileUrl;
+    try {
+      profileUrl = new URL(c.profile_url || "");
+    } catch {
+      return { matched: false, reason: "source_unverified" };
+    }
+    if (c.link_status !== "source_confirmed" || profileUrl.protocol !== "https:" || !["instagram.com", "www.instagram.com"].includes(profileUrl.hostname) || profileUrl.username || profileUrl.password || profileUrl.search || profileUrl.hash || profileUrl.pathname.replace(/\/$/, "").toLowerCase() !== "/" + name.toLowerCase()) return { matched: false, reason: "source_unverified" };
+    return { matched: true, peerUsername: name, creator: { id: c.id, handle: c.handle, nickname: c.nickname || "", bio: c.bio || "", category: c.category || "", profileUrl: c.profile_url || "", linkStatus: c.link_status || "", lastVerified: c.last_verified || null } };
+  }
   async function reply(owner, b) {
     if (env2("INSTAGRAM_DIRECT_REPLY_ENABLED") !== "true") throw Error("Instagram \uB2F5\uC7A5 \uBC1C\uC1A1\uC774 \uBE44\uD65C\uC131\uD654\uB418\uC5B4 \uC788\uC2B5\uB2C8\uB2E4.");
     if (typeof b.messageId !== "string" || !b.messageId || typeof b.body !== "string" || !b.body.trim() || b.body.length > 1e3 || typeof b.requestId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(b.requestId)) throw Error("\uB2F5\uC7A5 \uB0B4\uC6A9\uC744 \uD655\uC778\uD558\uC138\uC694.");
@@ -350,7 +372,7 @@ function instagramDirectInbox({ sb: sb2, query: query2, connection: connection2,
     await query2(sb2.rpc("sanji_instagram_finish_reply", { p_owner: owner, p_request: b.requestId, p_status: status, p_provider_id: providerId }));
     return { status };
   }
-  return { list, sync, reply, lookupPeer };
+  return { list, sync, reply, lookupPeer, creatorContext };
 }
 
 // supabase/functions/_shared/oauth-status.ts
@@ -432,6 +454,10 @@ function instagramInboxHandler({ sb: sb2, query: query2, env: env2, key: key2, d
       if (path === "/creator-instagram/peer-lookup" && req.method === "POST") {
         const b = await input();
         return json(await inbox.lookupPeer(owner, b.peerId));
+      }
+      if (path === "/creator-instagram/creator-context" && req.method === "POST") {
+        const b = await input();
+        return json(await inbox.creatorContext(owner, b.peerId));
       }
       if (path === "/creator-instagram/reply" && req.method === "POST") return json(await inbox.reply(owner, await input()));
       return json({ error: "\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uACBD\uB85C" }, 404);

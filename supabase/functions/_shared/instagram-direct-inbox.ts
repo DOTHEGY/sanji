@@ -52,6 +52,23 @@ export function instagramDirectInbox({sb,query,connection,remote,env}:any){
   if(typeof peerId!=='string'||!/^\d{1,100}$/.test(peerId))throw Error('상대 계정을 확인하세요');const a=await account(owner);if(peerId===a.id)throw Error('상대 계정을 확인하세요');const inbound=await query(sb.from('sanji_instagram_inbound').select('message_id').eq('owner',owner).eq('account_id',a.id).eq('peer_id',peerId).limit(1));if(!Array.isArray(inbound)||!inbound.length||typeof inbound[0]?.message_id!=='string'||!inbound[0].message_id)throw Error('확인된 수신 대화가 없습니다');
   const version=env('META_GRAPH_VERSION')||'v24.0';if(!/^v\d+\.\d+$/.test(version))throw Error('invalid version');const observedAt=new Date().toISOString(),profile=await remote('https://graph.instagram.com/'+version+'/'+encodeURIComponent(peerId)+'?'+new URLSearchParams({fields:'name,username'}),{method:'GET',headers:{Authorization:'Bearer '+a.token},signal:AbortSignal.timeout(3500)},'Instagram 상대 계정 조회');if(profile?.id!=null&&(typeof profile.id!=='string'||profile.id!==peerId))throw Error('상대 계정이 일치하지 않습니다');const safe=safePeer(profile);if(!safe.username&&!safe.name)return {found:false};const saved=await observe(owner,a.id,peerId,inbound[0].message_id,profile,observedAt);return {found:saved===true};
  }
+ // Only a provider-verified peer on a received conversation may map to the
+ // owner's recovery record. No email, display-name or numeric-ID guessing.
+ async function creatorContext(owner:string,peerId:any){
+  if(typeof peerId!=='string'||!/^\d{1,100}$/.test(peerId))throw Error('상대 계정을 확인하세요');
+  const a=await account(owner);if(peerId===a.id)throw Error('상대 계정을 확인하세요');
+  const inbound=await query(sb.from('sanji_instagram_inbound').select('message_id').eq('owner',owner).eq('account_id',a.id).eq('peer_id',peerId).limit(1));
+  if(!Array.isArray(inbound)||!inbound.length)return {matched:false,reason:'no_inbound'};
+  const profile=await query(sb.from('sanji_instagram_peer_profiles').select('username,username_observed_at').eq('owner',owner).eq('account_id',a.id).eq('peer_id',peerId).maybeSingle());
+  const name=safePeer({username:profile?.username}).username,seen=Date.parse(profile?.username_observed_at||'');
+  if(!name||!Number.isFinite(seen)||seen>Date.now()+300000||Date.now()-seen>7*86400000)return {matched:false,reason:'peer_unverified'};
+  const rows=await query(sb.from('sanji_creator_recovery').select('id,handle,nickname,bio,category,profile_url,link_status,last_verified').eq('owner',owner).eq('handle',name.toLowerCase()).limit(2));
+  if(!Array.isArray(rows)||rows.length!==1)return {matched:false,reason:rows?.length>1?'ambiguous':'not_found'};
+  const c=rows[0];if(typeof c.handle!=='string'||c.handle.toLowerCase()!==name.toLowerCase())return {matched:false,reason:'not_found'};
+  let profileUrl:URL;try{profileUrl=new URL(c.profile_url||'');}catch{return {matched:false,reason:'source_unverified'};}
+  if(c.link_status!=='source_confirmed'||profileUrl.protocol!=='https:'||!['instagram.com','www.instagram.com'].includes(profileUrl.hostname)||profileUrl.username||profileUrl.password||profileUrl.search||profileUrl.hash||profileUrl.pathname.replace(/\/$/,'').toLowerCase()!=='/'+name.toLowerCase())return {matched:false,reason:'source_unverified'};
+  return {matched:true,peerUsername:name,creator:{id:c.id,handle:c.handle,nickname:c.nickname||'',bio:c.bio||'',category:c.category||'',profileUrl:c.profile_url||'',linkStatus:c.link_status||'',lastVerified:c.last_verified||null}};
+ }
  async function reply(owner:string,b:any){
   if(env('INSTAGRAM_DIRECT_REPLY_ENABLED')!=='true')throw Error('Instagram 답장 발송이 비활성화되어 있습니다.');
   if(typeof b.messageId!=='string'||!b.messageId||typeof b.body!=='string'||!b.body.trim()||b.body.length>1000||typeof b.requestId!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(b.requestId))throw Error('답장 내용을 확인하세요.');
@@ -61,5 +78,5 @@ export function instagramDirectInbox({sb,query,connection,remote,env}:any){
   try{const version=env('META_GRAPH_VERSION')||'v24.0';if(!/^v\d+\.\d+$/.test(version))throw Error('invalid version');const res=await remote('https://graph.instagram.com/'+version+'/'+a.id+'/messages',{method:'POST',headers:{Authorization:'Bearer '+a.token,'Content-Type':'application/json'},body:JSON.stringify({recipient:{id:r.peerId},message:{text:b.body}})},'Instagram 답장');if(typeof res?.message_id==='string'&&res.message_id){status='accepted';providerId=res.message_id;}}catch{/* Outcome is unknown; never retry automatically. */}
   await query(sb.rpc('sanji_instagram_finish_reply',{p_owner:owner,p_request:b.requestId,p_status:status,p_provider_id:providerId}));return {status};
  }
- return {list,sync,reply,lookupPeer};
+ return {list,sync,reply,lookupPeer,creatorContext};
 }
