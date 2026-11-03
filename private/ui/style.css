@@ -339,6 +339,7 @@ h3 {
   flex-wrap: wrap;
   margin: 20px 0;
 }
+#mail-filter-controls:not([hidden]) { display: flex; gap: 9px; flex-wrap: wrap; min-width: 0; }
 input,
 select,
 textarea {
