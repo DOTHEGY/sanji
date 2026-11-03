@@ -459,7 +459,7 @@ function dealVariantLabel(d) {
   return d.sourceRowKey.split(":")[0] + " · " + (d.discountPercent ? d.discountPercent + "% 할인" : "할인 없음");
 }
 function feeSelect(name,label,value,options){return `<label class="field">${esc(label)}<select name="${esc(name)}">${options.map(([v,l])=>`<option value="${esc(v)}" ${v===value?'selected':''}>${esc(l)}</option>`).join('')}</select></label>`;}
-function dealRetailBasis(d){const text=String(d?.sourceNote||'')+' '+String(d?.note||'');if(/소비자가\s*(?:는|:|=)\s*(?:확인\s*당시\s*)?(?:현재|실제)\s*판매가/.test(text))return '확인 당시 판매가';if(/소비자가\s*(?:는|:|=)\s*(?:가격표(?:의)?\s*)?(?:할인\s*전|정가)/.test(text))return '할인 전 기준';return '기준 확인 필요';}
+function dealRetailBasis(d){const text=String(d?.sourceNote||'')+' '+String(d?.note||'');if(/공식몰\s*소비자\s*판매가로\s*소비자가\s*칸에\s*옮김(?=\s*(?:[.,;·|([\n]|$))/.test(text))return '확인 당시 판매가';if(/소비자가\s*(?:는|:|=)\s*(?:확인\s*당시\s*)?(?:현재|실제)\s*판매가/.test(text))return '확인 당시 판매가';if(/소비자가\s*(?:는|:|=)\s*(?:가격표(?:의)?\s*)?(?:할인\s*전|정가)/.test(text))return '할인 전 기준';return '기준 확인 필요';}
 function dealProductRow(items, selected) {
   const d = items.find(d => d.id === selected) || items.find(d => d.discountPercent === 10 && d.sourceRowKey?.startsWith("BOX:")) || items[0];
   const fee=d.feeTerms||{}, percent = fee.basis==='creator_only' ? '크리에이터 '+(Number.isFinite(fee.creatorPercent)&&fee.creatorPercent>=0&&fee.creatorPercent<=100?fee.creatorPercent+'%':'미확인') : Number.isFinite(d.commissionPercent) ? '공급사 전체 '+d.commissionPercent+'%' : (d.commission || '미협의');
