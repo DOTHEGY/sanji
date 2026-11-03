@@ -7,6 +7,7 @@ import {
   edgeFunctionUrl,
   instagramInboxFunctionUrl,
   dotSnapshotFunctionUrl,
+  creatorOneClickFunctionUrl,
 } from "./supabase-config.js";
 export const client = createClient(supabaseUrl, supabaseKey, {
   auth: {
@@ -64,7 +65,7 @@ async function member() {
 }
 async function edge(path, method, body) {
   const session = await member();
-  const functionUrl = path.startsWith("/creator-instagram/") ? instagramInboxFunctionUrl : path === "/dot-snapshot" || path.startsWith("/dot-snapshot/") ? dotSnapshotFunctionUrl : edgeFunctionUrl;
+  const functionUrl = path.startsWith("/creator-instagram/") ? instagramInboxFunctionUrl : path.startsWith("/creator-one-click/") ? creatorOneClickFunctionUrl : path === "/dot-snapshot" || path.startsWith("/dot-snapshot/") ? dotSnapshotFunctionUrl : edgeFunctionUrl;
   let response;
   try {
     response = await fetch(functionUrl + path, {
