@@ -148,6 +148,50 @@
     if(!points.length)return empty('그대로 사용할 수 있는 확인 소구점이 없어 추가 검토가 필요합니다.');
     return {status:'verified_saved',provenance:'stored_operator_record',points,sourceUrls:unique(urls.map(productUrl)),checkedAt:checked,reason:'저장된 공식 상세페이지 확인 기록 · 현재 페이지 재조회 아님',omitted:pieces.length-points.length};
   }
+  // Bounded preference review, not legal classification or a general food/health filter.
+  function healthIngredientEvidence(deal, selling) {
+    const identity = ['name', 'productName', 'category'].map(field => text(deal[field])).join(' ');
+    const nonFood = /비누|샴푸|핸드워시|화장품|향수|바디\s*바|페이셜바|세정|세제|접시|식기|그릇|머그|도구|장식|향초|요리책|레시피북|\b(?:soap|shampoo|cosmetic|candle|cookbook|mug|plate|bowl|tool)\b/i;
+    const foodCategory = /식품|커피|음료|주스|\b(?:food|coffee|drink|tea|juice)\b/i.test(text(deal.category));
+    const foodName = /커피|콜드브루|음료|주스|\b(?:coffee|cold\s*brew|drink|tea|juice)\b/i.test(identity);
+    const cosmetic = /비누|샴푸|핸드워시|화장품|향수|바디\s*바|페이셜바|세정|세제|\b(?:soap|shampoo|cosmetic)\b/i.test(identity);
+    if (nonFood.test(text(deal.category)) || (!foodCategory && (cosmetic || (!foodName && nonFood.test(identity))))) return [];
+    const rows = [];
+    const inspect = (value, field, verified, urls = [], observedAt = '') => {
+      // One ingredient's absence cannot cancel another's presence in the same record.
+      for (const clause of text(value).slice(0, 4000).split(/[,;\n.!?。]/u)) {
+        const mentions = [...clause.matchAll(/홍삼|인삼|\b(?:red\s+)?ginseng\b/giu)];
+        for (let i = 0; i < mentions.length; i++) {
+          const hit = mentions[i], before = clause.slice(i ? mentions[i - 1].index + mentions[i - 1][0].length : 0, hit.index), after = clause.slice(hit.index + hit[0].length, mentions[i + 1]?.index);
+          const uncertain = /[?？`]/.test(value) || /["“”‘’「」『』]|라는|라고|표현|문구|인용|예시|않지\s*않|(?:없|않).{0,30}(?:아니|아님|아닙)|\bnot\s+without\b|\b(?:free|without).{0,20}(?:not|incorrect|wrong)\b|미확인|불명확|불확실|추정|여부|가능성|확인\s*(?:필요|불가|안|되지)|없지\s*않|(?:무첨가|미함유|불포함).{0,8}(?:아니|아님|아닙)|\b(?:unknown|uncertain|unverified|may|might|whether)\b/i.test(clause);
+          const absentBefore = /(?:\b(?:no|without)|free\s+of|does\s+not\s+contain)\s*$/i.exec(before);
+          const absentAfter = /^(?:\s*(?:추출물|추출액|농축액|분말|extract|powder))?\s*(?:은|는|이|가|을|를)?\s*(?:무첨가|미함유|불포함|없(?:음|습니다|어요|는|지만)|(?:함유|첨가|포함)(?:하지|되지)\s*않|넣지\s*않|[- ]free\b|is\s+not\s+(?:included|added|present))/i.exec(after);
+          // Absence is only recognized as a complete statement or with a plain food noun.
+          // Reporting, qualifications and double negatives stay unknown rather than clearing a hold.
+          const remainder = absentAfter ? after.slice(absentAfter[0].length) : after;
+          const clearEnding = /^(?:\s*(?:음|은|는|습니다|아요|입니다|이다))?\s*(?:(?:커피|콜드브루|음료|차|원액|제품|상품|coffee|cold\s*brew|drink|tea)(?:입니다|이다)?\s*)?$/i.test(remainder);
+          const clearBeginning = !/\b(?:not|never|cannot)\b|n't\b|아니|아닌|아님|아닙/i.test(absentBefore ? before.slice(0, absentBefore.index) : before);
+          const absent = !!(absentBefore || absentAfter) && clearEnding && clearBeginning;
+          const present = !/풍미|향|맛|flavou?r|scent/i.test(clause) && (/^(?:\s*(?:추출물|추출액|농축액|분말|extract|powder))?\s*(?:은|는|이|가|을|를)?\s*(?:함유|포함|첨가|사용|넣(?:은|어|었)|더(?:한|해|했)|들어|원료|성분)/i.test(after) || /\b(?:contains?|with|added)\s*$/i.test(before));
+          const polarity = !verified || uncertain || ((absentBefore || absentAfter) && (!clearEnding || !clearBeginning)) ? 'uncertain' : absent ? 'absent' : present ? 'present' : 'associated';
+          const safeValue = verified && (field === 'claims' ? safeSellingPoint(text(clause)) : safeDescriptor(text(clause)));
+          rows.push(evidence('health_exclusion_ingredient', verified ? '제외 요청 검토용 · 등록 상품·확인 소구점의 원료 표현' : '제외 요청 검토용 · 미확인 원료 관련 기록', field, safeValue ? text(clause) : '홍삼·인삼 관련 기록 · 함유 여부 미확인', { productId: text(deal.id), ingredient: 'ginseng', polarity, strength: verified ? 'stored' : 'unknown', url: verified ? urls[0] || '' : '', sourceUrls: verified ? urls : [], observedAt: verified ? observedAt : '', provenance: 'stored_operator_record' }));
+        }
+      }
+    };
+    for (const field of ['name', 'productName', 'category']) if (safeDescriptor(deal[field])) inspect(deal[field], field, true, productUrl(deal.productUrl) ? [productUrl(deal.productUrl)] : [], text(deal.observedAt || deal.sourceObservedAt || deal.updatedAt));
+    // Validation binds the full claims string, including points beyond the three copied sentences.
+    // Unusable/revoked/old claims may require review, but never prove presence or safe absence.
+    const claims = text(deal.claims);
+    if (claims.length > 4000 && /홍삼|인삼|\bginseng\b/i.test(claims)) inspect('홍삼·인삼 관련 기록 미확인', 'claims', false);
+    else for (const point of claims.split(/\r?\n+|(?<=[.!?。])\s+/u)) inspect(point, 'claims', selling.status === 'verified_saved' && safeSellingPoint(point), selling.sourceUrls, selling.checkedAt);
+    return rows;
+  }
+  function healthIngredientHold(rows) {
+    const relevant = rows.filter(row => row.polarity !== 'absent');
+    if (!relevant.length) return '';
+    return '건강·웰니스 제외 요청 · 홍삼·인삼 ' + (relevant.some(row => row.polarity === 'present') ? '함유 표현 확인' : relevant.some(row => row.polarity === 'associated') ? '관련 표현의 원료 확인 필요' : '관련 기록 미확인') + ' · 상대 제외 기준과의 적합성 검토 보류';
+  }
   function replyPreferences(reply) {
     const raw=text(reply.text);
     if(reply.historical===true||!raw||/["“”‘’「」『』]|(?:^|\n)\s*>/.test(raw)||/제외|지양|거절|싫|않|아니|말고|관심\s*없|안\s*(?:받|보|하|쓰|마시)|미확인|불명확|추정|\bnot\b|\bwithout\b/i.test(raw))return [];
@@ -298,8 +342,8 @@
     return { score: 0, matchType: 'none', reason: '활동과 상품을 연결할 근거 부족', evidence: [], uncertainty: ['임의로 추천하거나 3개를 채우지 않습니다.'] };
   }
   function replyExclusions(deals, reply) {
-    const raw = text(reply.text), empty = { productIds: [], categories: [], decisionText: raw, evidence: [], categoryLabels: [] };
-    if (!raw || /["“”‘’「」『』]|(?:^|\n)\s*>/.test(raw)) return empty;
+    const raw = text(reply.text), empty = { productIds: [], categories: [], decisionText: raw, evidence: [], categoryLabels: [], healthExcluded: false };
+    if (!raw || /[`"“”‘’「」『』]|(?:^|\n)\s*>/.test(raw) || /(?:^|[\s([{])'[^'\r\n]+'(?=$|[\s)\]},.!?:;]|라는|라고|란)/u.test(raw)) return empty;
     const productIds = [], categories = [], categoryLabels = [], source = norm(raw), spans = [], evidenceRows = [];
     const excluded = (label) => {
       const word = norm(label);
@@ -310,9 +354,13 @@
       if (!found) return false;
       const start = found.index + found[0].length - found[1].length, end = start + found[1].length;
       const after = source.slice(end, end + 20);
-      if (/^(?:하지|하지는|하는\s*것은|가)?\s*(?:않|안|아니|아님|아닙)/.test(after)) return false;
+      // Opposite/reported continuations and questions are not affirmative exclusions.
+      // Keep ordinary affirmative conjugations such as 제외합니다 and 제외할게요.
+      if (/^(?:해\s*달라는|할\s*필요|하는\s*(?:건|것)).{0,20}(?:없|아니|아님|아닙|않|불필요)|^\s*[?？]|^[\s,.!?;]*(?:아니요|아니에요|아닙니다)/u.test(after)) return false;
+      if (/^(?:하지|하지는|하는\s*것은|가)?\s*(?:않|안|아니|아님|아닙|말)/.test(after)) return false;
+      if (/^(?:은|는|을|를)?\s*(?:원치|원하지|바라지|요청하지|말하지|뜻하지|의미하지|싫)/.test(after)) return false;
       // A quoted/reported or negated exclusion is never silently accepted as a current request.
-      if (/^(?:라는|라고|가\s*아니|는\s*아니|한\s*적)/.test(after)) return false;
+      if (/^(?:라는|라고|한다고|한다는|하라는|했다고|했다는|하라고|가\s*아니|는\s*아니|한\s*적)/.test(after)) return false;
       spans.push([start, end]); evidenceRows.push({ label: text(label), phrase: found[1] }); return true;
     };
     const healthExcluded = HEALTH_EXCLUSION_ALIASES.some(excluded);
@@ -328,7 +376,7 @@
     // Regex indices count UTF-16 code units; slice/string replacement preserves that convention.
     let decisionText = source;
     for (const [start, end] of spans.sort((a, b) => b[0] - a[0])) decisionText = decisionText.slice(0, start) + ' '.repeat(end - start) + decisionText.slice(end);
-    return { productIds: unique(productIds), categories: unique(categories), decisionText, categoryLabels: unique(categoryLabels), evidence: evidenceRows.filter((row, i) => evidenceRows.findIndex(other => other.phrase === row.phrase) === i) };
+    return { productIds: unique(productIds), categories: unique(categories), decisionText, healthExcluded, categoryLabels: unique(categoryLabels), evidence: evidenceRows.filter((row, i) => evidenceRows.findIndex(other => other.phrase === row.phrase) === i) };
   }
   function catalogGroups(deals, context, exclusions, now, preferences = []) {
     const rows = [], invalid = [];
@@ -336,6 +384,8 @@
       const d = deals[index];
       if (!d || !text(d.id) || !text(d.name) || text(d.name).length > 300) { invalid.push({ index, reason: '상품 ID·이름 누락 또는 형식 확인 필요' }); continue; }
       const stock = stockStatus(d), match = matchProduct(d, context, now), sellingPoints=savedSellingPoints(d,now), blockedReasons = [];
+      const ingredientEvidence = exclusions.healthExcluded ? healthIngredientEvidence(d, sellingPoints) : [], ingredientHold = healthIngredientHold(ingredientEvidence);
+      if (ingredientHold) blockedReasons.push(ingredientHold);
       for(const value of sellingPoints.points)if(!match.evidence.some(f=>f.kind==='stored_selling_point'&&f.value===value))match.evidence.push(evidence('stored_selling_point','저장된 공식 상세페이지 확인 소구점','claims',value,{url:sellingPoints.sourceUrls[0]||'',observedAt:sellingPoints.checkedAt,sourceUrls:sellingPoints.sourceUrls,provenance:'stored_operator_record'}));
       const preferred=match.score>0?preferences.filter(topic=>productFacts(d,now).some(f=>f.topic===topic)):[];
       if(preferred.length){match.score+=300;match.reason+=' · 현재 요청 분야 반영';match.evidence.push(...preferred.map(topic=>evidence('reply_preference','현재 회신의 관심 분야 · 수락 아님','reply.text',ALIASES[topic]?.[0]||topic,{topic})));}
@@ -345,7 +395,7 @@
       if (d.held === true || d.hold === true || ['보류', '중단', '종료', 'held', 'hold', 'inactive', 'archived'].includes(d.state) || ['보류', '중단', '종료', 'held', 'hold', 'inactive', 'archived'].includes(d.status) || ['held', 'hold', 'on_hold', 'inactive', 'archived'].includes(d.availability)) blockedReasons.push('저장된 보류·중단 상품');
       if (d.excluded === true || d.excludeFromProposal === true || ['제외', 'excluded'].includes(d.state) || ['제외', 'excluded'].includes(d.status) || d.availability === 'excluded') blockedReasons.push('저장된 제외 상품');
       if (/[\r\n\x00-\x1f]/.test(text(d.productName || d.name)) || /수수료|커미션|commission|원고료|고료|지원금|@|https?:\/\//i.test(text(d.productName || d.name))) blockedReasons.push('상품명 검수 필요');
-      const item = { id: d.id, name: safeDescriptor(d.name) ? text(d.name) : '상품명 검수 필요', product: safeDescriptor(d.productName || d.name) ? text(d.productName || d.name) : '상품명 검수 필요', brand: safeDescriptor(d.brand) ? text(d.brand) : '', category: safeDescriptor(d.category) ? text(d.category) : '미확인', link: productUrl(d.productUrl), stock: stock.label, state: safeDescriptor(d.state) ? text(d.state) : '미확인', retail: typeof d.retail === 'number' && Number.isFinite(d.retail) && d.retail >= 0 ? String(d.retail) + '원 · 저장 소비자가' : '미확인', price: '공구가 미확인', sellingPoints, options: strings(Array.isArray(d.options) ? d.options.map(o => typeof o === 'string' ? o : o?.name) : []).filter(safeDescriptor).join(' / ') || '옵션 확인 필요', ...match, blockedReasons };
+      const item = { id: d.id, name: safeDescriptor(d.name) ? text(d.name) : '상품명 검수 필요', product: safeDescriptor(d.productName || d.name) ? text(d.productName || d.name) : '상품명 검수 필요', brand: safeDescriptor(d.brand) ? text(d.brand) : '', category: safeDescriptor(d.category) ? text(d.category) : '미확인', link: productUrl(d.productUrl), stock: stock.label, state: safeDescriptor(d.state) ? text(d.state) : '미확인', retail: typeof d.retail === 'number' && Number.isFinite(d.retail) && d.retail >= 0 ? String(d.retail) + '원 · 저장 소비자가' : '미확인', price: '공구가 미확인', sellingPoints, options: strings(Array.isArray(d.options) ? d.options.map(o => typeof o === 'string' ? o : o?.name) : []).filter(safeDescriptor).join(' / ') || '옵션 확인 필요', ...match, ingredientEvidence, blockedReasons };
       rows.push({ item, index, keys: unique(['id:' + d.id, 'name:' + productNameKey(d), ...(productUrlKey(d.productUrl) ? ['url:' + productUrlKey(d.productUrl)] : []), ...(text(d.parentProductId || d.productId) ? ['parent:' + JSON.stringify([norm(d.brand), text(d.parentProductId || d.productId)])] : [])]) });
     }
     const parents = rows.map((_, i) => i), keys = new Map();
@@ -355,7 +405,8 @@
     const excludedIds = new Set(strings(exclusions.productIds)), excludedCategories = new Set(strings(exclusions.categories).map(norm));
     const groups = [...grouped.values()].map(rows => {
       const items = rows.map(r => r.item), eligible = items.filter(item => !item.blockedReasons.length).sort((a, b) => b.score - a.score || Number(b.sellingPoints.status==='verified_saved')-Number(a.sellingPoints.status==='verified_saved')), best = eligible[0] || items[0];
-      const blockedReasons = [];
+      const blockedReasons = [], ingredientEvidence = items.flatMap(item => item.ingredientEvidence), ingredientHold = healthIngredientHold(ingredientEvidence);
+      if (ingredientHold) blockedReasons.push(ingredientHold);
       if (items.some(item => excludedIds.has(item.id))) blockedReasons.push('직접 제외한 상품 또는 같은 상품의 옵션');
       if (items.some(item => excludedCategories.has(norm(item.category)))) blockedReasons.push('직접 제외한 분류');
       if (!eligible.length) blockedReasons.push(...unique(items.flatMap(item => item.blockedReasons)));
@@ -363,7 +414,7 @@
       if (items.some(item => item.blockedReasons.some(reason => /보류|제외/.test(reason)))) blockedReasons.push('같은 상품에 보류·제외 기록 있음');
       const angleTopics=unique(best.evidence.filter(f=>f.kind.startsWith('creator_')).map(f=>f.value)).filter(t=>Object.hasOwn(TOPICS,t)).slice(0,2);
       const channelAngle=angleTopics.length?angleTopics.map(t=>TOPICS[t][0]).join('·')+' 콘텐츠에 곁들이는 방향으로 검토할 수 있습니다.':'';
-      return { id: items[0].id, sellingPoints:best.sellingPoints, channelAngle, product: best.product, draftProduct: draftProductName(best.product), brand: best.brand, items, reason: best.reason, matchType: best.matchType, evidence: best.evidence, uncertainty: unique([...best.uncertainty, best.sellingPoints.reason, '현재 재고·가격·협업 조건은 확인되지 않았습니다.', ...(items.length > 1 ? ['같은 상품의 옵션·구성 기록을 하나로 묶었습니다.'] : [])]), score: best.score, available: !blockedReasons.length, blockedReasons: unique(blockedReasons), index: Math.min(...rows.map(r => r.index)) };
+      return { id: items[0].id, sellingPoints:best.sellingPoints, channelAngle, product: best.product, draftProduct: draftProductName(best.product), brand: best.brand, items, reason: best.reason, matchType: best.matchType, evidence: [...best.evidence, ...ingredientEvidence], uncertainty: unique([...best.uncertainty, best.sellingPoints.reason, '현재 재고·가격·협업 조건은 확인되지 않았습니다.', ...(items.length > 1 ? ['같은 상품의 옵션·구성 기록을 하나로 묶었습니다.'] : [])]), score: best.score, available: !blockedReasons.length, blockedReasons: unique(blockedReasons), index: Math.min(...rows.map(r => r.index)) };
     });
     return { groups: groups.sort((a, b) => b.score - a.score || a.index - b.index), invalid };
   }
@@ -428,7 +479,7 @@
     const historyExclusions = inbound.map(message => ({ message, exclusions: replyExclusions(deals, { text: message.text }) }));
     const intentThread = { ...(options.thread || {}), messages: historyExclusions.map(row => ({ ...row.message, decisionText: row.exclusions.decisionText })) };
     const intent = classifyIntent({ ...rawReply, decisionText: inferredExclusions.decisionText }, intentThread, creator);
-    const exclusions = { productIds: unique([...strings(explicit.productIds), ...inferredExclusions.productIds, ...recordedExclusions.productIds, ...historyExclusions.flatMap(row => row.exclusions.productIds)]), categories: unique([...strings(explicit.categories), ...inferredExclusions.categories, ...recordedExclusions.categories, ...historyExclusions.flatMap(row => row.exclusions.categories)]) };
+    const exclusions = { healthExcluded: strings(explicit.categories).some(category => HEALTH_EXCLUSION_ALIASES.includes(norm(category))) || inferredExclusions.healthExcluded || recordedExclusions.healthExcluded || historyExclusions.some(row => row.exclusions.healthExcluded), productIds: unique([...strings(explicit.productIds), ...inferredExclusions.productIds, ...recordedExclusions.productIds, ...historyExclusions.flatMap(row => row.exclusions.productIds)]), categories: unique([...strings(explicit.categories), ...inferredExclusions.categories, ...recordedExclusions.categories, ...historyExclusions.flatMap(row => row.exclusions.categories)]) };
     intent.excludedCategoryLabels = unique([...inferredExclusions.categoryLabels, ...recordedExclusions.categoryLabels, ...historyExclusions.flatMap(row => row.exclusions.categoryLabels)]);
     const { groups, invalid } = catalogGroups(deals, context, exclusions, now, replyPreferences(rawReply));
     const blocked = [], candidates = [];

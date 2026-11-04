@@ -58,3 +58,67 @@ test('concrete foods with unknown category match food channels without implying 
  for(const name of ['올리브유 바디바','파스타 접시','브레드 나이프','파스타 요리책','페스토 향초'])assert.equal(run({creator:creator(['food']),deals:[deal('nonfood',{name,category:'미확인',claims:'공식 상세페이지에서 확인한 상품 구성입니다.'})]}).selected.length,0,name);
  const addon=deal('addon',{name:'화덕브레드',category:'미확인'});addon.sourceNote='단독 공구가 아님.\n'+addon.sourceNote;assert.equal(run({creator:creator(['food']),deals:[addon]}).selected.length,0);
 });
+
+// Synthetic ingredient/preference regressions. No private creator notes or catalog rows.
+const healthReply={text:'건강식품은 까다로워 잘 진행하지 않으나 다른 협업과 전체적인 진행 방식은 궁금하다고 답함.',historical:true};
+const healthRun=extra=>run({reply:healthReply,...extra});
+const ingredientRows=group=>group.evidence.filter(e=>e.kind==='health_exclusion_ingredient');
+test('health avoidance holds synthetic Red Boost flavor evidence without assigning legal classification',()=>{
+ const boost=deal('synthetic-red-boost',{name:'합성 레드 부스트 1L · 정상가',category:'식품 · 법적 세부 분류 미확인',claims:'홍삼의 풍미와 화사한 커피 향을 함께 즐기는 콜드브루. 물을 섞어 간편하게 완성하는 홈카페 방식. 보틀 원액과 31포 파우치 박스 구성이 있는 라인.'});
+ const coffee=deal('plain'),pesto=deal('pesto',{name:'합성 바질페스토 150g',category:'식품',claims:'바질을 사용한 페스토.'});
+ const input={creator:creator(['home_cafe','food']),deals:[boost,coffee,pesto]},before=JSON.stringify(input),r=healthRun(input);
+ assert.equal(r.intent.kind,'inquiry');assert.deepEqual(r.selected.map(g=>g.id).sort(),['pesto','plain']);assert.equal(r.blocked.length,1);
+ const group=r.blocked[0],facts=ingredientRows(group);assert.match(group.blockedReasons.join(' '),/상대 제외 기준.*검토 보류/);assert.doesNotMatch(group.blockedReasons.join(' '),/건강기능식품|법적/);
+ assert.equal(facts[0].polarity,'associated');assert.equal(facts[0].field,'claims');assert.equal(facts[0].productId,boost.id);assert.equal(facts[0].observedAt,'2026-11-04');assert.equal(facts[0].url,boost.productUrl);
+ assert.doesNotMatch(r.draft,/레드 부스트|홍삼/);assert.match(r.draft,/문의하신 협업 방식부터/);assert.equal(JSON.stringify(input),before);
+ assert.equal(run({deals:[boost]}).selected.length,1,'No recipient exclusion, no ingredient ban');
+});
+test('only explicit health avoidance activates ginseng review, including preserved history and operator exclusions',()=>{
+ const d=deal('ginseng',{claims:'홍삼 추출물 함유. 홈카페에서 즐기는 원액.'});
+ for(const reply of [{text:'상품 목록 보내주세요.'},{text:'건강식품은 제외하지 않습니다. 상품 자료 부탁드립니다.',historical:true},{text:'“건강·웰니스 제외”라는 문구를 문의함.',historical:true},{text:'건강·웰니스 제품을 지양하지 않습니다.',historical:true}]){
+  const r=run({deals:[d],reply});assert.equal(r.blocked.length,0,reply.text);assert.equal(r.selected.length,1);assert.equal(ingredientRows(r.selected[0]).length,0);
+ }
+ for(const extra of [{reply:{text:'상품 목록 보내주세요.',exclusionText:'건강·웰니스 제외.'}},{reply:{text:'상품 목록 보내주세요.'},thread:{messages:[{out:false,text:'건강식품은 제외해 주세요.'},{out:false,text:'상품 목록 보내주세요.'}]}},{reply:{text:'상품 목록 보내주세요.'},exclusions:{categories:['건강·웰니스']}}])assert.equal(run({deals:[d],...extra}).selected.length,0);
+});
+test('ginseng identity and affirmative verified ingredients hold, ordinary ingredients and cosmetic products do not',()=>{
+ for(const extra of [{name:'합성 홍삼 커피'},{productName:'합성 인삼 커피'},{claims:'홍삼 추출물 함유. 홈카페 원액.'},{claims:'Coffee contains red ginseng.'}]){const r=healthRun({deals:[deal('ginseng',extra)]});assert.equal(r.selected.length,0,JSON.stringify(extra));assert.ok(ingredientRows(r.blocked[0]).some(e=>e.polarity==='present'||e.polarity==='associated'));}
+ for(const extra of [{name:'합성 비타민 이름 커피'},{claims:'카페인 함유 커피.'},{claims:'바질과 올리브유로 만든 페스토.'},{claims:'생강과 꿀을 더한 음료.'},{claims:'원료 정보가 없습니다.'}, {claims:''}])assert.equal(healthRun({deals:[deal('plain',extra)]}).selected.length,1,JSON.stringify(extra));
+ for(const name of ['인삼 비누','홍삼 샴푸','홍삼 바디바']){const r=healthRun({creator:creator(['beauty']),deals:[deal('soap',{name,category:'화장품',claims:'인삼 추출물 함유.'})]});assert.equal(r.blocked.length,0,name);assert.equal(r.selected.length,1,name);}
+});
+test('verified absence differs from presence or ambiguous wording and does not erase conflicting clauses',()=>{
+ for(const claims of ['홍삼 무첨가. 홈카페 원액.','홍삼을 첨가하지 않은 커피.','홍삼 추출물 미함유.','인삼이 없는 커피.','Coffee without ginseng.','Ginseng-free coffee.','Coffee does not contain red ginseng.']){
+  const r=healthRun({deals:[deal('absent',{claims})]});assert.equal(r.selected.length,1,claims);assert.ok(ingredientRows(r.selected[0]).every(e=>e.polarity==='absent'),claims);
+ }
+ for(const claims of ['홍삼 함유 여부 미확인.','홍삼의 풍미를 느낄 수 있습니다.','“홍삼 무첨가”라는 문구를 확인해야 합니다.','홍삼이 없지 않습니다.','홍삼 무첨가가 아닙니다.','홍삼을 함유하지 않는 것은 아닙니다.','홍삼 없는 것은 아닙니다.','홍삼 첨가하지 않지 않습니다.','Not without ginseng.','Not free of ginseng.','This is not a coffee without ginseng.','Not a ginseng-free coffee.','I do not know if coffee does not contain ginseng.','Ginseng-free is not correct.','홍삼 무첨가라는 표현입니다.','홍삼 무첨가인가요?','홍삼을 첨가하지 않는다고 보장할 수 없습니다.','홍삼 무첨가로 보입니다.','무첨가 홍삼 커피.','`홍삼 무첨가`','홍삼 무첨가, 인삼 추출물 함유.','No red ginseng, contains ginseng extract.']){
+  const r=healthRun({deals:[deal('review',{claims})]});assert.equal(r.selected.length,0,claims);assert.ok(ingredientRows(r.blocked[0]).some(e=>e.polarity!=='absent'),claims);
+ }
+});
+test('unverified stale revoked or unsafe ingredient mentions cause only bounded uncertainty, never safe absence',()=>{
+ for(const claims of ['홍삼 함유.','홍삼 무첨가.'])for(const change of [d=>d.sourceNote='',d=>d.claims+=' 변경',d=>d.sourceNote=d.sourceNote.replace('2026-11-04','2026-01-01'),d=>d.claimsRevoked=true,d=>d.sellingPointsStatus='pending',d=>d.sourceNote=d.sourceNote.replace('상품ID: ginseng','상품ID: wrong'),d=>d.sourceNote=d.sourceNote.replace('근거: 공식 상세페이지 본문 확인','근거: 확인 철회')]){
+  const d=deal('ginseng',{name:'합성 원액 커피',claims});change(d);const r=healthRun({deals:[d]});assert.equal(r.selected.length,0);const facts=ingredientRows(r.blocked[0]);assert.ok(facts.length);assert.ok(facts.every(e=>e.polarity==='uncertain'&&e.strength==='unknown'&&!e.url&&!e.observedAt&&!e.sourceUrls.length));assert.ok(facts.every(e=>!e.value.includes(claims)));assert.match(r.blocked[0].blockedReasons.join(' '),/미확인/);
+ }
+ const unsafe=deal('unsafe',{claims:'홍삼 수수료 99% https://mail.google.com/private person@example.test\n홈카페 원액.'}),r=healthRun({deals:[unsafe]});assert.equal(r.selected.length,0);assert.doesNotMatch(JSON.stringify(r),/99%|mail\.google|person@example/);assert.ok(ingredientRows(r.blocked[0]).every(e=>e.polarity==='uncertain'));
+ const noteOnly=deal('plain');noteOnly.sourceNote='홍삼 함유 여부 미확인.\n'+noteOnly.sourceNote;noteOnly.note='홍삼';noteOnly.history=[{claims:'홍삼 함유.'}];assert.equal(healthRun({deals:[noteOnly]}).selected.length,1,'Arbitrary prose and old versions are not ingredient evidence');
+});
+test('all confirmed claims are checked, not only the three copied selling points',()=>{
+ const d=deal('fourth',{claims:'홈카페에서 즐기는 원액. 병 구성입니다. 물과 섞어 즐깁니다. 홍삼 추출물 함유.'});assert.equal(engine.savedSellingPoints(d,now).points.length,3);const r=healthRun({deals:[d]});assert.equal(r.selected.length,0);assert.equal(ingredientRows(r.blocked[0])[0].polarity,'present');
+});
+test('a missing negative or unavailable option cannot bypass ginseng review for the same product group',()=>{
+ for(const patch of [{claims:''},{claims:'홍삼 무첨가.'},{claims:'홍삼 무첨가.',claimsRevoked:true}])for(const reverse of [false,true]){
+  const source=deal('source',{name:'합성 원액 1L',productUrl:'https://shop.example.test/products/shared',claims:'홍삼 추출물 함유.',soldOut:true}),other=deal('other',{name:'합성 원액 500ml',productUrl:'https://shop.example.test/products/shared',...patch}),deals=reverse?[other,source]:[source,other],r=healthRun({deals});
+  assert.equal(r.selected.length,0);assert.equal(r.blocked.length,1);assert.equal(r.blocked[0].items.length,2);assert.ok(ingredientRows(r.blocked[0]).some(e=>e.productId==='source'&&e.polarity==='present'));assert.match(r.blocked[0].blockedReasons.join(' '),/적합성 검토 보류/);
+  assert.doesNotMatch(engine.buildDraft({creator:creator(),intent:r.intent,selected:r.blocked}),/합성 원액|홍삼/,'Manual selection cannot insert a held group');
+ }
+ const r=healthRun({deals:[deal('ginseng',{claims:'홍삼 함유.'}),deal('plain')]});assert.deepEqual(r.selected.map(g=>g.id),['plain']);
+ for(const extra of [{reply:{text:'더 이상 연락하지 마세요.',exclusionText:'건강·웰니스 제외.'}},{reply:{text:'상품 목록 보내주세요.'},thread:{messages:[{out:false,text:'더 이상 연락하지 마세요.'},{out:false,text:'상품 목록 보내주세요.'}]}}]){const held=run({deals:[deal('ginseng',{claims:'홍삼 함유.'}),deal('plain')],...extra});assert.equal(held.selected.length,0);assert.equal(held.draft,'');}
+});
+
+test('single quoted or opposite exclusions do not impose health avoidance, ordinary apostrophes do not hide it',()=>{
+ const d=deal('neutral',{claims:'홍삼 추출물 함유.'});
+ for(const value of ["'건강식품 제외'라는 예시입니다. 상품 자료 부탁드립니다.",'건강식품 제외는 원치 않습니다. 상품 자료 부탁드립니다.','건강식품을 제외한다고 말하지 않았습니다. 상품 자료 부탁드립니다.','건강식품 제외하지 말아 주세요. 상품 자료 부탁드립니다.','`건강식품 제외`라는 예시입니다. 상품 자료 부탁드립니다.','건강식품 제외해 달라는 건 아닙니다. 상품 자료 부탁드립니다.','건강식품 제외할 필요 없습니다. 상품 자료 부탁드립니다.','건강식품은 지양하는 건 아닙니다. 상품 자료 부탁드립니다.','건강식품 제외? 아니요, 그런 뜻은 아닙니다. 상품 자료 부탁드립니다.']){const r=run({deals:[d],reply:{text:value,historical:true}});assert.equal(r.sourceExclusions.length,0,value);assert.equal(r.intent.excludedCategoryLabels.length,0,value);assert.ok([...r.selected,...r.remaining,...r.blocked].every(g=>ingredientRows(g).length===0),value);}
+ for(const value of ["I'd like coffee; 건강식품 제외.","I'd like coffee, it's for home; 건강식품 제외.",'건강식품은 제외합니다.','건강식품 제외할게요.','건강식품은 제외해요.','건강식품은 제외하고요.','건강식품은 지양하겠습니다.','건강식품은 제외하는 편입니다.','건강식품은 지양하는 편입니다.','건강식품은 제외했습니다.','건강식품 제외해주시면 좋겠습니다.','건강식품은 지양하며 다른 상품은 가능합니다.','건강식품은 제외하는 게 좋겠습니다.','건강식품은 제외하는 것이 좋겠습니다.','건강식품은 제외할 필요가 있습니다.','건강식품을 제외하는 것은 맞습니다.']){const r=run({deals:[d],reply:{text:value,historical:true}});assert.equal(r.selected.length,0,value);assert.ok(r.sourceExclusions.length);assert.ok(ingredientRows(r.blocked[0]).length);}
+});
+test('edible category prevents tableware words in food names from hiding known ingredient evidence',()=>{
+ for(const category of ['커피','미확인'])for(const name of ['머그에 담는 홍삼 커피','합성 홍삼 커피 접시 세트','인삼 커피 Mug Pack','홍삼 커피 머그 세트']){const r=healthRun({deals:[deal('neutral',{name,category,claims:'홍삼 추출물 함유.'})]});assert.equal(r.selected.length,0,name);assert.ok(ingredientRows(r.blocked[0]).some(e=>e.field==='claims'&&e.polarity==='present'));}
+ const d=deal('large',{claims:'가'.repeat(4050)+' 홍삼 함유.'}),r=healthRun({deals:[d]});assert.equal(r.selected.length,0);assert.ok(ingredientRows(r.blocked[0]).every(e=>e.polarity==='uncertain'&&e.value.length<100));
+});
