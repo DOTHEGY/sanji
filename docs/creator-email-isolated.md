@@ -1,6 +1,6 @@
 # Isolated creator recommendation email worker
 
-Status: implemented for review, disabled by default, not deployed. This is an additive design, not a retry of the rejected full `bright-function` replacement.
+Status: deployed in a disabled state on 2026-11-04. Recurring execution and sending remain off pending usage/cost and recipient-basis review. This is an additive design, not a retry of the rejected full `bright-function` replacement.
 
 ## Separation
 
@@ -65,11 +65,11 @@ Current organization-wide usage, spend cap and total egress/database impact have
 
 1. Review and test this separate patch on current main, including exact deployed reservation definitions. Build only `node scripts/build-creator-email-worker.cjs`; do not build/deploy the workspace bundle as a substitute.
 2. Obtain action-time approval for the new function's persistent server access, the additive migration, existing credential reuse and a separate five-minute schedule. Ordinary merge/deploy permission remains necessary. No PR is required or created.
-3. The matching migration was generated using Supabase CLI 3.0.0; it is checked byte-for-byte against the reviewed pending SQL. Apply only the new migration and deploy only `creator-email-worker`. Its transaction has a two-second lock timeout and 30-second statement timeout, so unexpected contention aborts rather than waiting indefinitely. Existing function/cron and security settings are unchanged.
+3. The matching migration `supabase/migrations/20261104073138_creator_email_isolated.sql` was generated using Supabase CLI 3.0.0 and aligned to the migration service’s recorded version; it is checked byte-for-byte against the reviewed pending SQL. Apply only the new migration and deploy only `creator-email-worker`. Its transaction has a two-second lock timeout and 30-second statement timeout, so unexpected contention aborts rather than waiting indefinitely. Existing function/cron and security settings are unchanged.
 4. Keep policy `enabled=false`, `send_enabled=false`, classification unconfirmed and no approved recipient basis by default. Test authentication/status without mail. Do not run a real-send canary without its exact recipient authorization.
 5. Confirm usage/spend controls and source/basis review. Activation for the one authorized owner must use the actual activation time as cutover, current fixed copy/signature and a new revision. Re-activation needs a new cutover/revision so recommendations made while disabled are not silently backfilled. Today's existing/manual batch stays outside this queue.
 6. Enable preparation and sending only within the confirmed scope. Evidence gaps remain held and are reported, not silently overridden to satisfy volume.
 
 Rollback: disable the new policy and new schedule first. Keep queue/outbox/audit data; never resurrect a consumed grant or unknown send. The existing application needs no restoration because its function, UI, cron and validators were not replaced.
 
-Tests are local PGlite plus mocked Gmail/Meta and HTTP auth. They make no real provider calls. No deployment, production mutation, credential setup or send has been performed by this implementation task.
+Tests are local PGlite plus mocked Gmail/Meta and HTTP auth. They make no real provider calls. The release added only the new migration and function, with an explicitly disabled policy and no recurring schedule. No credential was created and no actual email send was performed.
