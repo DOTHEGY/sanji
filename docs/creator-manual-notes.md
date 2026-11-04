@@ -4,7 +4,7 @@ This feature stores explicitly manual historical summaries and unsent reference 
 
 ## Data and UI boundaries
 
-- A separate `#manual-notes` route and Inbox link display notes even if provider Inbox is unavailable.
+- A separate `#manual-notes` route edits/appends notes. The Inbox also renders a read-only historical section with its own count, original context, source link and unsent draft. It is not merged into provider conversation rows.
 - Observation date/time is supplied by the observer and preserved with its precision. Recording time is database-generated. The UI always states that the latest state is unverified and any draft remains unsent.
 - Notes use existing exact owner-scoped creator identities. Unknown/excluded identities fail closed; saving a note never upgrades their verification.
 - The import file is previewed and saved one item at a time, in the supplied order. A user can skip an item without writing or losing the rest. Private import files must never be committed or bundled.
@@ -19,6 +19,16 @@ The optional **source display date/time** view groups only the loaded/saved reco
 Date-only records and malformed or ambiguous clocks remain visibly unpositioned within a valid explicit day. Relative strings such as `5일 전` and `약 20시간 전` stay in a separate uncertain-date section, in their existing order; observation timestamps do not turn them into absolute dates. Invalid/ambiguous dates remain in an unknown-date section. Raw strings and drafts are preserved without rewriting. This is a conservative review aid, not a complete or normalized received-message timeline.
 
 Pagination still follows the server's recording-time cursor. The screen labels unloaded pages, regroups the loaded records after each page, and never equates the end of saved pages with complete source coverage. Corrections remain separate visible records; the screen indicates whether the original and any correcting records are present in the currently loaded list. It never hides an original or declares a correction the latest verified source.
+
+## Inbox and product review
+
+The Inbox historical section reads only the existing owner-scoped note-list endpoint. It automatically reads up to 20 saved pages per batch, with an explicit continuation and incomplete-coverage label when necessary. Repeated or malformed cursors fail closed while preserving already loaded rows. Existing provider filters and attested-identity requirements are unchanged; changing their date filter cannot discover additional historical notes. The note count is not a unique-person count and must not be added to the provider conversation count.
+
+Notes expose a local product-review dialog with the exact saved observation time, source, reply summary, intent, subsequent-outbound observation, original draft and editable copy. Known corrected originals remain readable but cannot open a new product review. Catalog choices start unchecked and remain separate from the draft text; selecting them does not assert suitability, infer consent, insert a pitch, save a note or send a message. The reviewer confirms source/intent/exclusions and may choose no product. Historical copies cannot enter the official reply field. Closing destroys local edits.
+
+For an exact verified official creator with no supported topic match, the product button opens this explicit manual catalog-review fallback instead of ending at an insufficient-evidence message. Existing supported automatic matches remain available without padding to three. Recorded structured refusal/stop states block product selection; free-text historical intent is displayed for review rather than classified with a loose regular expression. No historical note, selected product or copied draft becomes a verified live provider message.
+
+Owner/session changes invalidate reads and clear historical dialogs. Navigation, logout, modal replacement and escape/close preserve dirty work if cancellation is chosen. Re-reading notes invalidates the selected snapshot. No server schema, Edge Function, access setting or provider call changes are required for this UI integration.
 
 ## Isolated backend
 

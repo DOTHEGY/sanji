@@ -68,9 +68,68 @@
   if(unknown.length)groups.push({key:'recorded-unknown',label:'기록 시각 미확인 · 검수 순서 미정',sections:[{basis:'unpositioned',label:'기존 목록 순서 유지 · 원문 시각이나 확인일로 대체하지 않음',items:unknown}]});
   return groups;
  }
- function recordMarkup(n,locked,loadedIds,correctedIds){
+ function recordMarkup(n,locked,loadedIds,correctedIds,options={}){
   const correction=n.supersedesId?(loadedIds.has(n.supersedesId)?' · 정정 대상 메모도 현재 목록에 표시됨':' · 정정 대상 메모는 현재 목록에 없음'):'';
-  return '<article class="panel" data-note-record="'+esc(n.id)+'"><h4>@'+esc(n.handle)+'</h4><p>최신 상태 미확인</p><p>원문 확인일: '+esc(n.observedAt)+'<br>산지 기록 시각: '+esc(n.recordedAt)+'</p><p>작성자 유형: '+esc(({user:'사용자',assistant:'도우미',other_authorized_worker:'권한 있는 작업자'})[n.recorderType]||'미확인')+(n.supersedesId?' · 이전 메모 정정 기록':'')+correction+'</p>'+(correctedIds.has(n.id)?'<p class="notice">이 메모를 정정한 기록이 현재 목록에 있음 · 원래 기록도 유지</p>':'')+['inboundWhen','summary','intent','afterInboundOutbound','draft'].map(k=>'<h5>'+esc(labels[k])+'</h5><p class="manual-note-text">'+esc(n[k]||'기록 없음')+'</p>').join('')+'<p class="notice">미발송 참고 초안 · 전송 전 원문 재확인 필요</p>'+(/^https:\/\/(?:www\.)?instagram\.com\/direct\/t\/\d+\/?$/.test(n.sourceUrl)?'<a href="'+esc(n.sourceUrl)+'" target="_blank" rel="noopener noreferrer">Instagram 원문 직접 확인 ↗</a>':'')+' <button type="button" data-note-action="correct" data-note-id="'+esc(n.id)+'" '+(locked?'disabled':'')+'>정정 메모 추가</button></article>';
+  return '<article class="panel" data-note-record="'+esc(n.id)+'"><h4>@'+esc(n.handle)+'</h4><p>최신 상태 미확인</p><p>원문 확인일: '+esc(n.observedAt)+'<br>산지 기록 시각: '+esc(n.recordedAt)+'</p><p>작성자 유형: '+esc(({user:'사용자',assistant:'도우미',other_authorized_worker:'권한 있는 작업자'})[n.recorderType]||'미확인')+(n.supersedesId?' · 이전 메모 정정 기록':'')+correction+'</p>'+(correctedIds.has(n.id)?'<p class="notice">이 메모를 정정한 기록이 현재 목록에 있음 · 원래 기록도 유지</p>':'')+['inboundWhen','summary','intent','afterInboundOutbound','draft'].map(k=>'<h5>'+esc(labels[k])+'</h5><p class="manual-note-text">'+esc(n[k]||'기록 없음')+'</p>').join('')+'<p class="notice">미발송 참고 초안 · 전송 전 원문 재확인 필요</p>'+(/^https:\/\/(?:www\.)?instagram\.com\/direct\/t\/\d+\/?$/.test(n.sourceUrl)?'<a href="'+esc(n.sourceUrl)+'" target="_blank" rel="noopener noreferrer">Instagram 원문 직접 확인 ↗</a>':'')+(options.readOnly?(options.reviewProducts?' <button type="button" data-note-action="review-products" data-note-id="'+esc(n.id)+'" '+(locked||correctedIds.has(n.id)?'disabled':'')+'>'+(correctedIds.has(n.id)?'정정된 기록 · 새 메모에서 상품 검토':'이 과거 메모로 상품 자료 검토')+'</button>':''):' <button type="button" data-note-action="correct" data-note-id="'+esc(n.id)+'" '+(locked?'disabled':'')+'>정정 메모 추가</button>')+'</article>';
+ }
+ // The Inbox reader uses the historical-note store only. It cannot edit, save, or query providers.
+ function mountInboxReader(host,opt){
+  const owner=opt.getOwner();if(!owner)throw Error('로그인이 필요합니다.');
+  let active=true,busy=false,rows=[],cursor=null,complete=false,read=false,order='review',status='저장된 과거 메모를 읽는 중입니다.',epoch=0,selection=null,seen=new Set(),unsubscribe=()=>{};
+  const live=()=>active&&host.isConnected!==false&&opt.getOwner()===owner&&(!opt.isActive||opt.isActive());
+  function destroy(){if(!active)return;active=false;epoch++;selection=null;host.removeEventListener('click',click);host.removeEventListener('change',change);unsubscribe();rows=[];cursor=null;seen.clear();host.innerHTML='';}
+  function render(){
+   if(!live())return;
+   const loadedIds=new Set(rows.map(n=>n.id)),correctedIds=new Set(rows.map(n=>n.supersedesId).filter(Boolean));
+   const scope=!read?'저장 목록 조회 전입니다.':complete?'마지막 목록 조회에서 남은 저장 페이지 없음. 원문 대화 전체를 확인했다는 뜻은 아닙니다.':cursor?'아직 읽지 않은 저장 페이지가 있습니다.':'전체 저장 목록 수신 미확인. 새로 읽어 확인하세요.';
+   host.innerHTML='<section class="panel manual-notes inbox-historical-notes" aria-label="저장된 과거 답장과 초안"><h2>저장된 과거 답장·초안 <span class="tag" data-note-count>'+rows.length+'개 메모</span></h2><p class="notice"><strong>최신 상태 미확인</strong> · 직접 확인한 과거 내용과 미발송 참고 초안입니다. 제공사 수신함·동기화 결과·검증된 초안이 아닙니다.</p><p class="fine">아래 기존 대화 목록과 별도로 표시합니다. 최근 7일·태그바이 근거 필터는 이 메모 목록에 적용하지 않습니다. 메모 수는 답장한 사람 수가 아니며 정정 전 기록도 포함합니다.</p><p role="status" data-note-status>'+esc(status)+'</p><div class="actions"><button type="button" data-note-action="load" '+(busy?'disabled':'')+'>저장된 과거 메모 새로 읽기</button><a href="#manual-notes">메모 추가·정정 화면 열기 →</a></div><label class="field manual-note-order">표시 순서 <select data-note-order><option value="review" '+(order==='review'?'selected':'')+'>검수 순서 · 먼저 기록한 메모부터</option><option value="source" '+(order==='source'?'selected':'')+'>원문 표시 날짜·시각별</option></select></label><p class="notice" data-note-order-scope>현재 불러온 '+rows.length+'개 메모만 '+(order==='review'?'검수 순서로 표시합니다.':'원문 표시 날짜별로 배열합니다.')+' '+esc(scope)+'</p><p class="fine">'+(order==='review'?'산지에 먼저 기록한 메모부터 보는 검수 순서이며 실제 답장 도착 순서가 아닙니다. 같은 기록 시각은 기존 목록 순서를 유지합니다.':'같은 시각 표기·시간대·정밀도끼리만 비교합니다. 상대 시점은 날짜로 추정하지 않습니다. 실제 수신 순서·전체 기간·최신 대화를 보장하지 않습니다.')+'</p><div class="manual-note-records">'+(order==='review'?reviewGroups(rows):chronologyGroups(rows)).map(g=>'<section data-note-group="'+esc(g.key)+'"><h3>'+esc(g.label)+'</h3>'+g.sections.map(s=>'<section data-note-time-basis="'+esc(s.basis)+'"><p class="fine">'+esc(s.label)+'</p>'+s.items.map(n=>recordMarkup(n,busy,loadedIds,correctedIds,{readOnly:true,reviewProducts:typeof opt.onReviewProducts==='function'})).join('')+'</section>').join('')+'</section>').join('')+'</div>'+(!rows.length&&read&&complete?'<p class="empty">저장된 과거 메모가 없습니다.</p>':'')+(cursor?'<button type="button" data-note-action="more" '+(busy?'disabled':'')+'>남은 저장 메모 더 읽기</button>':'')+'</section>';
+  }
+  function checkPage(result){
+   if(!result||!Array.isArray(result.items)||result.items.length>20||typeof result.complete!=='boolean')throw Error('목록 형식 미확인');
+   const items=result.items.map(n=>{
+    if(!n||!uuid(n.id)||!uuid(n.creatorId)||n.recordType!=='manual_historical_note'||n.latestVerified!==false||n.dispatchState!=='not_sent'||typeof n.recordedAt!=='string'||(n.supersedesId!=null&&!uuid(n.supersedesId)))throw Error('메모 형식 미확인');
+    if(Object.entries(fields).some(([key,max])=>typeof n[key]!=='string'||n[key].length>max))throw Error('메모 내용 미확인');
+    return Object.freeze({...n});
+   });
+   const next=result.nextBefore;
+   if(next!=null&&(!next||typeof next!=='object'||!uuid(next.id)||typeof next.recordedAt!=='string'||!/^\d{4}-\d\d-\d\dT[0-9:.]+(?:Z|\+00:00)$/.test(next.recordedAt)||!Number.isFinite(Date.parse(next.recordedAt))||result.complete||!items.length||items.at(-1).id!==next.id||items.at(-1).recordedAt!==next.recordedAt))throw Error('이어보기 범위 미확인');
+   return {items,next:next?{id:next.id,recordedAt:next.recordedAt}:null,complete:result.complete};
+  }
+  async function load(more=false){
+   if(busy||!live()||(more&&!cursor))return;
+   busy=true;complete=false;selection=null;const requestEpoch=++epoch;let first=!more,pages=0;
+   if(!more)seen=new Set();status='저장된 과거 메모를 읽는 중입니다. · 외부 수신함 조회·저장·발송 없음';render();
+   try{
+    // Bound one read batch for large stores; remaining coverage stays explicit and can be continued.
+    do{
+     const before=first?null:cursor;
+     const result=await opt.request('/creator-manual-notes/list',before?{before}:{},owner,()=>live()&&epoch===requestEpoch);
+     if(!live()||epoch!==requestEpoch)return;
+     const page=checkPage(result),key=page.next?JSON.stringify(page.next):null;
+     if(key&&seen.has(key))throw Error('반복 이어보기');
+     const previous=first?[]:rows,byId=new Map(previous.map(n=>[n.id,n]));
+     for(const n of page.items){const old=byId.get(n.id);if(old&&JSON.stringify(old)!==JSON.stringify(n))throw Error('같은 메모의 내용 변경');byId.set(n.id,old||n);}
+     if(!first&&key&&byId.size===rows.length)throw Error('새 메모 없는 이어보기');
+     rows=[...byId.values()];cursor=page.next;complete=page.complete&&!cursor;read=true;first=false;if(key)seen.add(key);pages++;
+     status='저장된 과거 메모 '+rows.length+'개 읽음 · 최신 대화 상태는 미확인';render();
+    }while(cursor&&pages<20&&live());
+   }catch{if(live()&&epoch===requestEpoch){complete=false;status='저장된 메모를 끝까지 읽지 못했습니다. 표시된 기록은 유지됩니다. 로그인과 연결 상태를 확인한 뒤 새로 읽어 주세요.';}}
+   finally{busy=false;if(live()&&epoch===requestEpoch)render();}
+  }
+  function click(e){
+   const button=e.target.closest?.('[data-note-action]');if(!button||!host.contains(button)||busy||!live())return;
+   const action=button.dataset.noteAction;
+   if(action==='load'||action==='more')return load(action==='more');
+   if(action!=='review-products'||typeof opt.onReviewProducts!=='function')return;
+   const note=rows.find(n=>n.id===button.dataset.noteId);if(!note||rows.some(n=>n.supersedesId===note.id))return;
+   const token={},requestEpoch=epoch;let opening=true;
+   const isCurrent=()=>live()&&epoch===requestEpoch&&rows.includes(note)&&(opening||selection===token);
+   try{if(opt.onReviewProducts(note,{owner,isCurrent})===true)selection=token;}finally{opening=false;}
+  }
+  function change(e){if(!live())return;if(e.target.matches('[data-note-order]')&&['review','source'].includes(e.target.value)){order=e.target.value;render();}}
+  host.addEventListener('click',click);host.addEventListener('change',change);
+  unsubscribe=opt.subscribeSession(()=>{if(opt.getOwner()!==owner)destroy();})||(()=>{});if(!active)unsubscribe();render();
+  return {destroy,canClose:()=>true,hasWork:()=>false,load:()=>load()};
  }
  function mount(host,opt){
   const owner=opt.getOwner();if(!owner)throw Error('로그인이 필요합니다.');
@@ -95,5 +154,5 @@
   host.addEventListener('click',click);host.addEventListener('input',input);host.addEventListener('change',change);host.addEventListener('submit',submit);unsubscribe=opt.subscribeSession(()=>{if(opt.getOwner()!==owner)destroy();})||(()=>{});render();
   return {destroy,canClose:()=>!busy&&(!dirty&&!uncertain||opt.confirmDiscard()===true),hasWork:()=>dirty||!!uncertain||busy,load:()=>run(()=>load())};
  }
- return {normalize,parseImport,sameNote,inboundChronology,chronologyGroups,reviewGroups,mount};
+ return {normalize,parseImport,sameNote,inboundChronology,chronologyGroups,reviewGroups,mountInboxReader,mount};
 });

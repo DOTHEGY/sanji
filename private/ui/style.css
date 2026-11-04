@@ -937,3 +937,8 @@ nav {
 .manual-note-records h3, .manual-note-records h4 { margin: 0; font-size: 14px; }
 .manual-note-records h5 { margin: 16px 0 8px; font-size: 14px; }
 .manual-note-order { margin-top: 16px; max-width: 420px; }
+
+/* Historical notes remain a separate, readable Inbox source, never official message rows. */
+.inbox-historical-notes { max-width: none; margin-bottom: 28px; }
+.inbox-historical-notes > h2 { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.inbox-historical-notes .manual-note-records article { min-width: 0; }
