@@ -89,6 +89,40 @@ function storedPublicResearch(row, owner, target, now) {
   })) return null;
   return { profileUrl: row.profile_url, observedAt: row.observed_at, topics: [...new Set(row.topics)], sources: [...new Set(row.sources)], captureSha256: row.capture_sha256, provenance: "operator_attested", researchStatus: now - at > 7 * 864e5 ? "historical" : "current_observation_record" };
 }
+function noteRecordedRank(value) {
+  const m = typeof value === "string" && /^(\d{4}-\d\d-\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d{1,9}))?(Z|([+-])(\d\d):(\d\d))$/.exec(value);
+  const day = m && /* @__PURE__ */ new Date(m[1] + "T00:00:00Z");
+  if (!m || !day || !Number.isFinite(day.getTime()) || day.toISOString().slice(0, 10) !== m[1] || +m[2] > 23 || +m[3] > 59 || +m[4] > 59 || m[8] && (+m[8] > 14 || +m[9] > 59 || +m[8] === 14 && +m[9] !== 0)) return null;
+  const millis = Date.parse(m[1] + "T" + m[2] + ":" + m[3] + ":" + m[4] + m[6]);
+  return Number.isFinite(millis) ? BigInt(millis) * 1000000n + BigInt((m[5] || "").padEnd(9, "0")) : null;
+}
+function contextCorrectionPath(rows, owner, body) {
+  if (!Array.isArray(rows) || !rows.length || rows.length > 200) return null;
+  const byId = /* @__PURE__ */ new Map(), children = /* @__PURE__ */ new Map();
+  for (const n of rows) {
+    if (!object(n) || n.owner !== owner || n.creator_id !== body.creatorId || n.handle !== body.handle || !validUuid(n.note_id) || n.note_id !== n.note_id.toLowerCase() || byId.has(n.note_id) || n.supersedes_id !== null && (!validUuid(n.supersedes_id) || n.supersedes_id !== n.supersedes_id.toLowerCase())) return null;
+    byId.set(n.note_id, n);
+    if (n.supersedes_id !== null) {
+      const siblings = children.get(n.supersedes_id) || [];
+      siblings.push(n);
+      children.set(n.supersedes_id, siblings);
+    }
+  }
+  const path = [], seen = /* @__PURE__ */ new Set();
+  let id = body.noteId, expectedChild = null;
+  for (let depth = 0; depth < 32; depth++) {
+    const n = byId.get(id), rank = n && noteRecordedRank(n.recorded_at);
+    if (!n || rank === null || rank === void 0 || seen.has(id)) return null;
+    const descendants = children.get(id) || [];
+    if (expectedChild === null ? descendants.length !== 0 : descendants.length !== 1 || descendants[0].note_id !== expectedChild.note_id || rank > noteRecordedRank(expectedChild.recorded_at)) return null;
+    seen.add(id);
+    path.push({ owner: n.owner, noteId: n.note_id, creatorId: n.creator_id, handle: n.handle, supersedesId: n.supersedes_id, recordedAt: n.recorded_at });
+    if (n.supersedes_id === null) return path;
+    expectedChild = n;
+    id = n.supersedes_id;
+  }
+  return null;
+}
 async function readInput(req, maxBytes = 65536) {
   const declared = req.headers.get("content-length");
   if (declared && (!/^\d+$/.test(declared) || Number(declared) > maxBytes)) {
@@ -153,17 +187,17 @@ function creatorManualNotesHandler({ sb: sb2, env: env2, now = () => Date.now() 
         if (!validUuid(body.noteId) || !validUuid(body.creatorId) || body.noteId !== body.noteId.toLowerCase() || body.creatorId !== body.creatorId.toLowerCase() || body.handle !== handle(body.handle)) throw invalid();
         const unavailable = () => new ManualNoteError(404, "CONTEXT_UNAVAILABLE", "\uC800\uC7A5\uB41C \uBA54\uBAA8\uC640 \uD06C\uB9AC\uC5D0\uC774\uD130\uB97C \uC815\uD655\uD788 \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uBAA9\uB85D\uC744 \uB2E4\uC2DC \uD655\uC778\uD558\uC138\uC694.");
         const gate = async () => {
-          const notes = await query(sb2.from("sanji_creator_manual_notes").select("owner,note_id,creator_id,handle,supersedes_id").eq("owner", owner).eq("note_id", body.noteId).limit(2));
-          const n = Array.isArray(notes) && notes.length === 1 ? notes[0] : null;
-          if (!n || n.owner !== owner || n.note_id !== body.noteId || n.creator_id !== body.creatorId || n.handle !== body.handle || n.supersedes_id !== null) throw unavailable();
-          const corrections = await query(sb2.from("sanji_creator_manual_notes").select("note_id").eq("owner", owner).eq("creator_id", body.creatorId).eq("supersedes_id", body.noteId).limit(1));
-          if (!Array.isArray(corrections) || corrections.length) throw unavailable();
+          const metadata = await sb2.from("sanji_creator_manual_notes").select("owner,note_id,creator_id,handle,supersedes_id,recorded_at", { count: "exact" }).eq("owner", owner).eq("creator_id", body.creatorId).order("note_id", { ascending: true }).limit(201);
+          if (metadata.error) throw new ManualNoteError(503, "NOTE_STORAGE_UNAVAILABLE", "\uC218\uB3D9 \uBA54\uBAA8 \uC800\uC7A5\uC18C\uB97C \uD655\uC778\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4. \uC785\uB825\uC744 \uBCF4\uC874\uD55C \uB4A4 \uB2E4\uC2DC \uD655\uC778\uD558\uC138\uC694.");
+          if (!Number.isSafeInteger(metadata.count) || metadata.count < 1 || metadata.count > 200 || !Array.isArray(metadata.data) || metadata.data.length !== metadata.count) throw unavailable();
+          const chain = contextCorrectionPath(metadata.data, owner, body);
+          if (!chain) throw unavailable();
           const rows2 = await query(sb2.from("sanji_creator_recovery").select("owner,id,handle,nickname,bio,category,profile_url,link_status,last_verified,entity_type,assessment,status").eq("owner", owner).ilike("handle", body.handle.replace(/[\\%_]/g, "\\$&")).limit(2));
           const c = Array.isArray(rows2) && rows2.length === 1 ? rows2[0] : null;
           if (!c || c.owner !== owner || c.id !== body.creatorId || c.handle !== body.handle || c.entity_type !== "creator_evidence" || !["candidate", "explore", "review"].includes(c.assessment) || !["new", "hold", "contacted"].includes(c.status) || c.link_status !== "source_confirmed" || !publicProfile(c.profile_url, body.handle)) throw unavailable();
-          return c;
+          return { creator: c, chain };
         };
-        const creator = await gate();
+        const initial = await gate(), creator = initial.creator;
         const readResearch = async () => {
           const rows2 = await query(sb2.from("sanji_instagram_public_research").select("owner,attested_by,handle,profile_url,observed_at,topics,sources,capture_sha256,revoked_at").eq("owner", owner).eq("handle", body.handle).is("revoked_at", null).order("observed_at", { ascending: false }).limit(2));
           if (!Array.isArray(rows2)) throw unavailable();
@@ -171,7 +205,7 @@ function creatorManualNotesHandler({ sb: sb2, env: env2, now = () => Date.now() 
         };
         const rows = await readResearch();
         const latest = await gate();
-        if (JSON.stringify(creator) !== JSON.stringify(latest)) throw unavailable();
+        if (JSON.stringify(initial) !== JSON.stringify(latest)) throw unavailable();
         const latestResearch = await readResearch();
         if (JSON.stringify(rows) !== JSON.stringify(latestResearch)) throw unavailable();
         const research = rows.length && !(rows.length > 1 && rows[0]?.observed_at === rows[1]?.observed_at) ? storedPublicResearch(rows[0], owner, body.handle, now()) : null;

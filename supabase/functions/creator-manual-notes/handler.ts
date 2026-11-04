@@ -64,6 +64,42 @@ function storedPublicResearch(row: any, owner: string, target: string, now: numb
   })) return null;
   return {profileUrl:row.profile_url, observedAt:row.observed_at, topics:[...new Set(row.topics)], sources:[...new Set(row.sources)], captureSha256:row.capture_sha256, provenance:'operator_attested',researchStatus:now-at > 7*86400000 ? 'historical' : 'current_observation_record'};
 }
+// Validate only the selected append-only correction path. Separate root notes are
+// independent observations, not implicitly superseded by a later timestamp.
+function noteRecordedRank(value: any): bigint | null {
+  const m = typeof value === 'string' && /^(\d{4}-\d\d-\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d{1,9}))?(Z|([+-])(\d\d):(\d\d))$/.exec(value);
+  const day = m && new Date(m[1] + 'T00:00:00Z');
+  if (!m || !day || !Number.isFinite(day.getTime()) || day.toISOString().slice(0,10) !== m[1] || +m[2] > 23 || +m[3] > 59 || +m[4] > 59 || (m[8] && (+m[8] > 14 || +m[9] > 59 || (+m[8] === 14 && +m[9] !== 0)))) return null;
+  const millis = Date.parse(m[1] + 'T' + m[2] + ':' + m[3] + ':' + m[4] + m[6]);
+  return Number.isFinite(millis) ? BigInt(millis) * 1000000n + BigInt((m[5] || '').padEnd(9,'0')) : null;
+}
+function contextCorrectionPath(rows: any, owner: string, body: any) {
+  if (!Array.isArray(rows) || !rows.length || rows.length > 200) return null;
+  const byId = new Map<string, any>(), children = new Map<string, any[]>();
+  for (const n of rows) {
+    if (!object(n) || n.owner !== owner || n.creator_id !== body.creatorId || n.handle !== body.handle || !validUuid(n.note_id) || n.note_id !== n.note_id.toLowerCase() || byId.has(n.note_id) || (n.supersedes_id !== null && (!validUuid(n.supersedes_id) || n.supersedes_id !== n.supersedes_id.toLowerCase()))) return null;
+    byId.set(n.note_id,n);
+    // Count every declared child, including a malformed-time sibling. A fork
+    // cannot become safe merely because one branch has an invalid timestamp.
+    if (n.supersedes_id !== null) {
+      const siblings = children.get(n.supersedes_id) || [];
+      siblings.push(n); children.set(n.supersedes_id,siblings);
+    }
+  }
+  const path: any[] = [], seen = new Set<string>();
+  let id = body.noteId, expectedChild: any = null;
+  for (let depth = 0; depth < 32; depth++) {
+    const n = byId.get(id), rank = n && noteRecordedRank(n.recorded_at);
+    if (!n || rank === null || rank === undefined || seen.has(id)) return null;
+    const descendants = children.get(id) || [];
+    if (expectedChild === null ? descendants.length !== 0 : descendants.length !== 1 || descendants[0].note_id !== expectedChild.note_id || rank > noteRecordedRank(expectedChild.recorded_at)!) return null;
+    seen.add(id);
+    path.push({owner:n.owner,noteId:n.note_id,creatorId:n.creator_id,handle:n.handle,supersedesId:n.supersedes_id,recordedAt:n.recorded_at});
+    if (n.supersedes_id === null) return path;
+    expectedChild = n; id = n.supersedes_id;
+  }
+  return null;
+}
 async function readInput(req: Request, maxBytes = 65536) {
   const declared = req.headers.get('content-length');
   if (declared && (!/^\d+$/.test(declared) || Number(declared) > maxBytes)) { await req.body?.cancel().catch(() => {}); throw new ManualNoteError(413, 'INPUT_TOO_LARGE', '메모 입력 크기를 줄여 주세요.'); }
@@ -104,17 +140,17 @@ export function creatorManualNotesHandler({sb, env, now = () => Date.now()}: any
         if (!validUuid(body.noteId) || !validUuid(body.creatorId) || body.noteId !== body.noteId.toLowerCase() || body.creatorId !== body.creatorId.toLowerCase() || body.handle !== handle(body.handle)) throw invalid();
         const unavailable = () => new ManualNoteError(404, 'CONTEXT_UNAVAILABLE', '저장된 메모와 크리에이터를 정확히 확인하지 못했습니다. 목록을 다시 확인하세요.');
         const gate = async () => {
-          const notes = await query(sb.from('sanji_creator_manual_notes').select('owner,note_id,creator_id,handle,supersedes_id').eq('owner',owner).eq('note_id',body.noteId).limit(2));
-          const n = Array.isArray(notes) && notes.length === 1 ? notes[0] : null;
-          if (!n || n.owner !== owner || n.note_id !== body.noteId || n.creator_id !== body.creatorId || n.handle !== body.handle || n.supersedes_id !== null) throw unavailable();
-          const corrections = await query(sb.from('sanji_creator_manual_notes').select('note_id').eq('owner',owner).eq('creator_id',body.creatorId).eq('supersedes_id',body.noteId).limit(1));
-          if (!Array.isArray(corrections) || corrections.length) throw unavailable();
+          const metadata = await sb.from('sanji_creator_manual_notes').select('owner,note_id,creator_id,handle,supersedes_id,recorded_at',{count:'exact'}).eq('owner',owner).eq('creator_id',body.creatorId).order('note_id',{ascending:true}).limit(201);
+          if (metadata.error) throw new ManualNoteError(503, 'NOTE_STORAGE_UNAVAILABLE', '수동 메모 저장소를 확인할 수 없습니다. 입력을 보존한 뒤 다시 확인하세요.');
+          if (!Number.isSafeInteger(metadata.count) || metadata.count < 1 || metadata.count > 200 || !Array.isArray(metadata.data) || metadata.data.length !== metadata.count) throw unavailable();
+          const chain = contextCorrectionPath(metadata.data,owner,body);
+          if (!chain) throw unavailable();
           const rows = await query(sb.from('sanji_creator_recovery').select('owner,id,handle,nickname,bio,category,profile_url,link_status,last_verified,entity_type,assessment,status').eq('owner',owner).ilike('handle',body.handle.replace(/[\\%_]/g,'\\$&')).limit(2));
           const c = Array.isArray(rows) && rows.length === 1 ? rows[0] : null;
           if (!c || c.owner !== owner || c.id !== body.creatorId || c.handle !== body.handle || c.entity_type !== 'creator_evidence' || !['candidate','explore','review'].includes(c.assessment) || !['new','hold','contacted'].includes(c.status) || c.link_status !== 'source_confirmed' || !publicProfile(c.profile_url, body.handle)) throw unavailable();
-          return c;
+          return {creator:c,chain};
         };
-        const creator = await gate();
+        const initial = await gate(), creator = initial.creator;
         const readResearch = async () => {
           const rows = await query(sb.from('sanji_instagram_public_research').select('owner,attested_by,handle,profile_url,observed_at,topics,sources,capture_sha256,revoked_at').eq('owner',owner).eq('handle',body.handle).is('revoked_at',null).order('observed_at',{ascending:false}).limit(2));
           if (!Array.isArray(rows)) throw unavailable();
@@ -122,7 +158,7 @@ export function creatorManualNotesHandler({sb, env, now = () => Date.now()}: any
         };
         const rows = await readResearch();
         const latest = await gate();
-        if (JSON.stringify(creator) !== JSON.stringify(latest)) throw unavailable();
+        if (JSON.stringify(initial) !== JSON.stringify(latest)) throw unavailable();
         const latestResearch = await readResearch();
         if (JSON.stringify(rows) !== JSON.stringify(latestResearch)) throw unavailable();
         // Equal-time evidence is ambiguous; never fall back to an older record when the newest is invalid.

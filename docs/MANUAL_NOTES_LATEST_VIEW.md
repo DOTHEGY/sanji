@@ -16,3 +16,11 @@ node --test --test-concurrency=1 tests/creator-manual-notes-inbox.test.cjs tests
 ```
 
 Fixtures are synthetic. No production data, provider queries, dispatch, migration or storage change is required.
+
+## Public context for correction leaves
+
+The isolated `creator-manual-notes` context route accepts an unambiguous current leaf of an append-only correction chain, rather than rejecting all correction records. It reuses only that authenticated owner's saved public creator evidence; it never fetches a provider, returns private note payloads, updates notes or sends messages.
+
+The server reads exact-count metadata for the selected owner and creator, with a 200-record bound. Missing/count-truncated results hold rather than infer completeness. It walks at most 32 nodes, requiring exact owner/creator/handle binding, unique IDs, a null root, valid nondecreasing recording timestamps with sub-millisecond precision, no cycles and no sibling branches. Equal recording timestamps remain allowed. Every declared sibling counts even if its own time is invalid. Superseded parents cannot supply a fresh review; separate independent root observations remain independent.
+
+The validated path snapshot and eligible creator row must agree across repeated reads around the existing saved-research/revocation checks. A changed chain, newly appended correction, source revocation or ambiguous evidence produces a hold. These are bounded read-side checks, not a claim of current Instagram conversation verification, a transaction lock, consent, or permission to send. Existing authentication, membership, owner filtering, RLS/ACL, JWT verification, service credentials, deployment target and save paths remain unchanged.
