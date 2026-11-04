@@ -16,12 +16,12 @@ function harness(extra={}){
  const node=()=>({html:'',textContent:'',get innerHTML(){return this.html;},set innerHTML(value){this.html=value;const match=value.match(/<textarea id="instagram-prototype-text"[^>]*>([\s\S]*?)<\/textarea>/);if(match)editor.value=unescape(match[1]);form.values={product:[...value.matchAll(/<input type="checkbox" name="product" value="([^"]+)" checked/g)].map(m=>unescape(m[1]))};}});
  const modal={open:false,close(){this.open=false;}};
  const h={URL,FormData,me:owner,location:{hash:'#inbox'},selectedThread:'official',creatorInboxThreads:[{id:'official',instagramOfficial:true,instagramPeerId:'42',peerProfile:{username:'fictional.creator'},messages:[{id:'message-a',out:false,text:'진행 방식과 비용이 어떻게 되나요?',at:'2026-11-03T00:00:00Z'}]}],inboundHumanReply:m=>m.out===false&&!!m.text,inboxEdited:false,data:{candidates:[],deals:catalog(),catalog:{ownerId:'owner-a',complete:true,expectedCount:53,observedAt:'2026-11-04T01:00:00Z'}},window:{InstagramAutoProducts:engine,confirm:()=>false},esc,toast:m=>notices.push(m),navigator:{clipboard:{writeText:async x=>copies.push(x)}},manualNotesApi:async(...args)=>{calls.push(args);return {matched:true,noteId:args[1].noteId,creator:creator()};},creatorProposalContextApi:async(...args)=>{calls.push(args);return {matched:true,peerUsername:'fictional.creator',creator:creator()};},api:async(...args)=>{calls.push(args);return {matched:true,peerUsername:'fictional.creator',creator:creator()};},$:q=>q==='#modal'?modal:q==='#instagram-prototype-result'?result:q==='#instagram-prototype-text'?editor:q==='#instagram-prototype-draft'?form:q==='#instagram-prototype-draft-output'?output:null,modal:()=>{result=node();modal.open=true;},...extra};
- vm.createContext(h);vm.runInContext(code+';this.open=prototypeOpen;this.openNote=prototypeOpenHistoricalNote;this.context=()=>instagramProposalContext;this.current=prototypeCurrentThread;this.valid=prototypeCurrentDraft;this.draft=prototypeDraft;this.copy=prototypeCopy;this.copyProducts=prototypeCopyProducts;this.dispose=prototypeDisposeHistorical;this.dirty=()=>prototypeDraftDirty=true;',h);
+ vm.createContext(h);vm.runInContext(code+';this.open=prototypeOpen;this.openNote=prototypeOpenHistoricalNote;this.context=()=>instagramProposalContext;this.evidence=prototypeAutomaticEvidence;this.current=prototypeCurrentThread;this.valid=prototypeCurrentDraft;this.draft=prototypeDraft;this.copy=prototypeCopy;this.copyProducts=prototypeCopyProducts;this.dispose=prototypeDisposeHistorical;this.dirty=()=>prototypeDraftDirty=true;',h);
  return {h,owner,form,editor,output,calls,copies,notices,modal,result:()=>result,replace:()=>{result=node();},stale:()=>{live=false;},open:n=>h.openNote(n||note(),{owner:'owner-a',isCurrent:()=>live}),ready:async()=>{await Promise.resolve();await Promise.resolve();},review:extra=>{form.values={...form.values,reviewedSource:'on',reviewedExclusions:'on',disposition:'context',...extra};return h.draft(form);}};
 }
 test('automatic UI: historical exact read selects three, keeps original frozen and separately covers all 53 rows / 49 products',async()=>{
  const f=harness(),n=note(),before=JSON.stringify(n);assert.equal(f.open(n),true);assert.equal(f.calls.length,1);assert.equal(f.calls[0][0],'/creator-manual-notes/context');assert.deepEqual(JSON.parse(JSON.stringify(f.calls[0][1])),{noteId:n.id,creatorId:n.creatorId,handle:n.handle});assert.equal(f.calls[0][2],'owner-a');assert.equal(f.calls[0][3](),true);await f.ready();
- assert.equal(f.h.context().autoPlan.selected.length,3);assert.equal(f.form.values.product.length,3);assert.match(f.result().innerHTML,/자동 선정 3개/);assert.match(f.result().innerHTML,/저장 행 53개 \/ 중복 옵션을 합친 상품 49개/);assert.match(f.result().innerHTML,/나머지 저장 상품 46개/);assert.match(f.result().innerHTML,/직접 근거/);assert.match(f.result().innerHTML,/공개 출처 1/);assert.match(f.result().innerHTML,/최신 상태 미확인/);assert.match(f.result().innerHTML,/보존할 미발송 원본 초안/);assert.doesNotMatch(f.result().innerHTML,/data-action="instagram-prototype-use"/);assert.equal(Object.isFrozen(f.h.context().note),true);assert.equal(JSON.stringify(n),before);assert.notEqual(f.editor.value,n.draft);assert.match(f.editor.value,/방식|비용/);assert.doesNotMatch(f.editor.value,/제작비를 지원하겠습니다|수수료율|커미션율/);
+ assert.equal(f.h.context().autoPlan.selected.length,3);assert.equal(f.form.values.product.length,3);assert.match(f.result().innerHTML,/자동 선정 3개/);assert.match(f.result().innerHTML,/저장 행 53개 \/ 중복 옵션을 합친 상품 49개/);assert.match(f.result().innerHTML,/나머지 저장 상품 46개/);assert.match(f.result().innerHTML,/<strong>운영자 확인 공개 주제 일치 · 적합성 미검증<\/strong>/);assert.match(f.result().innerHTML,/공개 출처 1/);assert.match(f.result().innerHTML,/최신 상태 미확인/);assert.match(f.result().innerHTML,/보존할 미발송 원본 초안/);assert.doesNotMatch(f.result().innerHTML,/data-action="instagram-prototype-use"/);assert.equal(Object.isFrozen(f.h.context().note),true);assert.equal(JSON.stringify(n),before);assert.notEqual(f.editor.value,n.draft);assert.match(f.editor.value,/방식|비용/);assert.doesNotMatch(f.editor.value,/제작비를 지원하겠습니다|수수료율|커미션율/);
 });
 test('automatic UI: historical review/copy is local, preserves personal edits and never saves or populates official reply',async()=>{
  const f=harness();f.open();await f.ready();await f.h.copy();assert.equal(f.copies.length,0);assert.throws(()=>f.h.draft(f.form),/직접 검수/);f.editor.value='사용자가 직접 검수하고 고친 답장';f.review();assert.equal(f.h.valid(),true);assert.equal(f.editor.value,'사용자가 직접 검수하고 고친 답장');await f.h.copy();await f.h.copyProducts();assert.equal(f.copies[0],'사용자가 직접 검수하고 고친 답장');assert.equal(f.copies[1].split('\n').length,3);assert.equal(f.calls.length,1);assert.equal(f.h.context().note.draft,note().draft);f.form.values.reviewedSource=false;assert.equal(f.h.valid(),false);await f.h.copy();assert.equal(f.copies.length,2);
@@ -93,4 +93,52 @@ test('automatic UI: reviewer cannot upgrade method inquiry or reported refusal i
 });
 test('automatic UI: provider status messages cannot replace genuine counterpart reply intent',async()=>{
  const f=harness();f.h.creatorInboxThreads[0].messages.push({id:'delivery-status',out:false,text:'Please stop',type:'delivery_status'});f.h.inboundHumanReply=m=>m.out===false&&!!m.text&&m.type!=='delivery_status';await f.h.open();assert.equal(f.h.context().autoPlan.intent.kind,'inquiry');assert.equal(f.h.context().autoPlan.selected.length,3);f.h.creatorInboxThreads[0].messages[0].automatic=true;assert.equal(f.h.current(),false);
+});
+
+test('automatic UI: direct-match headings distinguish stored, historical and attested sources without certifying suitability',async()=>{
+ const strong=creator(),old=creator({publicResearch:{...strong.publicResearch,observedAt:'2020-01-01T00:00:00Z'}});
+ const cases=[
+  [strong,'운영자 확인 공개 주제 일치 · 적합성 미검증'],
+  [old,'과거 공개 주제 일치 · 현재 적합성 미검증'],
+  ...[{category:'홈카페'},{bio:'홈카페 기록'},{topics:['홈카페']}].map(fields=>[creator({publicResearch:null,...fields}),'저장 소개·분류·주제 일치 · 적합성 미검증'])
+ ];
+ for(const [person,label]of cases){
+  const f=harness({manualNotesApi:async(_path,body)=>({matched:true,noteId:body.noteId,creator:person})});f.open();await f.ready();
+  const plan=f.h.context().autoPlan;assert.equal(plan.selected.length,3);assert.ok(plan.selected.every(g=>g.matchType==='direct'));
+  assert.equal((f.result().innerHTML.match(new RegExp('<strong>'+label+'<\\/strong>','g'))||[]).length,3,label);assert.doesNotMatch(f.result().innerHTML,/<strong>직접 근거<\/strong>/);
+  if(!person.publicResearch)assert.doesNotMatch(f.result().innerHTML,/<strong>운영자 확인 공개 주제/);
+  assert.deepEqual(Array.from(plan.selected,g=>g.id),['product-0','product-1','product-2']);assert.deepEqual(Array.from(plan.selected,g=>g.score),person===strong?[201,201,201]:[101,101,101]);
+  assert.equal(f.editor.value,plan.draft);
+ }
+});
+
+test('automatic UI: unpaired topic evidence shows dated observation-bundle sources, never a claimed topic-specific link',()=>{
+ const f=harness(),sources=['https://www.instagram.com/fictional.creator/p/SourceA/','https://www.instagram.com/fictional.creator/reel/SourceB/'];
+ const evidence={kind:'creator_public_topic',label:'운영자 확인 공개 주제',value:'travel',observedAt:'2026-11-04T01:00:00Z',strength:'attested',url:'https://invalid.example.test/false-topic-mapping',sourceUrls:sources,sourceRelation:'observation_bundle_unpaired'};
+ const html=f.h.evidence([evidence]);assert.match(html,/운영자 확인 공개 주제: travel · 2026-11-04T01:00:00Z/);assert.match(html,/관찰 묶음 기준 · 주제별 출처 연결 미확인/);assert.match(html,/관찰 묶음 출처 1 ↗/);assert.match(html,/관찰 묶음 출처 2 ↗/);
+ for(const url of sources)assert.ok(html.includes('href="'+url+'"'));assert.doesNotMatch(html,/false-topic-mapping|>출처 ↗/);assert.equal((html.match(/<a /g)||[]).length,2);assert.deepEqual(evidence.sourceUrls,sources);
+});
+test('automatic UI: every observation-bundle URL is sanitized, deduplicated and escaped',()=>{
+ const f=harness(),safe='https://www.instagram.com/fictional.creator/p/Safe/';
+ const html=f.h.evidence([{kind:'creator_public_topic',value:'<unsafe topic>',observedAt:'<unsafe date>',sourceRelation:'observation_bundle_unpaired',sourceUrls:['javascript:alert(1)','http://example.test/','https://user:password@example.test/',safe,safe,null]}]);
+ assert.equal((html.match(/<a /g)||[]).length,1);assert.ok(html.includes('href="'+safe+'"'));assert.match(html,/&lt;unsafe topic&gt;/);assert.match(html,/&lt;unsafe date&gt;/);assert.doesNotMatch(html,/javascript:|password|http:\/\/|<unsafe/);
+ const empty=f.h.evidence([{kind:'creator_public_topic',value:'travel',sourceRelation:'observation_bundle_unpaired',sourceUrls:null,url:safe}]);assert.match(empty,/확인일 미확인.*주제별 출처 연결 미확인/);assert.doesNotMatch(empty,/<a /);
+});
+test('automatic UI: explicit registered product evidence retains its own dated source link',()=>{
+ const f=harness(),url='https://shop.example.test/products/synthetic';const html=f.h.evidence([{kind:'registered_product_evidence',label:'등록 상품 근거',value:'휴대용 티백',observedAt:'2026-11-03T01:00:00Z',url}]);
+ assert.match(html,/등록 상품 근거: 휴대용 티백 · 2026-11-03T01:00:00Z/);assert.ok(html.includes('href="'+url+'"'));assert.match(html,/>출처 ↗/);assert.doesNotMatch(html,/주제별 출처 연결 미확인|관찰 묶음/);
+});
+test('automatic UI: engine observation bundles keep both sources without assigning either to the matching topic',async()=>{
+ const person=creator();person.publicResearch={...person.publicResearch,topics:['travel','home_cafe'],sources:['https://www.instagram.com/fictional.creator/p/SourceOne/','https://www.instagram.com/fictional.creator/reel/SourceTwo/']};
+ const f=harness({manualNotesApi:async(_path,body)=>({matched:true,noteId:body.noteId,creator:person})});f.open();await f.ready();const plan=f.h.context().autoPlan;
+ assert.deepEqual(Array.from(plan.selected,g=>g.id),['product-0','product-1','product-2']);assert.deepEqual(Array.from(plan.selected,g=>g.score),[201,201,201]);
+ const topics=plan.selected.flatMap(g=>g.evidence.filter(e=>e.kind==='creator_public_topic'));assert.equal(topics.length,3);
+ for(const row of topics){assert.equal(row.url,'');assert.equal(row.sourceRelation,'observation_bundle_unpaired');assert.equal(row.observedAt,person.publicResearch.observedAt);assert.deepEqual(Array.from(row.sourceUrls),person.publicResearch.sources);}
+ const html=f.result().innerHTML;assert.equal((html.match(/주제별 출처 연결 미확인/g)||[]).length,3);assert.equal((html.match(/관찰 묶음 출처 1 ↗/g)||[]).length,3);assert.equal((html.match(/관찰 묶음 출처 2 ↗/g)||[]).length,3);assert.equal(f.editor.value,plan.draft);
+});
+test('automatic UI: reference-only email ambiguity preserves the saved draft and never creates copyable automatic wording',async()=>{
+ const n=note({summary:'“이메일로 자료 보내주세요”라는 예시입니다.',intent:'이메일 주소 미확인.',draft:'보존할 기존 참고 초안'}),before=JSON.stringify(n),f=harness();f.open(n);await f.ready();
+ assert.equal(f.h.context().autoPlan.draftReview.status,'reference_only');assert.equal(f.editor.value,'');assert.match(f.result().innerHTML,/새 문구를 만들지 않았습니다/);assert.match(f.result().innerHTML,/기존 참고 초안과 원문/);assert.match(f.result().innerHTML,/보존할 기존 참고 초안/);
+ f.review();await f.h.copy();assert.equal(f.copies.length,0);assert.match(f.notices.at(-1),/복사할 초안이 없습니다/);
+ f.form.values.product=f.form.values.product.slice(1);f.review();assert.equal(f.editor.value,'');await f.h.copy();assert.equal(f.copies.length,0);assert.equal(f.h.context().note.draft,n.draft);assert.equal(JSON.stringify(n),before);
 });

@@ -34,7 +34,7 @@ test('catalog completeness requires explicit completed load and matching expecte
 test('source evidence exposes date, URL, hash, source type and direct-vs-inferred distinction', () => {
   const r = run(); assert.equal(r.creatorEvidence.observedAt, '2026-11-04T07:00:00Z'); assert.equal(r.creatorEvidence.captureSha256, 'a'.repeat(64));
   assert.equal(r.creatorEvidence.sources.length, 1); assert.match(r.selected[0].reason, /직접 주제 일치/);
-  assert.ok(r.selected[0].evidence.some(e => e.kind === 'creator_public_topic' && e.observedAt && e.url));
+  assert.ok(r.selected[0].evidence.some(e => e.kind === 'creator_public_topic' && e.observedAt && e.url === '' && e.sourceUrls.length && e.sourceRelation === 'observation_bundle_unpaired'));
   assert.ok(r.selected[0].evidence.some(e => e.kind === 'product_attribute' && e.field && e.value));
 });
 test('wrong-account, invalid-hash, private and future public observations do not become current evidence', () => {
@@ -294,4 +294,89 @@ test('nondefault Instagram ports never provide creator identity or public source
   const profile = { id: 'synthetic-creator', handle: 'synthetic_creator', profileUrl: 'https://www.instagram.com:8443/synthetic_creator/', category: '뷰티' };
   assert.equal(run({ creator: profile, deals: [{ id: 'soap', name: '합성 비누' }] }).selected.length, 0);
   for (const patch of [{ profileUrl: profile.profileUrl }, { sources: ['https://www.instagram.com:8443/synthetic_creator/p/Synthetic123/'] }]) { const creator = makeCreator(); creator.publicResearch = { ...creator.publicResearch, ...patch }; assert.equal(run({ creator }).selected.length, 0); }
+});
+
+test('email collaboration request with uncertain domain gets contact confirmation without invented contact or send promise', () => {
+  const creator = { id: 'synthetic-creator', handle: 'synthetic_creator', category: '패션' }, reply = { text: '협업 설명을 이메일로 전달해 달라고 요청. 이메일 도메인 판독이 불명확하여 확인 필요.', exclusionText: '주소 확인 전 발송하지 않음.', historical: true, draft: '보존할 기존 참고 초안' }, before = JSON.stringify(reply);
+  const r = run({ creator, reply }); assert.equal(r.selected.length, 0); assert.equal(r.intent.kind, 'inquiry'); assert.equal(r.intent.inquiry.email, true); assert.equal(r.intent.contactReview.needsConfirmation, true); assert.equal(r.intent.contactReview.kind, 'domain');
+  assert.match(r.draft, /협업 내용을 이메일로 검토하고 싶으시다는 요청/); assert.match(r.draft, /이메일 주소의 도메인이 정확한지/); assert.doesNotMatch(r.draft, /받아보실 의향|협업 진행 방식이나|보냈|발송했|보내드리겠|gmail|[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i); assert.equal(JSON.stringify(reply), before); assert.equal(r.draftReview.status, 'generated');
+});
+test('operator contact uncertainty is separately sourced and does not become a counterpart statement', () => {
+  const r = run({ reply: { text: '상품 자료를 이메일로 보내 달라고 요청함.', exclusionText: '이메일 주소 미확인. 보내기 전 확인 필요.', historical: true } });
+  assert.deepEqual(r.intent.contactReview.sources, ['operator_note']); assert.match(r.draft, /자료를 받으실 이메일 주소를 확인/); assert.doesNotMatch(r.draft, /주소가 틀리|잘못 적|오타라고 말씀|발송했/);
+});
+test('supplied email for proposal material is acknowledged without asking again or promising delivery', () => {
+  const r = run({ reply: { text: '제안 자료를 보내 달라며 이메일 주소를 제공함.', historical: true } }); assert.equal(r.intent.inquiry.email, true); assert.equal(r.intent.contactReview.needsConfirmation, false); assert.match(r.draft, /이메일로 검토/); assert.match(r.draft, /상품 자료 문의에 참고/); assert.doesNotMatch(r.draft, /받아보실지|주소가 정확한지|이메일로 보내드리|발송했/);
+});
+test('contact data is never copied, corrected or invented in generated draft', () => {
+  const r = run({ reply: { text: '협업 자료를 이메일 synthetic-contact@example.test로 보내 달라고 요청함. 주소 오타 여부 확인 필요.', historical: true } }); assert.equal(r.intent.inquiry.email, true); assert.match(r.draft, /자료를 받으실 이메일 주소를 확인/); assert.doesNotMatch(r.draft, /synthetic-contact|example\.test|gmail|naver/);
+});
+test('resolved contact notes do not manufacture uncertainty or re-request confirmation', () => {
+  for (const note of ['이메일 주소 확인 완료. 오타 없음.', '이메일 주소 오타가 아님.']) {
+    const r = run({ reply: { text: '협업 내용을 이메일로 받아보고 싶다고 요청함.', exclusionText: note, historical: true } }); assert.equal(r.intent.contactReview.needsConfirmation, false, note); assert.doesNotMatch(r.draft, /주소가 정확한지|도메인이 정확한지/);
+  }
+});
+test('ambiguous email request or notes-only uncertainty preserves reference review instead of generic new question', () => {
+  for (const reply of [{ text: '“이메일로 자료 보내주세요”라는 예시입니다.', historical: true }, { text: '', exclusionText: '이메일 주소 미확인.', historical: true }]) {
+    const r = run({ reply }); assert.equal(r.draft, ''); assert.equal(r.draftReview.status, 'reference_only'); assert.match(r.warnings.join(' '), /기존 참고 초안/); assert.equal(engine.buildDraft({ creator: makeCreator(), intent: r.intent, selected: r.selected }), '');
+  }
+});
+test('global email refusal remains a hold despite contact uncertainty', () => {
+  const r = run({ reply: { text: '이메일로 보내지 마세요.', exclusionText: '이메일 도메인 확인 필요.', historical: true } }); assert.equal(r.intent.kind, 'hold'); assert.equal(r.draft, ''); assert.equal(r.selected.length, 0); assert.equal(r.draftReview.status, 'held');
+});
+test('creator topics expose unpaired observation bundles rather than fabricated per-topic links', () => {
+  const creator = makeCreator(['home_cafe', 'beauty']); creator.publicResearch.sources.push('https://www.instagram.com/synthetic_creator/reel/Synthetic456/');
+  const r = run({ creator }); for (const fact of r.creatorEvidence.evidence) { assert.equal(fact.url, ''); assert.equal(fact.sourceRelation, 'observation_bundle_unpaired'); assert.deepEqual(fact.sourceUrls, creator.publicResearch.sources); }
+  for (const fact of r.selected.flatMap(g => g.evidence).filter(e => e.kind === 'creator_public_topic')) { assert.equal(fact.url, ''); assert.equal(fact.sourceUrls.length, 2); }
+});
+test('portable inference shows the exact safe source field containing the packaging token', () => {
+  const r = run({ creator: makeCreator(['travel']), deals: [product('brew', { name: '합성 커피 벌크백 1봉 (30티백)', productName: '합성 커피 벌크백', category: '커피' })] }); assert.equal(r.selected.length, 1); assert.equal(r.selected[0].matchType, 'inferred');
+  const portable = r.selected[0].evidence.filter(e => e.topic === 'portable'); assert.equal(portable.length, 1); assert.equal(portable[0].field, 'name'); assert.equal(portable[0].value, '합성 커피 벌크백 1봉 (30티백)');
+});
+test('stated paid-content condition uses neutral acknowledgment rather than inventing a question or agreement', () => {
+  const r = run({ reply: { text: '유료 콘텐츠 제작만 검토하며 제작비 조건을 제시함.', historical: true } }); assert.equal(r.intent.inquiry.fee, true); assert.match(r.draft, /말씀해 주신 비용·진행 조건/); assert.doesNotMatch(r.draft, /문의하신 비용|지급하겠|조건에 동의|수수료|커미션/);
+});
+
+test('compound health/wellness avoidance blocks only explicitly labeled categories and acknowledges bounded constraint', () => {
+  const deals = [product('coffee', { category: '식품' }), product('wellness', { category: '웰니스' }), product('health-food', { category: '미확인', topics: ['건강식품'] }), product('functional', { category: '건강기능식품' }), product('english', { category: 'Wellness' })];
+  for (const value of ['웰니스·건강 관련 제품을 지양하고 다른 제품 문의.', '건강·웰니스 제외. 음식은 제작비 지원 조건.', '건강 및 웰니스 상품은 지양합니다.']) {
+    const r = run({ deals, reply: { text: value, historical: true } }); assert.notEqual(r.intent.kind, 'hold', value); assert.deepEqual(r.selected.map(g => g.id), ['coffee']); assert.equal(r.blocked.length, 4); assert.match(r.draft, /건강·웰니스 분류를 제외/); assert.ok(r.sourceExclusions.some(e => /지양|제외/.test(e.phrase)));
+  }
+});
+test('health category constraints do not infer health attributes from ingredients, names, or ordinary food', () => {
+  const r = run({ deals: [product('plain', { category: '식품' }), product('vitamin-name', { name: '합성 비타민 이름 커피', category: '식품' }), product('explicit', { name: '합성 건강기능식품 커피', category: '식품' })], reply: { text: '건강·웰니스는 제외해 주세요. 다른 제품 자료 부탁드립니다.', historical: true } });
+  assert.deepEqual(r.selected.map(g => g.id).sort(), ['plain', 'vitamin-name']); assert.deepEqual(r.blocked.map(g => g.id), ['explicit']);
+});
+test('food production support remains uncertainty, not all-food exclusion or a funding promise', () => {
+  const r = run({ deals: [product('coffee', { category: '식품' })], reply: { text: '음식은 제작비 지원을 받아 진행한다고 설명하고 다른 제품을 문의함.', exclusionText: '건강·웰니스 제외. 음식은 제작비 지원 조건.', historical: true } });
+  assert.equal(r.selected.length, 1); assert.equal(r.intent.supportReview.productionSupport, true); assert.match(r.draft, /제작비 지원 여부와 구체적인 지원 범위는 별도 확인/); assert.match(r.draft, /건강·웰니스 분류를 제외/); assert.doesNotMatch(r.draft, /지원해 드|지원하겠|지급|무료|지원 확정/);
+});
+test('all-food exclusion is respected only when explicitly recorded', () => {
+  const r = run({ deals: [product('food', { category: '식품' }), { id: 'soap', name: '합성 비누', category: '생활용품' }], creator: makeCreator(['beauty', 'home_cafe']), reply: { text: '식품은 제외하고 다른 상품 자료 부탁드립니다.', historical: true } }); assert.deepEqual(r.selected.map(g => g.id), ['soap']); assert.equal(r.blocked[0].id, 'food');
+});
+test('negated or quoted avoidance is not silently turned into a category exclusion', () => {
+  for (const value of ['건강·웰니스 제품을 지양하지 않습니다.', '“건강·웰니스 제외”라는 문구를 문의함.']) {
+    const r = run({ deals: [product('wellness', { category: '웰니스' })], reply: { text: value, historical: true } }); assert.equal(r.sourceExclusions.length, 0, value); assert.equal(r.intent.excludedCategoryLabels.length, 0, value);
+  }
+});
+test('contact uncertainty without email request preserves reference for acknowledgments and product-only requests', () => {
+  for (const value of ['네, 감사합니다.', '상품 목록 보내주세요.']) {
+    const r = run({ reply: { text: value, exclusionText: '이메일 주소 미확인.', historical: true } }); assert.equal(r.draftReview.status, 'reference_only'); assert.equal(r.draft, ''); assert.equal(r.intent.allowProductMention, false);
+  }
+});
+test('contact confirmation never claims the recipient already supplied an address', () => {
+  for (const value of ['이메일로 자료 보내주세요.', '이메일 주소를 아직 드리지 않았습니다. 자료를 이메일로 보내주세요.']) {
+    const r = run({ reply: { text: value, exclusionText: '이메일 주소 미확인.', historical: true } }); assert.equal(r.intent.inquiry.email, true); assert.match(r.draft, /자료를 받으실 이메일 주소를 확인/); assert.doesNotMatch(r.draft, /안내해 주신|적어주신|제공해 주신|발송했/);
+  }
+});
+
+test('negative email and alternate-channel cues never become affirmative email requests', () => {
+  for (const value of ['이메일은 받지 않겠습니다.', '메일로 받지 않습니다.', '이메일은 안 받습니다.', '이메일 말고 DM으로 보내주세요.', '이메일이 아니라 DM으로 자료 부탁드립니다.']) {
+    const r = run({ reply: { text: value, historical: true } }); assert.equal(r.intent.kind, 'ambiguous', value); assert.equal(r.intent.inquiry.email, false, value); assert.equal(r.draftReview.status, 'reference_only', value); assert.equal(r.draft, '', value);
+  }
+});
+test('mixed resolved and unresolved contact clauses retain unresolved scope', () => {
+  for (const value of ['이메일 주소 확인 완료. 도메인 미확인.', '이메일 오타 없음. 주소 미확인.', '이메일 주소 확인 완료이나 도메인은 불확실.']) {
+    const r = run({ reply: { text: '협업 내용을 이메일로 받아보고 싶다고 요청함.', exclusionText: value, historical: true } }); assert.equal(r.intent.contactReview.needsConfirmation, true, value); assert.deepEqual(r.intent.contactReview.sources, ['operator_note']); assert.match(r.draft, /자료를 받으실 이메일 주소/);
+  }
 });

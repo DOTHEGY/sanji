@@ -734,10 +734,17 @@ async function prototypeLoadHistoricalAutomatic(marker){
 }
 function prototypeAutomaticItem(group){return group.items.find(x=>!String(x.stock||'').startsWith('품절'))||group.items[0]||{};}
 function prototypeAutomaticEvidence(evidence){
- return (evidence||[]).map(e=>{const link=prototypeSafeLink(e.url),label=e.label||e.field||e.kind||'저장 근거',date=e.observedAt||'확인일 미확인';return '<li>'+esc(label)+': '+esc(e.value||'')+' · '+esc(date)+(link?' · <a href="'+esc(link)+'" target="_blank" rel="noopener noreferrer">출처 ↗</a>':'')+'</li>';}).join('');
+ return (evidence||[]).map(e=>{
+  const label=e.label||e.field||e.kind||'저장 근거',date=e.observedAt||'확인일 미확인',bundle=e.sourceRelation==='observation_bundle_unpaired';
+  const urls=bundle?[...new Set((Array.isArray(e.sourceUrls)?e.sourceUrls:[]).map(prototypeSafeLink).filter(Boolean))]:[prototypeSafeLink(e.url)].filter(Boolean);
+  const links=urls.map((url,i)=>'<a href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">'+(bundle?'관찰 묶음 출처 '+(i+1):'출처')+' ↗</a>').join(' · ');
+  return '<li>'+esc(label)+': '+esc(e.value||'')+' · '+esc(date)+(bundle?' · 관찰 묶음 기준 · 주제별 출처 연결 미확인':'')+(links?' · '+links:'')+'</li>';
+ }).join('');
 }
 function prototypeAutomaticCard(group,selected,held){
- const item=prototypeAutomaticItem(group),blocked=(group.blockedReasons||[]).length>0||!group.available||held||group.score<=0,kind=group.matchType==='direct'?'직접 근거':group.matchType==='inferred'?'적합성 추론':'일치 근거 없음';
+ const sourceStrength=(group.evidence||[]).find(e=>e.kind==='creator_public_topic')?.strength;
+ const directLabel=sourceStrength==='attested'?'운영자 확인 공개 주제 일치 · 적합성 미검증':sourceStrength==='historical'?'과거 공개 주제 일치 · 현재 적합성 미검증':'저장 소개·분류·주제 일치 · 적합성 미검증';
+ const item=prototypeAutomaticItem(group),blocked=(group.blockedReasons||[]).length>0||!group.available||held||group.score<=0,kind=group.matchType==='direct'?directLabel:group.matchType==='inferred'?'적합성 추론':'일치 근거 없음';
  return '<section class="panel" data-auto-product="'+esc(group.id)+'"><label class="field"><span><input type="checkbox" name="product" value="'+esc(group.id)+'" '+(selected?'checked ':'')+(blocked?'disabled ':'')+'>'+esc(group.product)+'</span></label><p><strong>'+esc(kind)+'</strong> · '+esc(group.reason||'근거 미확인')+'</p>'+((group.evidence||[]).length?'<ul class="fine">'+prototypeAutomaticEvidence(group.evidence)+'</ul>':'')+'<p class="fine">'+esc(group.items.map(x=>[x.category,x.stock,x.state,x.price].filter(Boolean).join(' · ')).join(' / '))+'</p>'+((group.uncertainty||[]).length?'<p class="fine">확인 필요: '+esc(group.uncertainty.join(' · '))+'</p>':'')+((group.blockedReasons||[]).length?'<p class="notice">'+esc(group.blockedReasons.join(' · '))+'</p>':'')+(item.link?'<a href="'+esc(prototypeSafeLink(item.link))+'" target="_blank" rel="noopener noreferrer">저장 상품 링크 ↗</a>':'<p class="fine">상품 링크 미확인</p>')+'<label class="field"><span><input type="checkbox" name="exclude" value="'+esc(group.id)+'">이 상품 제외</span></label></section>';
 }
 function prototypeRenderAutomatic(marker){
