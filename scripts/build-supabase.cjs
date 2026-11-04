@@ -5,10 +5,11 @@ let source = fs.readFileSync("private/ui/app.js", "utf8");
 const start = source.indexOf("async function api("),
   end = source.indexOf("\nfunction field(", start);
 source =
-  'import {workspaceApi,integrationStatus} from "./supabase-api.js";\n' +
+  'import {workspaceApi,integrationStatus,transientInboxApi,client as transientClient} from "./supabase-api.js";\nimport "../private/ui/instagram-transient-inbox-ui.js";\n' +
   source.slice(0, start) +
   'async function api(path,method="GET",body){return workspaceApi(path,method,body)}\n' +
   source.slice(end);
+source = source.replace("const TRANSIENT_INBOX_AVAILABLE = false;", "const TRANSIENT_INBOX_AVAILABLE = true;");
 source = source.replace(
   "if (e.status !== 401) {",
   'if (e.status === 403 || /초기 설정/.test(e.message)) { $("#app").innerHTML=`<div class="panel auth"><h1>관리자 접근 설정 필요</h1><p class="notice">${esc(e.message)}</p><a href="https://github.com/DOTHEGY/sanji/blob/main/docs/SUPABASE.md" target="_blank" rel="noopener">설정 안내 열기</a><p><button data-action="logout">다른 계정으로 로그인</button></p></div>`;return;}\n    if (e.status !== 401) {',

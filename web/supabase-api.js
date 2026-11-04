@@ -62,12 +62,14 @@ async function member() {
     );
   return session;
 }
-async function edge(path, method, body) {
+async function edge(path, method, body, expectedOwner) {
   const session = await member();
+  if (expectedOwner !== undefined && session.user.id !== expectedOwner) { const e=error("계정이 변경됐습니다. 다시 확인하세요.",403); e.code="TRANSIENT_OWNER_CHANGED"; throw e; }
   const functionUrl = path.startsWith("/creator-instagram/") ? instagramInboxFunctionUrl : path === "/dot-snapshot" || path.startsWith("/dot-snapshot/") ? dotSnapshotFunctionUrl : edgeFunctionUrl;
   let response;
   try {
     response = await fetch(functionUrl + path, {
+      ...(path === "/creator-instagram/transient-inbox" ? { cache: "no-store" } : {}),
       method,
       headers: {
         apikey: supabaseKey,
@@ -104,6 +106,10 @@ async function edge(path, method, body) {
     throw e;
   }
   return data;
+}
+export async function transientInboxApi(body, expectedOwner) {
+  if (typeof expectedOwner !== "string" || !expectedOwner) throw error("계정을 확인하세요.", 403);
+  return edge("/creator-instagram/transient-inbox", "POST", body, expectedOwner);
 }
 export async function workspaceApi(path, method = "GET", body) {
   if (path === "/status") return { setupRequired: false, supabase: true };

@@ -23,6 +23,9 @@ const $ = (s) => document.querySelector(s),
     ),
   tag = (t, c = "") => `<span class="tag ${c}">${esc(t)}</span>`,
   money = (n) => (n == null ? "미협의" : Number(n).toLocaleString() + "원");
+const TRANSIENT_INBOX_AVAILABLE = false;
+let transientInboxView=null;
+function transientDispose(){const current=transientInboxView;transientInboxView=null;if(current)current.destroy();}
 let instagramHandoff=null;
 if(location.hash.startsWith('#instagram-connect?')){const h=new URLSearchParams(location.hash.slice('#instagram-connect?'.length)),state=h.get('state'),code=h.get('code');history.replaceState(null,'',location.pathname+location.search+'#creators');if(state&&code&&state.length<=256&&code.length<=4096)instagramHandoff={state,code};}
 const oauthNoticeUrl = new URL(location.href);
@@ -119,6 +122,7 @@ function field(name, label, value = "", type = "text", options) {
   return `<label class="field">${esc(label)}${help ? `<small class="help">${esc(help)}</small>` : ""}${options ? `<select name="${name}">${options.map((o) => `<option value="${esc(o)}" ${o === value ? "selected" : ""}>${esc(o)}</option>`).join("")}</select>` : type === "textarea" ? `<textarea name="${name}">${esc(value)}</textarea>` : type === "checkbox" ? `<span><input name="${name}" type="checkbox" ${value ? "checked" : ""}> 확인</span>` : `<input name="${name}" type="${type}" value="${esc(value)}" ${type === "number" ? 'min="0" step="any"' : ""}>`}</label>`;
 }
 function modal(html) {
+  if(transientInboxView){if(!transientInboxView.canClose())return;transientDispose();if($("#modal").open)$("#modal").close();}
   $("#modal-content").innerHTML =
     html + '<div id="form-error" role="alert"></div>';
   $("#modal").showModal();
@@ -127,6 +131,8 @@ function modal(html) {
 function close() {
   if(typeof prototypeDraftDirty!=="undefined"&&prototypeDraftDirty&&$("#instagram-prototype-text")&&!window.confirm("작성 중인 제안 초안을 닫을까요? 저장되지 않습니다."))return;
   if(typeof prototypeDraftDirty!=="undefined")prototypeDraftDirty=false;
+  if(transientInboxView&&!transientInboxView.canClose())return;
+  transientDispose();
   $("#modal").close();
   preview = null;
 }
@@ -166,6 +172,7 @@ async function boot() {
   }
 }
 async function authPage() {
+  transientDispose();
   inboxRequestGeneration++;
   me = null;
   csrf = "";
@@ -716,6 +723,14 @@ function tagbyReplyEligible(t,now=Date.now()){
  return (t.messages||[]).some(m=>recentInboundReply(m,now));
 }
 function visibleInboxThreads(threads,q,type,mode,lifecycle='active',period='all',now=Date.now()){const needle=String(q||'').toLowerCase();return threads.filter(t=>{if((t.instagramOfficial||t.channel==='instagram')&&!tagbyReplyEligible(t,now))return false;const name=inboxThreadName(t);return (lifecycle==='all'||(lifecycle==='closed'?inboxIsClosed(t):!inboxIsClosed(t)))&&String(name+' '+(t.subject||'')+' '+(t.owner||'')+' '+(t.next||'')).toLowerCase().includes(needle)&&(!type||(inboxThreadCategory(t)===type))&&(period==='all'||(period==='7d'&&(t.messages||[]).some(m=>recentInboundReply(m,now))))&&(mode==='all'||(mode.startsWith('status:')?!t.instagramOfficial&&(t.conversationStatus||'미정')===mode.slice(7):(t.messages||[]).some(inboundHumanReply)));});}
+function transientInboxOpen(){
+ if(!TRANSIENT_INBOX_AVAILABLE||!me)return toast('이 화면은 지원되는 작업 공간에서만 사용할 수 있습니다.');
+ if(transientInboxView)return toast('임시 대화 화면이 이미 열려 있습니다.');
+ if(inboxEdited)return toast('기존 편집을 저장하거나 취소한 뒤 열어 주세요.');
+ const owner=me;let sessionOwner=owner,invalidateSession=()=>{};modal('<div id="transient-inbox-root"></div>');const host=$('#transient-inbox-root');if(!host)return;
+ const checkOwner=async()=>{const r=await transientClient.auth.getSession();if(r.error||!r.data?.session||r.data.session.user?.id!==owner.id||me!==owner){invalidateSession();throw Error('계정이 변경됐습니다.');}};
+ transientInboxView=globalThis.SanjiTransientInboxUI.mount(host,{getOwner:()=>me===owner?sessionOwner:null,subscribeSession:callback=>{invalidateSession=()=>{sessionOwner=null;const wasCurrent=host.isConnected===true;callback();if(wasCurrent&&$('#modal')?.open)$('#modal').close();};const result=transientClient.auth.onAuthStateChange((_event,session)=>{if(!session||session.user?.id!==owner.id)invalidateSession();});return ()=>result.data.subscription.unsubscribe();},fetchPage:async body=>{await checkOwner();let result;try{result=await transientInboxApi(body,owner.id);}catch(e){if(e?.code==='TRANSIENT_OWNER_CHANGED')invalidateSession();throw e;}await checkOwner();return result;},copy:value=>navigator.clipboard.writeText(value),confirmReplace:()=>window.confirm('현재 임시 초안을 중립 문구로 바꿀까요?'),confirmClose:()=>window.confirm('닫으면 임시 초안이 사라집니다. 필요하면 먼저 복사하세요. 닫을까요?'),onClose:()=>{transientInboxView=null;if($('#modal')?.open)$('#modal').close();}});
+}
 async function inboxPage() {
   if(instagramInboxOwner!==me){instagramInboxCursor=null;instagramInboxOwner=null;instagramInboxOffset=0;instagramInboxHasMore=false;instagramSyncStatus=null;}
   const generation=++inboxRequestGeneration, account=me, stillCurrent=()=>generation===inboxRequestGeneration&&me===account&&!!me&&(location.hash.slice(1)==='inbox');
@@ -728,7 +743,7 @@ async function inboxPage() {
     head(
       "통합 대화함",
       "대화 진행 상태와 제안 내용·종료 사유를 기록합니다.",
-      button("Gmail 답장 동기화", "sync-mail") + button("Instagram 연결", "creator-instagram-connect") + button("Instagram 수신 확인", "instagram-sync") + (instagramInboxCursor&&instagramInboxOwner===me?button("Instagram 대화 더 보기", "instagram-sync-next"):"") + (instagramInboxOffset>0?button("Instagram 최근 기록", "instagram-page", "previous"):"") + (instagramInboxHasMore?button("Instagram 이전 기록", "instagram-page", "next"):""),
+      button("Gmail 답장 동기화", "sync-mail") + button("Instagram 연결", "creator-instagram-connect") + button("Instagram 수신 확인", "instagram-sync") + (TRANSIENT_INBOX_AVAILABLE?button("Instagram 임시 확인·초안", "transient-inbox-open"):"") + (instagramInboxCursor&&instagramInboxOwner===me?button("Instagram 대화 더 보기", "instagram-sync-next"):"") + (instagramInboxOffset>0?button("Instagram 최근 기록", "instagram-page", "previous"):"") + (instagramInboxHasMore?button("Instagram 이전 기록", "instagram-page", "next"):""),
     ) +
     '<details class="panel"><summary>태그바이 발송 근거 관리</summary><p class="fine">원본 대조 기록만 저장합니다. 메시지는 보내지 않습니다.</p>'+button('근거 가져오기','tagby-proof-open')+button('저장된 근거·철회','instagram-evidence-open')+'</details>' +
     (instagramNotice?'<p class="notice">'+esc(instagramNotice)+'</p>':'') +
@@ -1418,6 +1433,7 @@ document.addEventListener("submit", async (e) => {
   }
 });
 const actions = {
+  "transient-inbox-open":()=>transientInboxOpen(),
   'dot-refresh':()=>loadDotSnapshot(),
   'dot-snapshot-open':()=>modal('<h2>수집 원장 가져오기</h2><p>dot에서 내보낸 집계 JSON을 붙여넣고 확인하세요. 수집을 시작하거나 변경하지 않습니다.</p><form id="dot-snapshot-form">'+field('snapshot','집계 JSON','', 'textarea')+'<button type="submit">미리보기</button></form><div id="dot-snapshot-preview"></div>'),
   'creator-batch-open':async()=>{try{await creatorBatchOpen();}catch(e){toast(e.message||'이메일 검토를 열지 못했습니다.');}},
@@ -1507,7 +1523,9 @@ const actions = {
   "discovery-filter": async () => { discoveryOnlyEmails = !discoveryOnlyEmails; await discoveryPage(); },
 
   async logout() {
-    if(!allowInboxChange())return;inboxEdited=false;inboxDirtyForms.clear();
+    if(!allowInboxChange())return;
+    if(transientInboxView&&!transientInboxView.canClose())return;
+    transientDispose();inboxEdited=false;inboxDirtyForms.clear();
     await api("/auth/logout", "POST", {});
     location.reload();
   },
@@ -1742,8 +1760,12 @@ document.addEventListener("change", (e) => {
   if (["thread-type", "thread-mode", "thread-lifecycle", "thread-period"].includes(e.target.id)) filterThreads();
   if (e.target.id === "mail-filter" && discoveryView) $("#discovery-results").innerHTML=discoveryCards(discoveryView);
 });
-window.addEventListener('beforeunload',e=>{if(inboxEdited){e.preventDefault();e.returnValue='';}});
+window.addEventListener('beforeunload',e=>{if(inboxEdited||transientInboxView?.hasDraft()){e.preventDefault();e.returnValue='';}});
+window.addEventListener('pagehide',()=>transientDispose());
+$('#modal').addEventListener('close',()=>{if(!$('#modal').open)transientDispose();});
+document.addEventListener('cancel',e=>{if(e.target?.id==='modal'&&transientInboxView){if(!transientInboxView.canClose())e.preventDefault();else transientDispose();}},true);
 window.addEventListener("hashchange", () => {
+  if(transientInboxView){if(!transientInboxView.canClose()){history.replaceState(null,"","#inbox");return;}transientDispose();if($("#modal").open)$("#modal").close();}
   if(inboxEdited&&location.hash!=='#inbox'&&!allowInboxChange()){history.replaceState(null,'','#inbox');return;}
   inboxEdited=false;inboxDirtyForms.clear();render();
 });
