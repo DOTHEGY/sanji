@@ -9,3 +9,8 @@ verify_jwt = false
 entrypoint = "./functions/instagram-manual-inbox/index.ts"
 # User-session-only API; the handler also verifies membership and owner scope.
 verify_jwt = true
+
+[functions.creator-manual-notes]
+entrypoint = "./functions/creator-manual-notes/index.ts"
+# Independent historical notes only; handler also checks user membership and owner.
+verify_jwt = true

@@ -13,3 +13,6 @@ export const dotSnapshotFunctionUrl = supabaseUrl + "/functions/v1/dot-snapshot-
 
 // Isolated read-and-draft-only inbox, separate from existing functions.
 export const instagramManualInboxFunctionUrl = supabaseUrl + "/functions/v1/instagram-manual-inbox";
+
+// Independent historical notes, never a provider inbox or dispatch route.
+export const creatorManualNotesFunctionUrl = supabaseUrl + "/functions/v1/creator-manual-notes";

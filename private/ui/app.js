@@ -59,6 +59,7 @@ const routes = {
   creators: ["◎", "크리에이터 목록"],
   matching: ["⇄", "상품 매칭"],
   inbox: ["✉", "통합 대화함"],
+  "manual-notes": ["✎", "수동 확인 메모"],
   templates: ["▧", "템플릿"],
   settings: ["⚙", "연동 설정"],
 };
@@ -66,7 +67,7 @@ const navGroups = [
   {label:"", keys:["dashboard"]},
   {label:"브랜드 영업", keys:["brands","emailtracking","deals"]},
   {label:"크리에이터", keys:["creators","matching"]},
-  {label:"대화", keys:["inbox"]},
+  {label:"대화", keys:["inbox","manual-notes"]},
   {label:"관리", keys:["templates","settings"], bottom:true},
 ];
 const statuses = [
@@ -175,6 +176,7 @@ async function boot() {
   }
 }
 async function authPage() {
+  manualNotesDispose();
   transientDispose();
   inboxRequestGeneration++;
   if(typeof manualDispose==='function'&&$('#manual-inbox-root')){manualDispose();$('#modal')?.close();}
@@ -187,6 +189,7 @@ async function authPage() {
     `<div class="panel auth"><div class="eyebrow">PRIVATE WORKSPACE</div><h1>${status.setupRequired ? "관리자 계정 만들기" : "다시 만나 반갑습니다"}</h1><p class="login-note">실제 회사·크리에이터·대화 자료는 로그인 후에만 조회됩니다. 가상 데이터는 포함하지 않습니다.</p><form id="auth-form" data-type="${status.setupRequired ? "setup" : "login"}">${status.setupRequired ? field("token", "서버 초기 설정 토큰|서버 환경 변수 SANJI_SETUP_TOKEN 값입니다. 메일·Instagram 비밀번호가 아닙니다.", "", "password") : ""}${field("email", "관리자 이메일", "", "email")}${field("password", "서비스 로그인 비밀번호|초기 생성 시 12자 이상. 외부 이메일 계정 비밀번호를 입력하지 마세요.", "", "password")}<button class="primary" type="submit">${status.setupRequired ? "관리자 계정 생성" : "로그인"}</button><div id="auth-error" class="login-note"></div></form></div>`;
 }
 function render() {
+  if(manualNotesView){if(location.hash==="#manual-notes")return;if(!manualNotesView.canClose()){history.replaceState(null,"","#manual-notes");return;}manualNotesDispose();}
   inboxRequestGeneration++;
   if (!me) return;
   const rawKey = location.hash.slice(1) || "dashboard";
@@ -919,6 +922,18 @@ async function manualReviewedAudit(peerId,next){
   let cursor=null;if(r.nextBefore!==null){const n=r.nextBefore;if(!manualGeneration(n?.auditId)||typeof n.savedAt!=='string'||!Number.isFinite(Date.parse(n.savedAt)))throw Error('이력 이어보기를 확인하지 못했습니다.');cursor={auditId:n.auditId,savedAt:n.savedAt};}const seen=next?new Set(prior.seen):new Set(),key=cursor?cursor.savedAt+'|'+cursor.auditId:'';const repeated=!!key&&seen.has(key),invalid=r.complete&&!!cursor;if(key&&!repeated&&!invalid)seen.add(key);state.audit={peerId,creatorId:identity.creatorId,generation:identity.conversationGeneration,events:next?[...prior.events,...events]:events,next:repeated||invalid?null:cursor,seen};const host=$('#manual-audit-results');if(host)host.innerHTML=(state.audit.events.map(x=>'<div class="notice">'+esc(x.savedAt)+' · '+esc(({user:'사용자',assistant:'assistant',other_authorized_worker:'다른 승인된 작업자'})[x.reviewerType])+' 자기기재 · 원문 대조 '+(x.sourceCheck==='self_reported_checked'?'자기기재':'미확인')+' · 조건 점검 '+(x.policyCheck==='self_reported_checked'?'자기기재':'미확인')+'<br>'+(!x.matchesCurrentRevision||!x.matchesCurrentDraft?'조회·검수 기준 버전 또는 초안이 달라 재검토 필요':'조회 시점 산지 기록과 일치 · Meta 최신성 미보장')+'</div>').join('')||'<p>표시할 검수 이력이 없습니다.</p>')+'<p class="fine">'+esc(r.limitation||'Meta 최신성이나 실제 원문 확인을 보장하지 않습니다.')+(repeated?' · 반복 이력 커서로 중단':invalid?' · 잘못된 이력 커서로 중단':!r.complete&&!cursor?' · 이력이 불완전하며 이어볼 수 없음':'')+'</p>';const more=$('#manual-audit-next');if(more)more.hidden=!state.audit.next;
  }catch(e){if(manualReviewedActive(state)&&epoch===state.auditEpoch&&state.selected===peerId){const host=$('#manual-audit-results');if(host)host.textContent='검수 이력을 확인하지 못했습니다. 목록·상대를 다시 확인하고 기록 불일치면 복구 검토가 필요합니다.';}}finally{state.auditBusy=false;}
 }
+const MANUAL_NOTES_AVAILABLE = false;
+let manualNotesView = null;
+function manualNotesDispose(){manualNotesView?.destroy();manualNotesView=null;}
+function manualNotesPage(){
+ manualNotesDispose();
+ $('#app').innerHTML='<div id="creator-manual-notes-root"></div>';
+ const host=$('#creator-manual-notes-root');
+ if(!MANUAL_NOTES_AVAILABLE||!globalThis.SanjiManualNotes){host.innerHTML='<section class="panel"><h1>수동 확인 메모</h1><p>인증된 운영 연결에서 사용할 수 있습니다.</p></section>';return;}
+ const account=me;let sessionOwner=account?.id;
+ manualNotesView=globalThis.SanjiManualNotes.mount(host,{getOwner:()=>me===account?sessionOwner:null,isActive:()=>location.hash==='#manual-notes',request:manualNotesApi,confirmSkip:()=>window.confirm('이번 메모와 이 메모의 수정 내용을 저장하지 않고 건너뛸까요? 나머지 가져온 메모는 유지됩니다.'),confirmDiscard:()=>window.confirm('작성 중인 입력 또는 저장 결과 확인이 끝나지 않은 메모가 있습니다. 이 화면을 나가면 입력과 확인용 기록 ID가 사라집니다. 취소할까요?'),subscribeSession:callback=>{const r=manualClient.auth.onAuthStateChange((_event,session)=>{if(session?.user?.id!==account?.id){sessionOwner=null;callback();manualNotesView=null;if(host.isConnected)host.innerHTML='<section class="panel"><h1>수동 확인 메모</h1><p>로그인 계정이 변경됐습니다. 다시 로그인 후 메모를 여세요.</p></section>';}});return ()=>r.data.subscription.unsubscribe();}});
+ manualNotesView.load();
+}
 async function inboxPage() {
   if(instagramInboxOwner!==me){instagramInboxCursor=null;instagramInboxOwner=null;instagramInboxOffset=0;instagramInboxHasMore=false;instagramSyncStatus=null;}
   const generation=++inboxRequestGeneration, account=me, stillCurrent=()=>generation===inboxRequestGeneration&&me===account&&!!me&&(location.hash.slice(1)==='inbox');
@@ -933,6 +948,7 @@ async function inboxPage() {
       "대화 진행 상태와 제안 내용·종료 사유를 기록합니다.",
       button("Gmail 답장 동기화", "sync-mail") + (typeof MANUAL_INBOX_AVAILABLE!=="undefined"&&MANUAL_INBOX_AVAILABLE?button("Instagram 수동 검토·초안", "manual-inbox-open"):'') + (TRANSIENT_INBOX_AVAILABLE?button("Instagram 임시 확인·초안", "transient-inbox-open"):"") + button("Instagram 연결", "creator-instagram-connect") + button("Instagram 수신 확인", "instagram-sync") + (instagramInboxCursor&&instagramInboxOwner===me?button("Instagram 대화 더 보기", "instagram-sync-next"):"") + (instagramInboxOffset>0?button("Instagram 최근 기록", "instagram-page", "previous"):"") + (instagramInboxHasMore?button("Instagram 이전 기록", "instagram-page", "next"):""),
     ) +
+    '<section class="panel"><h2>수동 확인 메모</h2><p>최신 상태 미확인 · 직접 확인한 과거 내용과 미발송 참고 초안을 별도로 읽습니다.</p><a href="#manual-notes">수동 확인 메모 열기 →</a></section>' +
     '<details class="panel"><summary>태그바이 발송 근거 관리</summary><p class="fine">원본 대조 기록만 저장합니다. 메시지는 보내지 않습니다.</p>'+button('근거 가져오기','tagby-proof-open')+button('저장된 근거·철회','instagram-evidence-open')+'</details>' +
     (instagramNotice?'<p class="notice">'+esc(instagramNotice)+'</p>':'') +
     '<p id="instagram-sync-status" role="status" class="fine">'+esc(instagramSyncStatus?.owner===account?instagramSyncStatus.text:'Instagram 수신 상태는 직접 확인해 주세요.')+'</p>' +
@@ -1408,6 +1424,7 @@ const pages = {
   matching: matchingPage,
   templates: templatesPage,
   inbox: inboxPage,
+  "manual-notes": manualNotesPage,
   settings: settingsPage,
 };
 const formObject = (form) => Object.fromEntries(new FormData(form));
@@ -1465,6 +1482,7 @@ async function instagramEvidenceRevoke(index){
 }
 
 document.addEventListener("submit", async (e) => {
+  if(e.target.matches?.("[data-note-form]")){e.preventDefault();return;}
   if(e.target.id==="manual-inbox-draft"){e.preventDefault();const button=e.target.querySelector("button[type=submit]");if(button.disabled)return;button.disabled=true;try{await manualSave(e.target);}catch(error){err(error);}finally{button.disabled=false;}return;}
   if(e.target.id==='instagram-prototype-creator'||e.target.id==='instagram-prototype-draft'){e.preventDefault();try{if(e.target.id==='instagram-prototype-creator')prototypeReview(e.target);else prototypeDraft(e.target);}catch(error){err(error);}return;}
   if(e.target.id==='dot-snapshot-form'){e.preventDefault();const form=e.target,account=me;try{const raw=JSON.parse(form.elements.snapshot.value),r=await api('/dot-snapshot/preview','POST',raw);if(me!==account||!form.isConnected||!$('#modal').open)return;const el=$('#dot-snapshot-preview');el.replaceChildren();const pre=document.createElement('pre');pre.textContent=JSON.stringify(r.snapshot,null,2);el.append(pre);const save=document.createElement('button');save.type='button';save.textContent='확인한 원장 저장';const original=JSON.stringify(r.snapshot);save.onclick=async()=>{try{if(me!==account||!form.isConnected||!$('#modal').open)throw Error('다시 로그인하고 미리보기를 확인하세요.');if(JSON.stringify(JSON.parse(form.elements.snapshot.value))!==original)throw Error('내용이 변경되어 다시 미리보기해야 합니다.');save.disabled=true;const result=await api('/dot-snapshot/commit','POST',{snapshot:r.snapshot,previewHash:r.previewHash});el.textContent=result.duplicate?'이미 저장된 원장입니다.':'원장 저장 완료';await loadDotSnapshot();}catch(error){save.disabled=false;err(error);}};el.append(save);}catch(error){err(error);}return;}
@@ -1750,6 +1768,8 @@ const actions = {
   "discovery-filter": async () => { discoveryOnlyEmails = !discoveryOnlyEmails; await discoveryPage(); },
 
   async logout() {
+    if(manualNotesView&&!manualNotesView.canClose())return;
+    manualNotesDispose();
     if(!allowInboxChange())return;
     if($('#manual-inbox-root')&&!manualCanChange())return;
     if(transientInboxView&&!transientInboxView.canClose())return;
@@ -1998,9 +2018,11 @@ window.addEventListener('pagehide',()=>{transientDispose();if($('#manual-inbox-r
 $('#modal').addEventListener('close',()=>{if(!$('#modal').open){transientDispose();if($('#manual-inbox-root'))manualDispose();}});
 document.addEventListener('cancel',e=>{if(e.target?.id==='modal'&&transientInboxView){if(!transientInboxView.canClose())e.preventDefault();else transientDispose();}},true);
 window.addEventListener("hashchange", () => {
+  if(manualNotesView&&location.hash!=="#manual-notes"){if(!manualNotesView.canClose()){history.replaceState(null,"","#manual-notes");return;}manualNotesDispose();}
   if(transientInboxView){if(!transientInboxView.canClose()){history.replaceState(null,"","#inbox");return;}transientDispose();if($("#modal").open)$("#modal").close();}
   if($('#manual-inbox-root')&&$('#modal')?.open&&location.hash!=='#inbox'){if(!manualCanChange()){history.replaceState(null,'','#inbox');return;}manualDispose();$('#modal').close();}
   if(inboxEdited&&location.hash!=='#inbox'&&!allowInboxChange()){history.replaceState(null,'','#inbox');return;}
   inboxEdited=false;inboxDirtyForms.clear();render();
 });
+window.addEventListener("beforeunload",e=>{if(manualNotesView?.hasWork()){e.preventDefault();e.returnValue="";}});
 boot();

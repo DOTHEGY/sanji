@@ -7,10 +7,11 @@ source = source.replace("const MANUAL_INBOX_AVAILABLE = false;", "const MANUAL_I
 const start = source.indexOf("async function api("),
   end = source.indexOf("\nfunction field(", start);
 source =
-  'import {workspaceApi,integrationStatus,manualWorkspaceApi,transientInboxApi,client as manualClient,client as transientClient} from "./supabase-api.js";\nimport "../private/ui/instagram-transient-inbox-ui.js";\nimport "../private/ui/instagram-transient-products.js";\nimport "../private/ui/instagram-manual-product-binding.js";\nimport "../private/ui/instagram-reply-policy.js";\n' +
+  'import {workspaceApi,integrationStatus,manualNotesApi,manualWorkspaceApi,transientInboxApi,client as manualClient,client as transientClient} from "./supabase-api.js";\nimport "../private/ui/instagram-transient-inbox-ui.js";\nimport "../private/ui/instagram-transient-products.js";\nimport "../private/ui/instagram-manual-product-binding.js";\nimport "../private/ui/instagram-reply-policy.js";\nimport "../private/ui/creator-manual-notes.js";\n' +
   source.slice(0, start) +
   'async function api(path,method="GET",body,owner,stillActive){if(path.startsWith("/creator-instagram/manual-")){if(method!=="POST")throw Error("지원하지 않는 요청입니다.");return manualWorkspaceApi(path,body,owner,stillActive)}return workspaceApi(path,method,body)}\n' +
   source.slice(end);
+source = source.replace("const MANUAL_NOTES_AVAILABLE = false;", "const MANUAL_NOTES_AVAILABLE = true;");
 source = source.replace("const TRANSIENT_INBOX_AVAILABLE = false;", "const TRANSIENT_INBOX_AVAILABLE = true;");
 source = source.replace(
   "if (e.status !== 401) {",

@@ -9,6 +9,7 @@ import {
   instagramInboxFunctionUrl,
   instagramManualInboxFunctionUrl,
   dotSnapshotFunctionUrl,
+  creatorManualNotesFunctionUrl,
 } from "./supabase-config.js";
 export const client = createClient(supabaseUrl, supabaseKey, {
   auth: {
@@ -73,7 +74,7 @@ async function edge(path, method, body, expectedOwner, stillActive) {
     if (session.user.id !== expectedOwner || current?.user?.id !== expectedOwner || typeof stillActive !== "function" || !stillActive()) { const e = error("계정이 변경됐습니다. 다시 확인하세요.", 403); e.code = "MANUAL_OWNER_CHANGED"; throw e; }
     if (latest?.error || typeof session.access_token !== "string" || !session.access_token || current?.access_token !== session.access_token) { const e = error("로그인 상태가 갱신되어 요청하지 않았습니다. 입력을 보존하고 다시 확인하세요.", 409); e.code = "MANUAL_SESSION_REFRESHED"; throw e; }
   }
-  const functionUrl = functionUrlForPath(path, { edgeFunctionUrl, instagramInboxFunctionUrl, instagramManualInboxFunctionUrl, dotSnapshotFunctionUrl });
+  const functionUrl = functionUrlForPath(path, { edgeFunctionUrl, instagramInboxFunctionUrl, instagramManualInboxFunctionUrl, dotSnapshotFunctionUrl, creatorManualNotesFunctionUrl });
   let response;
   try {
     response = await fetch(functionUrl + path, {
@@ -120,6 +121,14 @@ const MANUAL_OWNER_PATHS = new Set(["/creator-instagram/manual-inbox", "/creator
 export async function manualWorkspaceApi(path, body, expectedOwner, stillActive) {
   if (!MANUAL_OWNER_PATHS.has(path) || typeof expectedOwner !== "string" || !expectedOwner) throw error("계정과 대상을 확인하세요.", 403);
   return edge(path, "POST", body, expectedOwner, stillActive);
+}
+const MANUAL_NOTES_PATHS = new Set(["/creator-manual-notes/list", "/creator-manual-notes/save", "/creator-manual-notes/targets"]);
+export async function manualNotesApi(path, body, expectedOwner, stillActive) {
+  if (!MANUAL_NOTES_PATHS.has(path) || typeof expectedOwner !== "string" || !expectedOwner || typeof stillActive !== "function") throw error("계정과 대상을 확인하세요.", 403);
+  const value = await edge(path, "POST", body, expectedOwner, stillActive);
+  const latest = await client.auth.getSession();
+  if (latest.error || latest.data?.session?.user?.id !== expectedOwner || !stillActive()) throw error("계정 또는 화면이 변경됐습니다.", 403);
+  return value;
 }
 export async function transientInboxApi(body, expectedOwner) {
   if (typeof expectedOwner !== "string" || !expectedOwner) throw error("계정을 확인하세요.", 403);

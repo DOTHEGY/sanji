@@ -1,7 +1,7 @@
 name: Verify production workspace
 on:
   push:
-    branches: [main, dot/persistent-inbox-20261104]
+    branches: [main, dot/persistent-inbox-20261104, dot/manual-notes-20261104]
   pull_request:
 permissions:
   contents: read

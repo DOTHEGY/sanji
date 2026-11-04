@@ -924,3 +924,11 @@ nav {
 
 /* Separate manual Instagram inbox. */
 .manual-inbox-layout{display:grid;grid-template-columns:minmax(150px,220px) minmax(0,1fr);gap:16px}.manual-inbox-list,.manual-inbox-detail{min-width:0;overflow-wrap:anywhere}.manual-inbox-list{display:flex;flex-direction:column;gap:6px;max-height:60vh;overflow:auto}.manual-inbox-list button{text-align:left}.manual-inbox-detail textarea{width:100%;max-width:100%}@media(max-width:700px){.manual-inbox-layout{grid-template-columns:minmax(0,1fr)}.manual-inbox-list{max-height:180px}}
+
+/* Historical notes remain visually distinct from provider threads. */
+.manual-notes { max-width: 960px; margin-inline: auto; }
+.manual-notes fieldset { display: grid; gap: 12px; border: 0; padding: 0; min-width: 0; }
+.manual-notes textarea { min-height: 110px; }
+.manual-note-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.manual-note-records { display: grid; gap: 16px; margin-top: 20px; }
+.manual-notes input, .manual-notes textarea { max-width: 100%; }
