@@ -10,3 +10,6 @@ export const edgeFunctionUrl =
 export const instagramInboxFunctionUrl = supabaseUrl + "/functions/v1/instagram-inbox";
 // Independent authenticated collection snapshot API; no existing function replacement.
 export const dotSnapshotFunctionUrl = supabaseUrl + "/functions/v1/dot-snapshot-direct";
+
+// Isolated read-and-draft-only inbox, separate from existing functions.
+export const instagramManualInboxFunctionUrl = supabaseUrl + "/functions/v1/instagram-manual-inbox";

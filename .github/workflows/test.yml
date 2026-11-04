@@ -1,7 +1,7 @@
 name: Verify production workspace
 on:
   push:
-    branches: [main]
+    branches: [main, dot/persistent-inbox-20261104]
   pull_request:
 permissions:
   contents: read
@@ -21,4 +21,5 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: |
           export CHROMIUM_PATH="$(node -e 'process.stdout.write(require("@playwright/test").chromium.executablePath())')"
+          export SANJI_BROWSER_TEST=1
           npm test

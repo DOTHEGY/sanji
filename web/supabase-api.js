@@ -1,3 +1,4 @@
+import { functionUrlForPath } from "./edge-routing.mjs";
 import { loadStableStateRecords } from "./state-records.mjs";
 import { probeEdge, classifyEdgeResponse } from "./edge-diagnostics.js";
 import { createClient } from "@supabase/supabase-js";
@@ -6,6 +7,7 @@ import {
   supabaseKey,
   edgeFunctionUrl,
   instagramInboxFunctionUrl,
+  instagramManualInboxFunctionUrl,
   dotSnapshotFunctionUrl,
 } from "./supabase-config.js";
 export const client = createClient(supabaseUrl, supabaseKey, {
@@ -62,14 +64,20 @@ async function member() {
     );
   return session;
 }
-async function edge(path, method, body, expectedOwner) {
+async function edge(path, method, body, expectedOwner, stillActive) {
   const session = await member();
-  if (expectedOwner !== undefined && session.user.id !== expectedOwner) { const e=error("계정이 변경됐습니다. 다시 확인하세요.",403); e.code="TRANSIENT_OWNER_CHANGED"; throw e; }
-  const functionUrl = path.startsWith("/creator-instagram/") ? instagramInboxFunctionUrl : path === "/dot-snapshot" || path.startsWith("/dot-snapshot/") ? dotSnapshotFunctionUrl : edgeFunctionUrl;
+  if (expectedOwner !== undefined && path === "/creator-instagram/transient-inbox" && session.user.id !== expectedOwner) { const e=error("계정이 변경됐습니다. 다시 확인하세요.",403); e.code="TRANSIENT_OWNER_CHANGED"; throw e; }
+  if (expectedOwner !== undefined && path !== "/creator-instagram/transient-inbox") {
+    const latest = await client.auth.getSession();
+    const current = latest?.data?.session;
+    if (session.user.id !== expectedOwner || current?.user?.id !== expectedOwner || typeof stillActive !== "function" || !stillActive()) { const e = error("계정이 변경됐습니다. 다시 확인하세요.", 403); e.code = "MANUAL_OWNER_CHANGED"; throw e; }
+    if (latest?.error || typeof session.access_token !== "string" || !session.access_token || current?.access_token !== session.access_token) { const e = error("로그인 상태가 갱신되어 요청하지 않았습니다. 입력을 보존하고 다시 확인하세요.", 409); e.code = "MANUAL_SESSION_REFRESHED"; throw e; }
+  }
+  const functionUrl = functionUrlForPath(path, { edgeFunctionUrl, instagramInboxFunctionUrl, instagramManualInboxFunctionUrl, dotSnapshotFunctionUrl });
   let response;
   try {
     response = await fetch(functionUrl + path, {
-      ...(path === "/creator-instagram/transient-inbox" ? { cache: "no-store" } : {}),
+      ...(expectedOwner !== undefined ? { cache: "no-store" } : {}),
       method,
       headers: {
         apikey: supabaseKey,
@@ -103,9 +111,15 @@ async function edge(path, method, body, expectedOwner) {
       response.status,
     );
     e.searchUrl = data.searchUrl;
+    if (response.status === 429 && path === "/creator-instagram/manual-sync" && data.retryCursor === null && typeof data.restartRequired === "boolean") { e.retryCursor=null; e.restartRequired=data.restartRequired; if(Number.isSafeInteger(data.retryAfterSeconds)&&data.retryAfterSeconds>=0&&data.retryAfterSeconds<=86400)e.retryAfterSeconds=data.retryAfterSeconds; }
     throw e;
   }
   return data;
+}
+const MANUAL_OWNER_PATHS = new Set(["/creator-instagram/manual-inbox", "/creator-instagram/manual-thread", "/creator-instagram/manual-sync", "/creator-instagram/manual-draft", "/creator-instagram/manual-reviewed-draft", "/creator-instagram/manual-review-audit", "/creator-instagram/manual-reverify"]);
+export async function manualWorkspaceApi(path, body, expectedOwner, stillActive) {
+  if (!MANUAL_OWNER_PATHS.has(path) || typeof expectedOwner !== "string" || !expectedOwner) throw error("계정과 대상을 확인하세요.", 403);
+  return edge(path, "POST", body, expectedOwner, stillActive);
 }
 export async function transientInboxApi(body, expectedOwner) {
   if (typeof expectedOwner !== "string" || !expectedOwner) throw error("계정을 확인하세요.", 403);

@@ -4,3 +4,8 @@ entrypoint = "./functions/workspace/index.ts"
 # Publishable keys are not JWTs. The function validates bearer user tokens with Auth,
 # enforces membership itself, and verifies provider callbacks/webhook signatures.
 verify_jwt = false
+
+[functions.instagram-manual-inbox]
+entrypoint = "./functions/instagram-manual-inbox/index.ts"
+# User-session-only API; the handler also verifies membership and owner scope.
+verify_jwt = true

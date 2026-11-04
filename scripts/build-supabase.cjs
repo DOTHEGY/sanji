@@ -2,12 +2,14 @@ const fs = require("node:fs"),
   esbuild = require("esbuild");
 fs.mkdirSync("public/workspace", { recursive: true });
 let source = fs.readFileSync("private/ui/app.js", "utf8");
+if (!source.includes("const MANUAL_INBOX_AVAILABLE = false;")) throw new Error("Manual inbox capability marker missing");
+source = source.replace("const MANUAL_INBOX_AVAILABLE = false;", "const MANUAL_INBOX_AVAILABLE = true;");
 const start = source.indexOf("async function api("),
   end = source.indexOf("\nfunction field(", start);
 source =
-  'import {workspaceApi,integrationStatus,transientInboxApi,client as transientClient} from "./supabase-api.js";\nimport "../private/ui/instagram-transient-inbox-ui.js";\n' +
+  'import {workspaceApi,integrationStatus,manualWorkspaceApi,transientInboxApi,client as manualClient,client as transientClient} from "./supabase-api.js";\nimport "../private/ui/instagram-transient-inbox-ui.js";\nimport "../private/ui/instagram-transient-products.js";\nimport "../private/ui/instagram-manual-product-binding.js";\nimport "../private/ui/instagram-reply-policy.js";\n' +
   source.slice(0, start) +
-  'async function api(path,method="GET",body){return workspaceApi(path,method,body)}\n' +
+  'async function api(path,method="GET",body,owner,stillActive){if(path.startsWith("/creator-instagram/manual-")){if(method!=="POST")throw Error("지원하지 않는 요청입니다.");return manualWorkspaceApi(path,body,owner,stillActive)}return workspaceApi(path,method,body)}\n' +
   source.slice(end);
 source = source.replace("const TRANSIENT_INBOX_AVAILABLE = false;", "const TRANSIENT_INBOX_AVAILABLE = true;");
 source = source.replace(
