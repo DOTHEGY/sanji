@@ -273,17 +273,19 @@ export async function workspaceApi(path, method = "GET", body) {
     )
       throw error("예약 목록 조회에 실패했습니다.");
     const scheduleStatus=await edge("/schedule-status","GET");
-    const records = rows.map((r) => ({ ...unpack(r), _kind: r.kind }));
+    // Route by the database envelope, never by an injected or persisted data key.
+    const recordsOfKind = (kind) => rows.filter((r) => r.kind === kind).map(unpack);
+    const deals = recordsOfKind("deal");
     return {
-      candidates: records.filter((r) => r._kind === "candidate"),
-      deals: records.filter((r) => r._kind === "deal"),
-      catalog: {complete:true,expectedCount:records.filter((r) => r._kind === "deal").length,observedAt:new Date().toISOString(),source:"owner-scoped stable state scan",scope:"owner_saved_deals",ownerId},
-      templates: records.filter((r) => r._kind === "template"),
-      threads: records.filter((r) => r._kind === "thread"),
+      candidates: recordsOfKind("candidate"),
+      deals: deals,
+      catalog: {complete:true,expectedCount:deals.length,observedAt:new Date().toISOString(),source:"owner-scoped stable state scan",scope:"owner_saved_deals",ownerId},
+      templates: recordsOfKind("template"),
+      threads: recordsOfKind("thread"),
       outbox,
       jobs: scheduleStatus.jobs || jobsResult.data || [],
       suppression,
-      settings: records.find((r) => r._kind === "settings") || {
+      settings: recordsOfKind("settings")[0] || {
         senderName: "",
         senderAddress: "",
         senderPhone: "",
