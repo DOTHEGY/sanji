@@ -192,6 +192,7 @@ async function authPage() {
     `<div class="panel auth"><div class="eyebrow">PRIVATE WORKSPACE</div><h1>${status.setupRequired ? "관리자 계정 만들기" : "다시 만나 반갑습니다"}</h1><p class="login-note">실제 회사·크리에이터·대화 자료는 로그인 후에만 조회됩니다. 가상 데이터는 포함하지 않습니다.</p><form id="auth-form" data-type="${status.setupRequired ? "setup" : "login"}">${status.setupRequired ? field("token", "서버 초기 설정 토큰|서버 환경 변수 SANJI_SETUP_TOKEN 값입니다. 메일·Instagram 비밀번호가 아닙니다.", "", "password") : ""}${field("email", "관리자 이메일", "", "email")}${field("password", "서비스 로그인 비밀번호|초기 생성 시 12자 이상. 외부 이메일 계정 비밀번호를 입력하지 마세요.", "", "password")}<button class="primary" type="submit">${status.setupRequired ? "관리자 계정 생성" : "로그인"}</button><div id="auth-error" class="login-note"></div></form></div>`;
 }
 function render() {
+  if(location.hash!=='#settings')catalogSheetSettingsDispose();
   if(manualNotesView){if(location.hash==="#manual-notes")return;if(!manualNotesView.canClose()){history.replaceState(null,"","#manual-notes");return;}manualNotesDispose();}
   inboxRequestGeneration++;
   if (!me) return;
@@ -500,6 +501,28 @@ function dealsPage() {
     }).join("") || '<div class="panel empty">실제 협의한 상품을 추가하세요. 미협의 가격은 빈칸으로 남깁니다.</div>'}</div>`;
 }
 
+// Retain the exact opened record, not the lossy values rendered by form controls.
+const dealEditorSnapshots = new WeakMap();
+function dealEditorOptions(value, options) {
+  return value != null && !options.includes(value) ? [value, ...options] : options;
+}
+function preserveUneditedDealFields(old, initial, current, next) {
+  const feeKeys = {ownership:'ownership', feeBasis:'basis', creatorPercent:'creatorPercent', companyPercent:'companyPercent', companyUnit:'companyUnit'};
+  const restore = (target, source, key) => {
+    if (Object.prototype.hasOwnProperty.call(source, key)) target[key] = source[key];
+    else delete target[key];
+  };
+  for (const key of Object.keys(initial)) {
+    if (Object.hasOwn(feeKeys, key) || current[key] !== initial[key]) continue;
+    restore(next, old, key);
+  }
+  const feeChanged = Object.keys(feeKeys).some(key => current[key] !== initial[key]);
+  if (!feeChanged) restore(next, old, 'feeTerms');
+  else for (const [input, key] of Object.entries(feeKeys)) {
+    if (current[input] === initial[input]) restore(next.feeTerms, old.feeTerms || {}, key);
+  }
+  return next;
+}
 function dealForm(id = "") {
   const d = deal(id) || {
     state: "협의 중",
@@ -516,7 +539,7 @@ function dealForm(id = "") {
       )
       .join(
         "",
-      )}</select></label>${field("category", "법적 분류", d.category, "text", ["미확인", "건강기능식품", "일반 건강식품"])}${field("state", "협의 상태", d.state, "text", ["협의 중", "확정"])}${field("productName", "상품 묶음 이름", d.productName||"")}${feeSelect("ownership", "브랜드 구분", d.feeTerms?.ownership||"unknown", [["unknown","미확인"],["owned","자사"],["external","외부"]])}${feeSelect("feeBasis", "수수료 기준", d.feeTerms?.basis||"unknown", [["unknown","미확인"],["creator_only","크리에이터 배분율"],["vendor_total","공급사 전체 수수료"]])}${field("creatorPercent", "크리에이터 배분율 (%) · 미확인 시 빈칸", d.feeTerms?.creatorPercent??"", "number")}${field("companyPercent", "회사 배분율 · 미확인 시 빈칸", d.feeTerms?.companyPercent??"", "number")}${feeSelect("companyUnit", "회사 배분율 기준", d.feeTerms?.companyUnit||"unknown", [["unknown","미확인"],["sale_percent","판매가 기준"],["vendor_fee_percent","공급사 수수료 기준"]])}${field("productUrl", "공식 제품 링크", d.productUrl, "url")}${field("image", "사용 허가된 이미지 URL", d.image, "url")}${[
+      )}</select></label>${field("category", "법적 분류", d.category, "text", dealEditorOptions(d.category, ["미확인", "건강기능식품", "일반 건강식품"]))}${field("state", "협의 상태", d.state, "text", dealEditorOptions(d.state, ["협의 중", "확정"]))}${field("productName", "상품 묶음 이름", d.productName||"")}${feeSelect("ownership", "브랜드 구분", d.feeTerms?.ownership||"unknown", [["unknown","미확인"],["owned","자사"],["external","외부"]])}${feeSelect("feeBasis", "수수료 기준", d.feeTerms?.basis||"unknown", [["unknown","미확인"],["creator_only","크리에이터 배분율"],["vendor_total","공급사 전체 수수료"]])}${field("creatorPercent", "크리에이터 배분율 (%) · 미확인 시 빈칸", d.feeTerms?.creatorPercent??"", "number")}${field("companyPercent", "회사 배분율 · 미확인 시 빈칸", d.feeTerms?.companyPercent??"", "number")}${feeSelect("companyUnit", "회사 배분율 기준", d.feeTerms?.companyUnit||"unknown", [["unknown","미확인"],["sale_percent","판매가 기준"],["vendor_fee_percent","공급사 수수료 기준"]])}${field("productUrl", "공식 제품 링크", d.productUrl, "url")}${field("image", "사용 허가된 이미지 URL", d.image, "url")}${[
       ["retail", "정상 판매가"],
       ["price", "공동구매가"],
       ["supply", "공급가"],
@@ -540,6 +563,11 @@ function dealForm(id = "") {
         "",
       )}${field("topics", "매칭 주제 (쉼표 구분)", d.topics.join(", "))}${field("source", "조건 출처 URL (이메일이면 메모에 기록)", d.source, "url")}${field("sourceNote", "조건 출처·담당자·협의 메모", d.sourceNote, "textarea")}${field("checked", "확인일", d.checked, "date")}<div class="full"><button class="primary" type="submit">${id ? "새 조건 버전 저장" : "딜 저장"}</button></div></form><h3>이전 버전</h3>${d.history.map((v) => `<div class="notice">v${v.version} · ${money(v.price)} · ${esc(v.state)} · ${esc(v.schedule)}<br>${esc(v.sourceNote)} / ${esc(v.checked)}</div>`).join("") || '<p class="fine">이전 버전 없음</p>'}`,
   );
+  const editor = $("#deal-form");
+  if (editor && editor.dataset.id === id) dealEditorSnapshots.set(editor, {
+    record: id ? structuredClone(d) : null,
+    initial: formObject(editor),
+  });
 }
 async function matchingPage() {
   $("#app").innerHTML =
@@ -655,7 +683,26 @@ function prototypeDealTopics(d){const set=new Set((Array.isArray(d?.topics)?d.to
 function prototypeCatalog(deals,creator){const topics=new Set((Array.isArray(creator?.topics)?creator.topics:[]).filter(x=>typeof x==='string').map(x=>x.trim().toLocaleLowerCase()).filter(x=>x.length>=2&&x.length<=60&&!prototypeSensitiveTopic(x))),groups=new Map(),urls=new Map();for(const d of Array.isArray(deals)?deals:[]){if(!d||typeof d.id!=='string'||!d.id||typeof d.name!=='string'||!d.name.trim())continue;const product=String(d.productName||d.name).trim();if(!product)continue;const brand=String(d.brand||'').trim().toLocaleLowerCase(),nameKey=JSON.stringify([brand,product.trim().toLocaleLowerCase()]),url=prototypeProductUrlKey(d.productUrl),urlKey=url?JSON.stringify([brand,url]):'',key=(urlKey&&urls.get(urlKey))||nameKey,common=[...new Set(prototypeDealTopics(d).filter(x=>topics.has(x.toLocaleLowerCase())))],item={id:d.id,name:d.name,product,brand:String(d.brand||''),category:typeof d.category==='string'&&d.category?d.category:'미확인',state:['협의 중','확정'].includes(d.state)?d.state:'미확인',retail:typeof d.retail==='number'&&Number.isFinite(d.retail)&&d.retail>=0?String(d.retail)+'원':'미확인',price:prototypePrice(d),stock:prototypeDealStock(d),options:[...(d.productName&&d.name!==d.productName?[d.name]:[]),...(Array.isArray(d.options)?d.options:[]).map(x=>typeof x?.name==='string'?x.name:'')].filter(Boolean).join(' / ')||'옵션 확인 필요',link:prototypeSafeLink(d.productUrl),reason:common.length?'저장 주제 또는 상품명·분류 일치: '+common.join(', '):'주제 일치 근거 없음 · 직접 검토',score:common.length};if(!groups.has(key))groups.set(key,{id:d.id,product,items:[],score:0});if(urlKey)urls.set(urlKey,key);const g=groups.get(key);g.items.push(item);g.score=Math.max(g.score,item.score);}return [...groups.values()].map(g=>{const available=g.items.filter(x=>!x.stock.startsWith('품절'));return {...g,available:available.length>0,score:Math.max(0,...available.map(x=>x.score))}}).sort((a,b)=>b.score-a.score||a.product.localeCompare(b.product,'ko'));}
 function prototypeCsv(groups){const header=['상품명','분류','추천 근거','공개 소비자가','확정 공구가 또는 협의 상태','재고 상태','옵션 상태','등록 제품 링크'];const lines=[header,...groups.flatMap(g=>g.items.map(x=>[x.product,x.category,x.reason,x.retail,x.state+' · '+x.price,x.stock,x.options,x.link]))];return '\ufeff'+lines.map(row=>row.map(prototypeCsvCell).join(',')).join('\r\n');}
 function prototypeCurrentThread(){const c=instagramProposalContext;if(!c||c.owner!==me||location.hash!=='#inbox')return false;if(c.resultNode&&($('#instagram-prototype-result')!==c.resultNode||!$('#modal')?.open))return false;if(c.mode==='historical')return c.ownerId===me?.id&&typeof c.isCurrent==='function'&&c.isCurrent()===true;if(c.sourceThreadSignature&&prototypeThreadSourceSignature(creatorInboxThreads.find(t=>t.id===c.threadId))!==c.sourceThreadSignature)return false;return c.threadId===selectedThread&&!!creatorInboxThreads.find(t=>t.id===selectedThread&&t.instagramOfficial&&(t.messages||[]).some(inboundHumanReply));}
-function prototypeValidContext(){if(!prototypeCurrentThread()||!instagramProposalContext.creator)return false;if(instagramProposalContext.mode==='historical')return instagramProposalContext.creator.id===instagramProposalContext.note.creatorId&&instagramProposalContext.creator.handle===instagramProposalContext.note.handle;if(instagramProposalContext.verifiedPeer){const t=creatorInboxThreads.find(x=>x.id===selectedThread);return typeof t?.peerProfile?.username==='string'&&t.peerProfile.username.toLowerCase()===instagramProposalContext.verifiedPeer&&String(instagramProposalContext.creator.handle||'').toLowerCase()===instagramProposalContext.verifiedPeer;}const form=$('#instagram-prototype-creator');if(!form)return false;const fields=new FormData(form);return fields.has('verified')&&fields.get('creator')===instagramProposalContext.creator.id;}
+function prototypeSheetSignature(sheet){return JSON.stringify(sheet?[sheet.ownerId,sheet.url,sheet.access,sheet.verifiedAt,sheet.provenance,sheet.publicFieldsOnly,sheet.verificationMethod,sheet.revoked===true]:null);}
+function prototypeSheetCurrent(c){
+ if(!c?.catalog)return true;
+ const owner=c.ownerId||c.owner?.id,current=data.settings?.productCatalogSheet?.ownerId===owner?data.settings.productCatalogSheet:null;
+ if(prototypeSheetSignature(c.catalog.sharedSheet||null)!==prototypeSheetSignature(current))return false;
+ return !c.catalogSheetUrlAtOpen||prototypeAutomaticEngine()?.sharedCatalogLink?.(c.catalog)===c.catalogSheetUrlAtOpen;
+}
+async function prototypeRecheckSheet(c){
+ if(!c?.catalogSheetUrlAtOpen)return true;
+ if(typeof catalogSheetSettingsApi!=='function'||c.sheetRecheckInFlight)return false;
+ const before={id:data.settings?.id,version:data.settings?.version,signature:prototypeSheetSignature(data.settings?.productCatalogSheet)},generation=(c.sheetRecheckGeneration||0)+1;
+ if(typeof before.id!=='string'||!Number.isSafeInteger(before.version)||before.version<1)return false;
+ c.sheetRecheckGeneration=generation;c.sheetRecheckInFlight=true;
+ try{const current=await catalogSheetSettingsApi('read',null,c.ownerId||c.owner?.id,()=>instagramProposalContext===c&&prototypeCurrentThread());
+  if(instagramProposalContext!==c||!prototypeCurrentThread()||c.sheetRecheckGeneration!==generation||data.settings?.id!==before.id||data.settings?.version!==before.version||prototypeSheetSignature(data.settings?.productCatalogSheet)!==before.signature)return false;
+  if(current?.id!==before.id||!Number.isSafeInteger(current.version)||current.version<before.version)return false;
+  data.settings=current;return prototypeSheetCurrent(c);
+ }catch{return false;}finally{if(c.sheetRecheckGeneration===generation)c.sheetRecheckInFlight=false;}
+}
+function prototypeValidContext(){if(!prototypeCurrentThread()||!instagramProposalContext.creator||!prototypeSheetCurrent(instagramProposalContext))return false;if(instagramProposalContext.mode==='historical')return instagramProposalContext.creator.id===instagramProposalContext.note.creatorId&&instagramProposalContext.creator.handle===instagramProposalContext.note.handle;if(instagramProposalContext.verifiedPeer){const t=creatorInboxThreads.find(x=>x.id===selectedThread);return typeof t?.peerProfile?.username==='string'&&t.peerProfile.username.toLowerCase()===instagramProposalContext.verifiedPeer&&String(instagramProposalContext.creator.handle||'').toLowerCase()===instagramProposalContext.verifiedPeer;}const form=$('#instagram-prototype-creator');if(!form)return false;const fields=new FormData(form);return fields.has('verified')&&fields.get('creator')===instagramProposalContext.creator.id;}
 function prototypeCurrentDraft(){if(!prototypeValidContext()||!instagramProposalContext.draftSelection)return false;const form=$('#instagram-prototype-draft');if(!form)return false;if(instagramProposalContext.reviewMode){try{return prototypeReviewSelection(form).signature===instagramProposalContext.draftSelection;}catch{return false;}}if(instagramProposalContext.reviewRequired){try{prototypeReviewSelection(form);}catch{return false;}}return JSON.stringify(new FormData(form).getAll('product').map(String).sort())===instagramProposalContext.draftSelection;}
 // Review is local to this dialog. Free-text intent is displayed, never classified as consent.
 function prototypeRecordedHold(...records){for(const r of records){if(!r)continue;if(['거절','수신 거부'].includes(r.status)||['거절','수신 거부'].includes(r.classification)||['상대방 거절','우리 측 거절','회신 중단','종료'].includes(r.conversationStatus))return '저장된 거절·중단 상태가 있어 상품 제안을 준비하지 않습니다.';}return '';}
@@ -692,7 +739,7 @@ function prototypeOpenHistoricalNote(note,{isCurrent,owner}={}){
 function prototypeCanCloseHistorical(){return !instagramProposalContext||!prototypeDraftDirty||window.confirm('작성 중인 검토 초안을 닫을까요? 저장되지 않습니다.');}
 function prototypeDisposeHistorical(){if(!instagramProposalContext)return;const node=instagramProposalContext.resultNode;instagramProposalContext=null;prototypeDraftDirty=false;if(node&&$('#instagram-prototype-result')===node){node.textContent='';if($('#modal')?.open)$('#modal').close();}}
 function prototypeApplyManualReview(form){const r=prototypeReviewSelection(form);instagramProposalContext.draftSelection=r.signature;$('#instagram-prototype-draft-output').innerHTML='<p>직접 검수한 선택 상품 '+r.groups.length+'개 · 초안은 자동으로 바꾸지 않았습니다.</p>'+(r.groups.length?'<ul>'+r.groups.map(g=>'<li>'+esc(g.product)+'</li>').join('')+'</ul>':'<p>상품 제안 없이 기존 대화·초안만 검토합니다.</p>');}
-async function prototypeCopy(){if(!prototypeCurrentDraft())return toast('현재 원문·의도·제외 항목과 상품 선택을 검수한 뒤 다시 확인하세요.');const marker=instagramProposalContext,text=$('#instagram-prototype-text')?.value;if(!text?.trim())return toast('복사할 초안이 없습니다.');await navigator.clipboard.writeText(text);if(instagramProposalContext===marker&&prototypeCurrentDraft())toast('초안 사본을 복사했습니다. 실제 전송이나 기록 변경은 하지 않았습니다.');}
+async function prototypeCopy(){if(!prototypeCurrentDraft())return toast('현재 원문·의도·제외 항목과 상품 선택을 검수한 뒤 다시 확인하세요.');const marker=instagramProposalContext,text=$('#instagram-prototype-text')?.value;if(!text?.trim())return toast('복사할 초안이 없습니다.');if(!await prototypeRecheckSheet(marker)||instagramProposalContext!==marker||!prototypeCurrentDraft()||$('#instagram-prototype-text')?.value!==text)return toast('시트 연결 또는 초안이 변경됐습니다. 다시 열어 검수해 주세요.');await navigator.clipboard.writeText(text);if(instagramProposalContext===marker&&prototypeCurrentDraft())toast('초안 사본을 복사했습니다. 실제 전송이나 기록 변경은 하지 않았습니다.');}
 async function prototypeCopyProducts(){if(!instagramProposalContext?.reviewMode||!prototypeCurrentDraft())return toast('현재 검수 내용과 선택 상품을 다시 확인하세요.');const marker=instagramProposalContext,r=prototypeReviewSelection($('#instagram-prototype-draft'));if(!r.groups.length)return toast('선택한 상품이 없습니다. 개수를 채울 필요는 없습니다.');await navigator.clipboard.writeText(r.groups.map(g=>'- '+g.product).join('\n'));if(instagramProposalContext===marker&&prototypeCurrentDraft())toast('선택 상품명만 복사했습니다. 적합성·가격·조건은 별도 확인하세요.');}
 function prototypeResearch(creator,now=Date.now()){
  const r=creator?.publicResearch,handle=String(creator?.handle||'').toLowerCase(),at=Date.parse(r?.observedAt||'');
@@ -713,6 +760,8 @@ function prototypeCaptureAutomaticCatalog(marker){
  const owner=marker.ownerId||marker.owner?.id,bound=typeof owner==='string'&&!!owner&&data.catalog?.ownerId===owner;
  marker.catalogDeals=bound?JSON.parse(JSON.stringify(Array.isArray(data.deals)?data.deals:[])):[];
  marker.catalog=bound?JSON.parse(JSON.stringify(data.catalog)):{complete:false,expectedCount:null};
+ marker.catalog.sharedSheet=bound&&data.settings?.productCatalogSheet?.ownerId===owner?JSON.parse(JSON.stringify(data.settings.productCatalogSheet)):null;
+ marker.catalogSheetUrlAtOpen=prototypeAutomaticEngine()?.sharedCatalogLink?.(marker.catalog)||'';
  if(!bound)marker.catalogWarning='현재 계정의 상품 목록임을 확인하지 못했습니다. 다른 계정의 상품이 섞이지 않도록 목록을 사용하지 않았습니다. 새로 로그인한 뒤 다시 여세요.';
  if(marker.mode!=='historical'){const thread=creatorInboxThreads.find(t=>t.id===marker.threadId);marker.sourceThread=JSON.parse(JSON.stringify(thread||{}));marker.sourceThreadSignature=prototypeThreadSourceSignature(thread);}
 }
@@ -765,7 +814,7 @@ function prototypeApplyAutomaticReview(form){
  if(changed){
   const engine=prototypeAutomaticEngine();if(typeof engine.buildDraft!=='function')throw Error('선정 상품이 바뀌었습니다. 현재 대화를 다시 열어 초안을 확인하세요.');
   if(editor.value!==c.lastGeneratedDraft&&!window.confirm('직접 수정한 초안을 선택 상품과 검수 의도에 맞춰 새로 만들까요?'))return;
-  editor.value=engine.buildDraft({creator:c.creator,intent,selected:r.groups});c.lastGeneratedDraft=editor.value;c.lastGeneratedIntent=intent.kind;
+  editor.value=engine.buildDraft({creator:c.creator,intent,selected:r.groups,catalog:c.catalog||{}});c.lastGeneratedDraft=editor.value;c.lastGeneratedIntent=intent.kind;
  }
  c.autoDraftIds=ids;c.draftSelection=r.signature;
  $('#instagram-prototype-draft-output').innerHTML='<p>원문·상대 의도·제외 요청 검수 확인 · 내부 검토 후보 '+r.groups.length+'개. 편집한 문구를 읽고 직접 복사해 주세요.</p>'+(intent.kind!=='products'?'<p class="fine">상품 후보와 답장 목적은 별개입니다. 방식·비용 문의에는 해당 문의를 먼저 답하고 상품 제안 동의를 가정하지 않습니다.</p>':'');
@@ -801,7 +850,7 @@ async function prototypeOpen(){
 }
 function prototypeReview(form){if(!prototypeCurrentThread())throw Error('현재 수신 대화를 다시 확인하세요.');if(prototypeDraftDirty&&!window.confirm('작성 중인 초안을 바꾸고 상품을 다시 검토할까요?'))return;prototypeDraftDirty=false;const fields=new FormData(form);if(!fields.has('verified'))throw Error('대화 상대와 크리에이터가 같은지 직접 확인하세요.');const creator=data.candidates.find(c=>c.id===fields.get('creator')&&c.kind==='크리에이터');if(!creator)throw Error('저장된 크리에이터를 선택하세요.');const groups=prototypeCatalog(data.deals,creator),recommended=groups.filter(g=>g.available&&g.score>0).slice(0,3),ids=new Set(recommended.map(g=>g.id));instagramProposalContext.creator=creator;instagramProposalContext.groups=groups;instagramProposalContext.draftSelection=null;const summary=recommended.length?'저장된 주제가 일치하는 추천 '+recommended.length+'개 · 최대 3개':'일치 근거가 없어 추천을 만들지 않았습니다. 아래 검토 후보를 직접 고르세요.';$('#instagram-prototype-result').innerHTML='<p class="notice">'+esc(summary)+' 저장된 일반 콘텐츠 주제만 비교했으며 공개 소개란은 자동 조회하지 않았습니다. 주제 일치는 적합성 보장이 아닙니다. 가격·재고·협업 조건은 확인이 필요합니다.</p><form id="instagram-prototype-draft"><fieldset><legend>메인 상품 선택 · 최대 3개</legend>'+groups.map(g=>{const d=g.items.find(x=>!x.stock.startsWith('품절')&&x.score===g.score)||g.items[0],sold=!g.available;return '<label class="field"><span><input type="checkbox" name="product" value="'+esc(g.id)+'" '+(ids.has(g.id)?'checked ':'')+(sold?'disabled ':'')+'>'+esc(g.product)+'</span><small>'+esc(d.reason)+' · '+esc(g.items.map(x=>x.state+' / '+x.stock).join(' ; '))+'</small></label>'}).join('')+'</fieldset><button type="submit">편집 가능한 초안 만들기</button></form><div id="instagram-prototype-draft-output"></div><details><summary>불러온 상품 목록 미리보기</summary><p>현재 화면에 불러온 저장 상품만 포함하며 일부 상품이 빠질 수 있습니다. 조건은 다시 확인해야 하며 외부 시트는 생성하지 않습니다.</p><div class="table-wrap"><table><thead><tr><th>상품</th><th>분류</th><th>근거</th><th>소비자가</th><th>공구 조건</th><th>재고·옵션</th><th>등록 링크</th></tr></thead><tbody>'+groups.flatMap(g=>g.items.map(x=>'<tr><td>'+esc(x.product)+'</td><td>'+esc(x.category)+'</td><td>'+esc(x.reason)+'</td><td>'+esc(x.retail)+'</td><td>'+esc(x.state+' · '+x.price)+'</td><td>'+esc(x.stock+' · '+x.options)+'</td><td>'+(x.link?'<a href="'+esc(x.link)+'" target="_blank" rel="noopener noreferrer">제품 링크 ↗</a>':'미확인')+'</td></tr>')).join('')+'</tbody></table></div></details><button type="button" data-action="instagram-prototype-csv">불러온 상품 CSV 다운로드</button>';}
 function prototypeDraft(form){if(instagramProposalContext?.autoPlan)return prototypeApplyAutomaticReview(form);if(instagramProposalContext?.reviewMode)return prototypeApplyManualReview(form);if(!prototypeValidContext()||!instagramProposalContext.creator)throw Error('대화와 크리에이터를 다시 확인하세요.');if(prototypeDraftDirty&&!window.confirm('작성 중인 초안을 새로 만들까요?'))return;const ids=new FormData(form).getAll('product');if(!ids.length||ids.length>3||new Set(ids).size!==ids.length)throw Error('품절이 아닌 상품을 1~3개 선택하세요.');const groups=ids.map(id=>instagramProposalContext.groups.find(g=>g.id===id&&g.available));if(groups.some(x=>!x))throw Error('선택한 상품 상태를 다시 확인하세요.');prototypeDraftDirty=false;instagramProposalContext.draftSelection=JSON.stringify(ids.map(String).sort());const name=String(instagramProposalContext.creator.name||'크리에이터').trim(),text='안녕하세요, '+name+'님.\n\n공동구매 협업을 제안드리고 싶어 연락드립니다. 우선 아래 상품을 검토해 주시면 좋겠습니다.\n\n'+groups.map(g=>'- '+g.product).join('\n')+'\n\n상품별 진행 가능 여부와 가격·조건은 협의 후 안내드리겠습니다. 다른 상품 목록도 함께 검토하실 수 있도록 정리해 드릴 수 있습니다.\n\n관심 있으시면 편하게 말씀 부탁드립니다.';$('#instagram-prototype-draft-output').innerHTML='<label class="field">직접 수정할 제안 초안<textarea id="instagram-prototype-text" rows="12">'+esc(text)+'</textarea></label><p class="fine">초안은 이 화면에만 있으며 닫으면 사라집니다. 실제 전송은 하지 않았습니다. Instagram 답장 가능 시간과 조건은 별도 확인하세요.</p><button type="button" data-action="instagram-prototype-copy">초안 복사</button>';}
-function prototypeUse(){if(instagramProposalContext?.mode==='historical')return toast('과거 메모의 참고 초안은 공식 답장 칸으로 옮기지 않습니다.');if(!prototypeCurrentDraft())return toast('대화·크리에이터 또는 상품 선택을 확인하고 초안을 다시 만드세요.');const text=$('#instagram-prototype-text')?.value,form=$('#instagram-reply-form'),target=form?.querySelector('textarea[name="body"]');if(!text||text.length>1000||!target)return toast('현재 답장 가능 시간과 계정 상태를 확인하세요.');if(target.value.trim()&&!window.confirm('답장 칸의 기존 내용을 새 초안으로 바꿀까요?'))return;target.value=text;target.dispatchEvent(new Event('input',{bubbles:true}));prototypeDraftDirty=false;$('#modal').close();target.focus();toast('답장 칸에 넣었습니다. 확인 후 직접 보내세요.');}
+async function prototypeUse(){if(instagramProposalContext?.mode==='historical')return toast('과거 메모의 참고 초안은 공식 답장 칸으로 옮기지 않습니다.');if(!prototypeCurrentDraft())return toast('대화·크리에이터 또는 상품 선택을 확인하고 초안을 다시 만드세요.');const text=$('#instagram-prototype-text')?.value,form=$('#instagram-reply-form'),target=form?.querySelector('textarea[name="body"]');if(!text||text.length>1000||!target)return toast('현재 답장 가능 시간과 계정 상태를 확인하세요.');if(target.value.trim()&&!window.confirm('답장 칸의 기존 내용을 새 초안으로 바꿀까요?'))return;const marker=instagramProposalContext,previous=target.value;if(marker.catalogSheetUrlAtOpen&&(!await prototypeRecheckSheet(marker)||instagramProposalContext!==marker||!prototypeCurrentDraft()||$('#instagram-prototype-text')?.value!==text||target.value!==previous||$('#instagram-reply-form')!==form||form.querySelector('textarea[name="body"]')!==target||target.isConnected===false))return toast('시트 연결 또는 초안이 변경됐습니다. 다시 검수해 주세요.');target.value=text;target.dispatchEvent(new Event('input',{bubbles:true}));prototypeDraftDirty=false;$('#modal').close();target.focus();toast('답장 칸에 넣었습니다. 확인 후 직접 보내세요.');}
 function instagramReplyConfirmation(peer,body,username){const handle=typeof username==='string'&&/^[A-Za-z0-9._]{1,30}$/.test(username)&&!['.','..'].includes(username)&&username.toLowerCase()!=='valu_est'?'@'+username+' · ':'';return '발신: @valu_est\n수신: '+handle+'Instagram 사용자 ID '+peer+'\n\n보낼 내용:\n'+body+'\n\n이 내용으로 실제 답장을 보내겠습니까?';}
 function instagramReplyMessage(result){if(result.duplicate)return result.sameRequest?'같은 요청이 이미 처리됐습니다. 기존 결과를 확인하세요.':'이 수신 메시지에는 이미 답장 시도가 있어 이번 내용은 전송되지 않았습니다.';return result.status==='accepted'?'Meta에 접수됐습니다. 전달 여부는 확인되지 않았습니다.':'전송 결과 확인 필요 · 다시 보내지 마세요.';}
 function inboundHumanReply(m){
@@ -1030,8 +1079,20 @@ async function manualReviewedAudit(peerId,next){
  }catch(e){if(manualReviewedActive(state)&&epoch===state.auditEpoch&&state.selected===peerId){const host=$('#manual-audit-results');if(host)host.textContent='검수 이력을 확인하지 못했습니다. 목록·상대를 다시 확인하고 기록 불일치면 복구 검토가 필요합니다.';}}finally{state.auditBusy=false;}
 }
 const MANUAL_NOTES_AVAILABLE = false;
-let manualNotesView = null, inboxNotesView = null;
-function inboxNotesDispose(){inboxNotesView?.destroy();inboxNotesView=null;}
+let manualNotesView = null, inboxNotesView = null, inboxReviewView = null, inboxReviewHost = null, inboxHistoricalHandles = new Set();
+function inboxNotesDispose(){inboxNotesView?.destroy();inboxNotesView=null;inboxReviewHost?.removeEventListener('click',inboxReviewClick);inboxReviewHost=null;inboxReviewView?.destroy();inboxReviewView=null;inboxHistoricalHandles=new Set();}
+function inboxReviewClick(e){return inboxReviewView?.handle(e);}
+function inboxReviewMount(account){
+ const root=$('#inbox-review-root'),host=$('#app');if(!root||!host||!globalThis.SanjiInboxReview||typeof inboxReviewSettingsApi!=='function')return;
+ let sessionOwner=account.id,mounted=null;
+ inboxReviewView=mounted=globalThis.SanjiInboxReview.create({getOwner:()=>me===account?sessionOwner:null,isActive:()=>location.hash==='#inbox'&&root.isConnected,api:inboxReviewSettingsApi,beforeAction:()=>{if(inboxEdited){toast('작성 중인 내용을 저장하거나 취소한 뒤 확인 처리하세요.');return false;}if(typeof prototypeCanCloseHistorical==='function'&&!prototypeCanCloseHistorical())return false;prototypeDisposeHistorical();return true;},onChange:()=>{if(inboxReviewView&&inboxReviewView===mounted&&me===account&&root.isConnected){root.innerHTML=inboxReviewView.markup();inboxNotesView?.refresh?.();if(!inboxEdited)filterThreads();}},subscribeSession:callback=>{const r=manualClient.auth.onAuthStateChange((_event,session)=>{if(session?.user?.id!==account.id){sessionOwner=null;callback();if(inboxReviewView===mounted&&root.isConnected)root.innerHTML='';}});return()=>r.data.subscription.unsubscribe();}});
+ inboxReviewHost=host;host.addEventListener('click',inboxReviewClick);
+ inboxReviewSyncThreads();inboxReviewView.load();
+}
+function inboxReviewSyncThreads(){
+ inboxReviewView?.replace('instagram',creatorInboxThreads.filter(t=>t.instagramOfficial).map(t=>({key:'instagram:'+t.instagramPeerId,label:'기존 Instagram 수신 '+inboxThreadName(t),value:{id:t.id,peerId:t.instagramPeerId,profile:t.peerProfile,messages:t.messages},allowed:/^\d{1,100}$/.test(String(t.instagramPeerId))})));
+}
+function inboxReviewThreadControls(t){return t?.instagramOfficial&&inboxReviewView?inboxReviewView.controls('instagram:'+t.instagramPeerId):'';}
 function manualNotesDispose(){manualNotesView?.destroy();manualNotesView=null;inboxNotesDispose();}
 function inboxNotesMount(){
  inboxNotesDispose();
@@ -1039,10 +1100,13 @@ function inboxNotesMount(){
  if(!MANUAL_NOTES_AVAILABLE||!globalThis.SanjiManualNotes?.mountInboxReader){host.innerHTML='<section class="panel"><h2>저장된 과거 답장·초안</h2><p>인증된 운영 연결에서 사용할 수 있습니다.</p><a href="#manual-notes">수동 확인 메모 열기 →</a></section>';return;}
  const account=me;let sessionOwner=account?.id,mountedView=null;
  if(!sessionOwner)return;
+ inboxReviewMount(account);
  mountedView=globalThis.SanjiManualNotes.mountInboxReader(host,{
   getOwner:()=>me===account?sessionOwner:null,
   isActive:()=>location.hash==='#inbox',
   request:manualNotesApi,
+  reviewQueue:inboxReviewView,
+  onLoaded:groups=>{inboxHistoricalHandles=new Set(groups.map(g=>g.handle));if(!inboxEdited)filterThreads();},
   onReviewProducts:(note,context)=>prototypeOpenHistoricalNote(note,context),
   subscribeSession:callback=>{
    const r=manualClient.auth.onAuthStateChange((_event,session)=>{
@@ -1078,7 +1142,7 @@ async function inboxPage() {
       "대화 진행 상태와 제안 내용·종료 사유를 기록합니다.",
       button("Gmail 답장 동기화", "sync-mail") + (typeof MANUAL_INBOX_AVAILABLE!=="undefined"&&MANUAL_INBOX_AVAILABLE?button("Instagram 수동 검토·초안", "manual-inbox-open"):'') + (TRANSIENT_INBOX_AVAILABLE?button("Instagram 임시 확인·초안", "transient-inbox-open"):"") + button("Instagram 연결", "creator-instagram-connect") + button("Instagram 수신 확인", "instagram-sync") + (instagramInboxCursor&&instagramInboxOwner===me?button("Instagram 대화 더 보기", "instagram-sync-next"):"") + (instagramInboxOffset>0?button("Instagram 최근 기록", "instagram-page", "previous"):"") + (instagramInboxHasMore?button("Instagram 이전 기록", "instagram-page", "next"):""),
     ) +
-    '<div id="inbox-historical-notes-root"></div><h2>기존 대화·수신 목록</h2><p class="fine">아래 목록은 별도의 수신 근거와 기간 필터를 적용합니다. 과거 메모와 수량을 합산하지 않습니다.</p>' +
+    '<div id="inbox-review-root"></div><div id="inbox-historical-notes-root"></div><h2>기존 대화·수신 목록</h2><p id="inbox-loaded-source-count" class="fine"></p><p class="fine">아래 목록은 별도의 수신 근거와 기간 필터를 적용합니다. 과거 메모와 수량을 합산하지 않습니다. 같은 아이디가 두 출처에 있어도 동일인·동일 대화로 확정해 합치지 않습니다.</p>' +
     '<details class="panel"><summary>태그바이 발송 근거 관리</summary><p class="fine">원본 대조 기록만 저장합니다. 메시지는 보내지 않습니다.</p>'+button('근거 가져오기','tagby-proof-open')+button('저장된 근거·철회','instagram-evidence-open')+'</details>' +
     (instagramNotice?'<p class="notice">'+esc(instagramNotice)+'</p>':'') +
     '<p id="instagram-sync-status" role="status" class="fine">'+esc(instagramSyncStatus?.owner===account?instagramSyncStatus.text:'Instagram 수신 상태는 직접 확인해 주세요.')+'</p>' +
@@ -1090,9 +1154,11 @@ async function inboxPage() {
 }
 function filterThreads() {
   if (!$("#thread-list")) return;
+  inboxReviewSyncThreads();
   const q = $("#thread-filter").value, type = $("#thread-type").value, mode = $("#thread-mode").value, lifecycle = $("#thread-lifecycle")?.value||'active', period=$('#thread-period')?.value||'7d';
-  const instagramOnly=type==='instagram';const controls=$('#mail-filter-controls'),scope=$('#instagram-replies-scope');if(controls)controls.hidden=instagramOnly;if(scope)scope.hidden=!instagramOnly;const visible=visibleInboxThreads([...data.threads,...creatorInboxThreads],instagramOnly?'':q,type,instagramOnly?'replies':mode,instagramOnly?'active':lifecycle,instagramOnly?'7d':period);
-  $("#thread-list").innerHTML=groupInboxThreads(visible).map(group=>`<details class="thread" open><summary>${inboxCategoryBadge(group[0])} <strong>${esc(inboxThreadName(group[0]))}</strong> · ${group.length}개 대화</summary>${group.map(t=>`<button data-action="thread" data-id="${esc(t.id)}" style="text-align:left;width:100%;border:0;background:none"><p>${esc(t.subject)}</p>${t.channel==='email'?'':tag(t.channel)} ${t.instagramOfficial?tag('상태 관리 미지원'):t.conversationStatus&&t.conversationStatus!=='미정'?tag(t.conversationStatus):t.classification&&t.classification!=='미분류'?tag(t.classification):''} ${(t.messages||[]).some(m=>m.out===false&&m.source==='operator_reported')?tag('수동 확인'):''}</button>`).join('')}</details>`).join('')||'<div class="empty">조건에 맞는 대화가 없습니다.</div>';
+  const instagramOnly=type==='instagram';const controls=$('#mail-filter-controls'),scope=$('#instagram-replies-scope');if(controls)controls.hidden=instagramOnly;if(scope)scope.hidden=!instagramOnly;const visible=visibleInboxThreads([...data.threads,...creatorInboxThreads],instagramOnly?'':q,type,instagramOnly?'replies':mode,instagramOnly?'active':lifecycle,instagramOnly?'7d':period).filter(t=>!t.instagramOfficial||!inboxReviewView?.hidden('instagram:'+t.instagramPeerId));
+  const sourceCount=$('#inbox-loaded-source-count');if(sourceCount)sourceCount.textContent='현재 불러온 기존 Instagram '+creatorInboxThreads.filter(t=>t.instagramOfficial).length+'개 대화 · 현재 조건의 활성 목록 '+visible.filter(t=>t.instagramOfficial).length+'개 · 위 과거 메모 인원과 별도';
+  $("#thread-list").innerHTML=groupInboxThreads(visible).map(group=>`<details class="thread" open><summary>${inboxCategoryBadge(group[0])} <strong>${esc(inboxThreadName(group[0]))}</strong> · ${group.length}개 대화</summary>${group.map(t=>`<div><button data-action="thread" data-id="${esc(t.id)}" style="text-align:left;width:100%;border:0;background:none"><p>${esc(t.subject)}</p>${t.channel==='email'?'':tag(t.channel)} ${t.instagramOfficial?tag('기존 Instagram 수신'):t.conversationStatus&&t.conversationStatus!=='미정'?tag(t.conversationStatus):t.classification&&t.classification!=='미분류'?tag(t.classification):''} ${(t.messages||[]).some(m=>m.out===false&&m.source==='operator_reported')?tag('수동 확인'):''}</button>${t.instagramOfficial&&inboxHistoricalHandles.has(t.peerProfile?.username?.toLowerCase())?'<p class="fine">같은 아이디의 저장된 과거 메모가 있습니다 · 동일인·동일 대화 연결 미확인</p>':''}${inboxReviewThreadControls(t)}</div>`).join('')}</details>`).join('')||'<div class="empty">조건에 맞는 대화가 없습니다.</div>';
   $('#thread-replies-toggle')?.setAttribute?.('aria-pressed',String(mode==='replies'));
   inboxFilterSnapshot={q,mode,type,lifecycle,period};inboxLifecycle=lifecycle;inboxDateRange=period;
   const next=visible.some(t=>t.id===selectedThread)?selectedThread:(visible[0]?.id||'');
@@ -1135,15 +1201,46 @@ function jobTable() {
   const jobs = data.jobs || [];
   return `<div class="table-scroll"><table><thead><tr><th>예약 시각</th><th>상태</th><th>처리 결과</th><th></th></tr></thead><tbody>${jobs.map((j) => `<tr><td>${esc(new Date(j.run_at).toLocaleString("ko-KR"))}</td><td>${tag(({queued:"예약 완료 · 발송 대기",processing:"발송 처리 중",accepted:"Gmail 서버 접수",completed:"발송 처리 완료",cancelled:"예약 취소",failed:"발송 실패",review_pending:"재검토 필요",outcome_unknown:"결과 확인 필요"})[j.status]||j.status)}</td><td>${esc(j.result?.error || j.result?.note || j.result?.reason || "전달·열람 미확인")}</td><td>${j.status === "queued" ? button("예약 취소", "cancel-job", j.id) : ""}</td></tr>`).join("") || '<tr><td colspan="4">승인된 예약이 없습니다.</td></tr>'}</tbody></table></div>`;
 }
+// Explicit public-catalog link setting. This records an operator check, not Google access or sync.
+let catalogSheetView=null;
+function catalogSheetSettingsDispose(){const view=catalogSheetView;catalogSheetView=null;view?.subscription?.unsubscribe?.();}
+function catalogSheetSettingsCurrent(view){return !!view&&view===catalogSheetView&&view.owner===me&&view.host?.isConnected&&$('#catalog-sheet-settings')===view.host&&location.hash==='#settings';}
+function catalogSheetSettingsStatus(view,message){if(catalogSheetSettingsCurrent(view)){const node=$('#catalog-sheet-status');if(node)node.textContent=message;}}
+function catalogSheetSettingsControls(view){if(!catalogSheetSettingsCurrent(view))return;for(const node of view.host.querySelectorAll('input,select,button'))node.disabled=!!view.busy||(!!view.uncertain&&node.dataset?.action!=='catalog-sheet-reload');}
+function catalogSheetSettingsDraw(view){
+ if(!catalogSheetSettingsCurrent(view))return;
+ const sheet=view.record?.productCatalogSheet,own=sheet?.ownerId===view.owner.id,link=own?catalogSheetUrl(sheet.url):'',ready=!!window.InstagramAutoProducts?.sharedCatalogLink({ownerId:view.owner.id,sharedSheet:sheet});
+ view.host.innerHTML='<h2>공개 상품 시트 연결</h2><p>상품명과 공개 상품 링크를 정리한 Google 시트를 새 검토 초안에 넣습니다. Google 공유 권한은 바꾸지 않으며 상품 추가·수정도 시트에 자동 동기화하지 않습니다.</p><p class="fine">운영자 확인 기록 · 자동 접근 검사 아님. 링크 연결은 Google 계정 연동이나 소유권 인증이 아닙니다.</p><p>'+esc(ready?'최근 운영자 확인 기록 있음 · 새 초안에 링크 사용 가능':sheet?'기존 연결 기록은 있지만 공개 읽기 확인을 갱신해야 합니다.':'연결된 상품 시트 없음')+'</p>'+(own&&sheet?.verifiedAt?'<p class="fine">기록된 확인 시각: '+esc(localTime(sheet.verifiedAt))+' KST · 24시간이 지나면 새 초안에서 링크를 빼고 재확인을 안내합니다. 확인 방법: '+esc(sheet.verificationMethod==='anonymous_read'?'공유 설정과 로그아웃/시크릿 읽기 확인':sheet.verificationMethod==='owner_sharing_ui'?'Google 공유 설정 확인 · 익명 접근 미검증':'미확인')+'</p>':'')+(link?'<p><a href="'+esc(link)+'" target="_blank" rel="noopener noreferrer">등록한 시트 열기 ↗</a></p>':'')+'<form id="catalog-sheet-form" class="form-grid"><label class="field full">상품 시트 링크<input name="url" type="url" maxlength="600" required value="'+esc(link)+'" placeholder="https://docs.google.com/spreadsheets/d/…/edit"></label><label class="field">실제로 공개 읽기 설정을 확인한 시각 · 한국시간(KST)<input name="observedAtKst" type="datetime-local" required></label><label class="field">실제 확인 방법<select name="verificationMethod" required><option value="">확인한 방법 선택</option><option value="owner_sharing_ui">Google 공유 설정에서 모든 사용자·뷰어 확인</option><option value="anonymous_read">공유 설정과 로그아웃/시크릿 읽기 모두 확인</option></select></label><label class="field full"><span><input type="checkbox" name="attested" required>선택한 방법으로 링크가 있는 모든 사용자·뷰어 상태를 직접 확인했습니다. 실제로 하지 않은 검사는 선택하지 않습니다.</span></label><label class="field full"><span><input type="checkbox" name="publicFieldsOnly" required>전체 시트와 모든 탭에 공개할 상품명·상품 링크만 있고, 연락처·수수료·거래조건·크리에이터 대화 등 비공개 자료가 없음을 확인했습니다.</span></label><div class="full"><button type="submit">확인 기록 저장·초안에 연결</button></div></form><div class="actions"><button type="button" data-action="catalog-sheet-reload">입력 취소·저장 상태 다시 읽기</button>'+(sheet?'<button type="button" data-action="catalog-sheet-disconnect">산지에서 시트 연결 해제</button>':'')+'</div><p class="fine">저장·해제하면 설정 버전이 바뀌어 기존 자동 이메일 초안이 재검토 필요로 바뀔 수 있습니다. 이메일 발송을 켜거나 검증을 건너뛰지 않습니다. 해제해도 Google 시트·공유 권한·기존 저장 초안은 삭제하거나 바꾸지 않습니다. 이미 복사한 링크는 회수되지 않습니다. 편집 중인 상품 제안은 다시 열어 검수해야 합니다.</p><p id="catalog-sheet-status" role="status"></p>';
+ catalogSheetSettingsControls(view);
+}
+async function catalogSheetSettingsMount(){
+ catalogSheetSettingsDispose();const host=$('#catalog-sheet-settings');if(!host)return;
+ if(typeof catalogSheetSettingsApi!=='function'||typeof catalogSheetUrl!=='function'||typeof catalogSheetKstTime!=='function'||typeof me?.id!=='string'){host.innerHTML='<h2>공개 상품 시트 연결</h2><p>이 설정은 로그인한 Supabase 작업 공간에서만 사용할 수 있습니다. 현재 화면에서는 저장하지 않습니다.</p>';return;}
+ const view={owner:me,host,record:null,busy:true,uncertain:false};catalogSheetView=view;host.innerHTML='<h2>공개 상품 시트 연결</h2><p>현재 계정의 저장 설정을 확인하고 있습니다.</p>';
+ if(typeof manualClient!=='undefined')view.subscription=manualClient.auth.onAuthStateChange((_event,session)=>{if(session?.user?.id!==view.owner.id){catalogSheetSettingsDispose();if(host.isConnected)host.textContent='로그인 계정이 변경됐습니다. 설정 화면을 다시 열어 주세요.';}})?.data?.subscription;
+ try{const record=await catalogSheetSettingsApi('read',null,view.owner.id,()=>catalogSheetSettingsCurrent(view));if(!catalogSheetSettingsCurrent(view))return;view.record=record;data.settings=record;view.busy=false;catalogSheetSettingsDraw(view);}catch{if(!catalogSheetSettingsCurrent(view))return;view.busy=false;view.host.innerHTML='<h2>공개 상품 시트 연결</h2><p>계정의 저장 설정을 확인하지 못했습니다. 저장은 실행하지 않았습니다.</p><button type="button" data-action="catalog-sheet-reload">저장 상태 다시 읽기</button>';}
+}
+async function catalogSheetSettingsSave(form,disconnect=false){
+ const view=catalogSheetView;if(!catalogSheetSettingsCurrent(view)||view.busy||view.uncertain||!view.record)return;
+ if(!disconnect&&(form!==$('#catalog-sheet-form')||!form?.isConnected))return;
+ const currentForm=$('#catalog-sheet-form'),input=disconnect?null:new FormData(form),raw=disconnect?'':JSON.stringify(Object.fromEntries(input));
+ let body={settingsId:view.record.id,version:view.record.version};
+ if(!disconnect){try{if(!input.has('attested')||!input.has('publicFieldsOnly'))throw Error('실제 공개 읽기와 전체 공개 자료 범위를 먼저 확인해 주세요.');const url=catalogSheetUrl(String(input.get('url')||''));if(!url)throw Error('올바른 Google 상품 시트 링크를 입력해 주세요.');const observedAt=catalogSheetKstTime(String(input.get('observedAtKst')||'')),at=Date.parse(observedAt);if(at>Date.now()||Date.now()-at>86400000)throw Error('최근 24시간 안에 실제 확인한 시각을 입력해 주세요.');const verificationMethod=String(input.get('verificationMethod')||'');if(!['owner_sharing_ui','anonymous_read'].includes(verificationMethod))throw Error('실제로 확인한 방법을 선택해 주세요.');body={...body,url,observedAt,attested:true,publicFieldsOnly:true,verificationMethod};}catch(e){catalogSheetSettingsStatus(view,e.message);return;}}
+ view.busy=true;catalogSheetSettingsControls(view);catalogSheetSettingsStatus(view,'저장 결과를 확인하고 있습니다. 다시 누르지 마세요.');
+ try{const result=await catalogSheetSettingsApi(disconnect?'disconnect':'connect',body,view.owner.id,()=>catalogSheetSettingsCurrent(view));if(!catalogSheetSettingsCurrent(view))return;view.record=result;data.settings=result;view.busy=false;catalogSheetSettingsControls(view);const changed=!disconnect&&currentForm===$('#catalog-sheet-form')&&JSON.stringify(Object.fromEntries(new FormData(currentForm)))!==raw;if(!changed)catalogSheetSettingsDraw(view);catalogSheetSettingsControls(view);catalogSheetSettingsStatus(view,disconnect?'산지의 시트 연결을 해제했습니다. Google 공유 권한과 기존 초안은 유지됩니다.':changed?'제출한 확인 기록을 저장했습니다. 이후 수정한 입력은 저장되지 않았습니다.':'운영자의 공개 읽기 확인 기록을 저장했습니다. 새 상품 제안 창에서 검수하세요. 시트 자동 동기화와 DM 발송은 실행하지 않았습니다.');}catch{if(!catalogSheetSettingsCurrent(view))return;view.busy=false;view.uncertain=true;catalogSheetSettingsControls(view);catalogSheetSettingsStatus(view,'저장 결과를 확정하지 못했습니다. 다시 저장하지 말고 먼저 저장 상태를 다시 읽어 주세요.');}
+}
+
 async function settingsPage() {
  const g=connections.gmail||{};
  $("#app").innerHTML=head("연동 설정","계정 연결, 자동 발굴, 발신 정보를 관리하세요.")+
  (oauthNotice?'<div class="'+(oauthNoticeIsError?"error":"notice")+'" role="alert">'+esc(oauthNotice)+'</div>':"")+
  '<div class="settings-layout"><section class="panel integration-card"><div class="integration-heading"><span class="provider-mark gmail-mark">G</span><div><h2>Gmail</h2><p>브랜드 메일 발송·답장</p></div>'+tag(g.reauthRequired?"재인증 필요":g.connected?"연결됨":"미연결",g.connected?"":"orange")+'</div><div class="integration-body"><strong>'+esc(g.email||"보낼 계정을 연결하세요")+'</strong><p class="fine">'+(g.reauthRequired?"Gmail 인증이 만료되거나 취소되어 회신 동기화가 중단됐습니다. Google로 다시 연결하세요.":g.enabled?"수신자와 최종 내용을 승인한 메일만 발송합니다.":"현재 서버에서 실제 발송을 제한하고 있습니다.")+'</p><details class="integration-detail"><summary>Gmail 연결 관리</summary><div class="actions">'+button(g.connected?"계정 변경":"Google로 연결","connect-gmail","",!g.connected)+button("연결 점검","check-gmail")+'</div><div id="gmail-check-result" role="status" class="fine"></div><details class="integration-detail"><summary>권한·연결 관리</summary><p class="fine">gmail.send · gmail.readonly. 최근 90일의 대상 업체 대화를 동기화합니다.</p>'+button("Gmail 연결 해제","disconnect","gmail")+'</details></details></div></section>'+
  '</div>'+
+ '<section class="panel settings-section" id="catalog-sheet-settings"></section>'+
  '<details class="panel settings-section" id="brand-discovery-settings"><summary>브랜드 자동 발굴 설정 · 00:00 KST</summary><div class="section-title"><div><h2>매일 새 업체 찾기</h2><p>한국시간 자정에 외부 목록을 갱신하고, 중복을 제외해 순차 확인합니다.</p></div>'+tag("00:00 KST")+'</div><div id="discovery-settings-panel" class="fine">발굴 설정 확인 중…</div></details>'+
  '<section class="panel settings-section"><div class="section-title"><div><h2>이메일 서명·발신 정보</h2><p>Gmail의 기본 발신 서명을 불러오거나, 필요한 경우 직접 입력하세요.</p></div></div><div class="actions">'+button('Gmail 기본 서명 가져오기','gmail-signature-import')+'</div><p id="gmail-signature-status" class="fine">'+esc(data.settings.gmailSignatureNeedsConsent?'Gmail 서명 조회 권한 승인이 필요합니다. 위 가져오기 버튼에서 진행하세요.':data.settings.signatureSource==='gmail'?'Gmail 서명 적용됨 · '+data.settings.gmailSignatureEmail:'불러온 서명은 최종 메일을 새로 검토·승인할 때 적용됩니다.')+'</p><form id="settings-form" class="form-grid">'+'<details class="full"><summary>사업자·발신자 정보 관리</summary>'+field("senderName","사업자·발신자명",data.settings.senderName)+field("senderAddress","사업장 주소",data.settings.senderAddress)+field("senderPhone","발신자 연락처",data.settings.senderPhone)+'</details>'+field("emailSignature","공통 이메일 서명 · 입력하면 템플릿 서명 대신 사용",data.settings.emailSignature||"","textarea")+'<div class="full"><h3>서명 미리보기</h3><pre id="email-signature-preview" class="mail-letter">'+esc(data.settings.emailSignature||'공통 서명 미설정 · 템플릿에 저장한 서명을 사용합니다.')+'</pre><p class="fine">일반 협업 메일은 서명 아래에 사업장 주소·전화번호를 별도로 중복 추가하지 않습니다. 광고성 메일은 필요한 발신 정보·수신 거부 안내를 유지합니다. 저장 후 새로 검토·승인하는 메일부터 반영되며, 기존 승인 예약은 임의로 바꾸지 않습니다.</p></div><div class="full"><p class="fine">일반 협업 제안에는 수신 거부 문구를 자동 추가하지 않습니다. 광고성 메일에는 발신자 정보·수신 거부 안내를 적용합니다.</p><button type="submit" class="primary">서명·발신 정보 저장</button></div></form></section>'+
  '<details class="panel settings-section"><summary>예약·발송 기록·차단 목록</summary><h3>승인한 발송 예약</h3>'+jobTable()+'<h3>발송 기록</h3>'+outboxTable()+'<h3>차단 목록</h3>'+(data.suppression.map(s=>'<div class="task">'+esc(s.identity)+tag(s.reason,"orange")+'</div>').join("")||'<p class="fine">차단 기록 없음</p>')+button("감사 기록 조회","audit")+'</details>';
+ catalogSheetSettingsMount();
  try {const r=await api("/discovery");if(!$("#discovery-settings-panel"))return;$("#discovery-settings-panel").innerHTML='<form id="discovery-settings" class="discovery-preferences">'+field("target","하루 신규 업체 목표",r.settings.target,"number")+field("enabled","매일 자정(00:00 KST) 자동 발굴",r.settings.enabled,"checkbox")+field("notifyCompletion","목표 달성 시 관리자 로그인 이메일로 완료 알림",r.settings.notify_completion,"checkbox")+'<input name="keywords" type="hidden" value="'+esc(r.settings.keywords.join("\n"))+'"><button type="submit">발굴 설정 저장</button></form><p class="fine">이메일을 확보한 새로운 업체를 기준으로 집계합니다. 설정한 일일 목표와 실제 확보 수, 실패 원인을 표시합니다. 자동 발굴은 메일 발송 승인을 대신하지 않습니다.</p><div class="discovery-source-summary">'+sourceSummary(r)+'</div>';}catch(e){if($("#discovery-settings-panel"))$("#discovery-settings-panel").textContent=e.message;}
  if(data.settings.signatureSource==='gmail'&&data.settings.gmailSignatureHtml){const preview=document.createElement('iframe');preview.title='Gmail 서명 서식 미리보기 · 외부 이미지 차단';preview.setAttribute('sandbox','');preview.style.cssText='width:100%;height:180px;border:1px solid #e7ebe9;border-radius:8px';preview.srcdoc='<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; img-src \'none\'">'+data.settings.gmailSignatureHtml;$('#email-signature-preview')?.after(preview);}
  const signatureSection=$('#settings-form')?.closest('section');if(signatureSection)$('#instagram-browser-status')?.after(signatureSection);
@@ -1636,6 +1733,7 @@ document.addEventListener("submit", async (e) => {
 
   if(e.target.id==='recovery-settings'){e.preventDefault();const f=new FormData(e.target),enabled=f.has('enabled');if(enabled&&!recoveryView.config.enabled&&!window.confirm('기존 DB에서 매일 추천을 시작할까요? 메일이나 DM은 발송하지 않습니다.'))return;try{await api('/creator-recovery/settings','POST',{target:Number(f.get('target')),explorePercent:Number(f.get('explorePercent')),runTime:f.get('runTime'),enabled,dailyLookupLimit:Number(f.get('dailyLookupLimit')),retryLimit:Number(f.get('retryLimit')),paidLimitUsd:Number(f.get('paidLimitUsd'))});toast('설정을 저장했습니다.');await creatorDiscoveryPage();}catch(err){toast(err.message);}return;}
 
+  if(e.target.id==='catalog-sheet-form'){e.preventDefault();await catalogSheetSettingsSave(e.target);return;}
   e.preventDefault();
   const form = e.target,
     buttons = [...form.querySelectorAll("button[type=submit]")];
@@ -1720,7 +1818,9 @@ document.addEventListener("submit", async (e) => {
         };
       await api("/candidate" + (fid ? "/" + fid : ""), fid ? "PUT" : "POST", c);
     } else if (form.id === "deal-form") {
-      const old = deal(fid),
+      const snapshot = dealEditorSnapshots.get(form);
+      if (fid && (!snapshot?.record || snapshot.record.id !== fid)) throw Error("상품 편집 화면을 다시 열어주세요.");
+      const old = snapshot?.record || null,
         d = {
           ...(old || {}), ...f,
           topics: listText(f.topics),
@@ -1733,6 +1833,7 @@ document.addEventListener("submit", async (e) => {
       for (const v of [d.feeTerms.creatorPercent,d.feeTerms.companyPercent]) if(v!==null&&(!Number.isFinite(v)||v<0||v>100)) throw Error("수수료율은 0~100 사이로 입력하세요.");
       for (const k of ["retail", "price", "supply", "moq", "stock"])
         d[k] = f[k] === "" ? null : Number(f[k]);
+      if (old) preserveUneditedDealFields(old, snapshot.initial, f, d);
       await api("/deal" + (fid ? "/" + fid : ""), fid ? "PUT" : "POST", d);
     } else if (form.id === "template-form") {
       const old = data.templates.find((t) => t.id === fid);
@@ -1815,6 +1916,8 @@ const actions = {
   'creator-batch-open':async()=>{try{await creatorBatchOpen();}catch(e){toast(e.message||'이메일 검토를 열지 못했습니다.');}},
   'creator-batch-preview':async()=>{try{await creatorBatchMakePreview();}catch(e){toast(e.message||'미리보기를 준비하지 못했습니다.');}},
   'creator-batch-schedule':async()=>{try{await creatorBatchCommit();}catch(e){toast(e.message||'예약을 진행하지 못했습니다.');}},
+  "catalog-sheet-reload":()=>catalogSheetSettingsMount(),
+  "catalog-sheet-disconnect":()=>catalogSheetSettingsSave(null,true),
   "gmail-signature-import":async()=>{const r=await api('/gmail/signature','POST',{});if(r.needsConsent){modal('<h2>Gmail 서명 조회 권한</h2><p>기본 서명을 가져오려면 Gmail 설정 접근 권한이 추가로 필요합니다. 산지는 설정을 수정하지 않고 서명 조회에만 사용합니다. Google 승인 화면에서 권한 범위를 확인해 주세요.</p>'+button('Google에서 서명 조회 권한 승인','connect-gmail-signature'));return;}if(!r.text&&!r.html){toast('현재 Gmail 발신 주소에 기본 서명이 없습니다. Gmail 설정에서 기본 서명을 지정해 주세요.');return;}await api('/settings','PUT',{...data.settings,emailSignature:r.text,gmailSignatureHtml:r.html,gmailSignatureEmail:r.email,signatureSource:'gmail',signatureChecked:r.checked,gmailSignatureNeedsConsent:false,gmailSignatureSyncState:'imported'});await reload();await settingsPage();toast('Gmail 기본 서명을 불러왔습니다. 새로 준비·승인하는 메일부터 적용됩니다.');},
   "connect-gmail-signature":async()=>location.assign((await api('/oauth/gmail','POST',{includeSignature:true})).url),
   "creator-capture":async id=>{const p=window.creatorDiscoveryView.prospects.find(x=>x.id===id);modal('<h2>@'+esc(p.handle)+' 프로필 캡처</h2><p>저장된 확인 시점 화면이며 실시간 화면이 아닙니다.</p><div id="creator-capture-modal">불러오는 중…</div>');const url=await creatorCaptureUrl(id);const el=$('#creator-capture-modal');if(el)el.innerHTML=url?'<img class="creator-capture-full" alt="실제 프로필 캡처" src="'+esc(url)+'">':'저장된 캡처 없음';},
@@ -1905,6 +2008,7 @@ const actions = {
     if($('#manual-inbox-root')&&!manualCanChange())return;
     if(transientInboxView&&!transientInboxView.canClose())return;
     if(typeof prototypeCanCloseHistorical==='function'&&!prototypeCanCloseHistorical())return;
+    catalogSheetSettingsDispose();
     if(typeof prototypeDisposeHistorical==='function')prototypeDisposeHistorical();
     manualNotesDispose();
     if($('#manual-inbox-root')){manualDispose();$('#modal')?.close();}

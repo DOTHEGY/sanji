@@ -1,3 +1,5 @@
+import { createInboxReviewSettingsApi } from "./inbox-review-settings.mjs";
+import { catalogSheetObservation } from "./catalog-sheet-record.mjs";
 import { functionUrlForPath } from "./edge-routing.mjs";
 import { loadStableStateRecords } from "./state-records.mjs";
 import { probeEdge, classifyEdgeResponse } from "./edge-diagnostics.js";
@@ -159,6 +161,36 @@ export async function creatorProposalContextApi(body, expectedOwner, stillActive
   if (value?.matched !== true || typeof value.peerUsername !== "string" || !/^[A-Za-z0-9._]{1,30}$/.test(value.peerUsername) || [".",".."].includes(value.peerUsername) || typeof value.creator?.id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value.creator.id) || typeof value.creator.handle !== "string" || value.creator.handle !== value.peerUsername.toLowerCase()) throw error("상대 계정과 크리에이터 조회 결과가 일치하지 않습니다.", 409);
   return value;
 }
+// Existing owner-scoped settings only. No credentials, permission changes, or insert fallback.
+export async function catalogSheetSettingsApi(action, body, expectedOwner, stillActive) {
+  const uuid=v=>typeof v==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(v);
+  if(!['read','connect','disconnect'].includes(action)||!uuid(expectedOwner)||typeof stillActive!=='function'||!stillActive())throw error('현재 계정과 설정 화면을 확인하세요.',403);
+  let input=null, sheet=null;
+  if(action!=='read'){
+    if(!body||typeof body!=='object'||Array.isArray(body)||!uuid(body.settingsId)||!Number.isSafeInteger(body.version)||body.version<1||Object.keys(body).some(k=>!['settingsId','version',...(action==='connect'?['url','observedAt','attested','publicFieldsOnly','verificationMethod']:[])].includes(k)))throw error('저장된 설정과 버전을 다시 확인하세요.',400);
+    input=Object.freeze({...body});
+    if(action==='connect')sheet=catalogSheetObservation({url:input.url,observedAt:input.observedAt,attested:input.attested,publicFieldsOnly:input.publicFieldsOnly,verificationMethod:input.verificationMethod},expectedOwner);
+  } else if(body!==null&&body!==undefined)throw error('지원하지 않는 조회 입력입니다.',400);
+  const initial=await client.auth.getSession(),token=initial?.data?.session?.access_token;
+  if(initial?.error||initial?.data?.session?.user?.id!==expectedOwner||typeof token!=='string'||!token||!stillActive())throw error('계정 또는 화면이 변경됐습니다.',403);
+  const check=async()=>{const r=await client.auth.getSession();if(r?.error||r?.data?.session?.user?.id!==expectedOwner||r?.data?.session?.access_token!==token||!stillActive())throw error('계정 또는 화면이 변경됐습니다. 저장 여부는 다시 조회해 주세요.',403);};
+  await member();await check();
+  const rows=await result(client.from('sanji_records').select('id,owner,kind,data,version,updated').eq('owner',expectedOwner).eq('kind','settings').limit(2).setHeader('Authorization','Bearer '+token));
+  await check();
+  if(!Array.isArray(rows)||rows.length!==1||rows[0]?.owner!==expectedOwner||rows[0]?.kind!=='settings'||!uuid(rows[0]?.id)||!Number.isSafeInteger(rows[0]?.version)||rows[0].version<1)throw error('계정의 운영 설정을 하나로 확인하지 못했습니다. 기본 설정을 확인한 뒤 다시 여세요.',409);
+  const row=rows[0];
+  if(action==='read')return unpack(row);
+  if(row.id!==input.settingsId||row.version!==input.version)throw error('다른 설정 변경이 있습니다. 새로 불러온 뒤 다시 확인해 주세요.',409);
+  await check();
+  const saved=await result(client.rpc('sanji_save_record',{p_kind:'settings',p_id:row.id,p_version:row.version,p_data:{productCatalogSheet:sheet}}).setHeader('Authorization','Bearer '+token));
+  await check();
+  const value=Array.isArray(saved)?saved[0]:saved;
+  if(!value||value.owner!==expectedOwner||value.kind!=='settings'||value.id!==row.id||value.version!==row.version+1||(sheet===null?value.data?.productCatalogSheet!==null:!value.data?.productCatalogSheet||Object.keys(value.data.productCatalogSheet).length!==Object.keys(sheet).length||Object.keys(sheet).some(k=>value.data.productCatalogSheet[k]!==sheet[k])))throw error('저장 결과를 확인하지 못했습니다. 다시 저장하지 말고 먼저 조회해 주세요.',409);
+  return unpack(value);
+}
+
+export const inboxReviewSettingsApi = createInboxReviewSettingsApi({client,member,result});
+
 export async function transientInboxApi(body, expectedOwner) {
   if (typeof expectedOwner !== "string" || !expectedOwner) throw error("계정을 확인하세요.", 403);
   return edge("/creator-instagram/transient-inbox", "POST", body, expectedOwner);

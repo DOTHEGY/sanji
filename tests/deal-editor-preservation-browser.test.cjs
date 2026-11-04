@@ -1,0 +1,15 @@
+const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs');const {chromium}=require('@playwright/test');
+const s=fs.readFileSync('private/ui/app.js','utf8');
+const section=s.slice(s.indexOf('} else if (form.id === "deal-form")')+'} else if (form.id === "deal-form") {'.length,s.indexOf('} else if (form.id === "template-form")'));
+test('real form controls preserve all unrelated values through save, reopen and cancel',{skip:process.env.SANJI_BROWSER_TEST!=='1'},async t=>{
+ const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});t.after(()=>browser.close());const page=await browser.newPage();await page.setContent('<div id="modal-content"></div>');
+ const fixture={id:'a',version:7,name:'synthetic',category:'식품 · 법적 세부 분류 미확인',state:'협의 중',brand:'brand-a',claims:'old',retail:0,price:null,stock:'unknown',target:'',sourceNote:'unchanged evidence',topics:['a,b','  c '],history:[],feeTerms:{basis:'vendor_total',custom:'keep'},sourceDocument:{sha:'keep'},options:[{name:'keep'}]};
+ await page.evaluate(({s,section,fixture})=>{
+  window.$=q=>document.querySelector(q);window.esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));window.money=String;window.listText=x=>x.split(',').map(x=>x.trim()).filter(Boolean);window.formObject=form=>Object.fromEntries(new FormData(form));window.saved=[];window.current=fixture;window.deal=()=>current;window.data={candidates:[{id:'brand-a',name:'brand',kind:'브랜드'}]};window.modal=html=>$('#modal-content').innerHTML=html;
+  const field=s.slice(s.indexOf('function field('),s.indexOf('function modal('));const fee=s.slice(s.indexOf('function feeSelect('),s.indexOf('function dealProductRow('));const editor=s.slice(s.indexOf('const dealEditorSnapshots'),s.indexOf('async function matchingPage('));
+  eval(field+'\n'+fee+'\n'+editor+'\nwindow.openEditor=dealForm;window.submitEditor=async()=>{const form=$("#deal-form"),fid=form.dataset.id,f=formObject(form),api=async(path,method,body)=>saved.push({path,method,body});'+section+'};');openEditor('a');
+ },{s,section,fixture});
+ assert.equal(await page.locator('[name=category]').inputValue(),fixture.category);await page.locator('[name=claims]').fill('new claims');await page.evaluate(()=>submitEditor());let body=await page.evaluate(()=>saved[0].body);assert.deepEqual(body,{...fixture,claims:'new claims'});
+ await page.evaluate(()=>{current={...saved[0].body,version:8};openEditor('a');});assert.equal(await page.locator('[name=claims]').inputValue(),'new claims');await page.locator('[name=category]').selectOption('일반 건강식품');await page.locator('[name=claims]').fill('');await page.evaluate(()=>submitEditor());body=await page.evaluate(()=>saved[1].body);assert.deepEqual(body,{...fixture,version:8,category:'일반 건강식품',claims:''});
+ await page.evaluate(()=>{openEditor('a');document.querySelector('#modal-content').innerHTML='';});assert.equal(await page.evaluate(()=>saved.length),2);
+});
