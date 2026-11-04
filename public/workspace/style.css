@@ -931,4 +931,9 @@ nav {
 .manual-notes textarea { min-height: 110px; }
 .manual-note-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .manual-note-records { display: grid; gap: 16px; margin-top: 20px; }
-.manual-notes input, .manual-notes textarea { max-width: 100%; }
+.manual-notes input, .manual-notes select, .manual-notes textarea { max-width: 100%; }
+.manual-note-records section { min-height: 0; padding: 0; }
+.manual-note-records [data-note-time-basis] { display: grid; gap: 16px; margin-top: 16px; }
+.manual-note-records h3, .manual-note-records h4 { margin: 0; font-size: 14px; }
+.manual-note-records h5 { margin: 16px 0 8px; font-size: 14px; }
+.manual-note-order { margin-top: 16px; max-width: 420px; }

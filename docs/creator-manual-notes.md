@@ -10,6 +10,16 @@ This feature stores explicitly manual historical summaries and unsent reference 
 - The import file is previewed and saved one item at a time, in the supplied order. A user can skip an item without writing or losing the rest. Private import files must never be committed or bundled.
 - Notes append; corrections link to an earlier same-owner/same-creator note. An immutable client note ID makes exact retries idempotent. The UI rereads that ID before retrying an uncertain request.
 
+## Historical display order
+
+The default **review order** shows only loaded/saved notes by earliest Sanji recording timestamp first. It is not reply chronology. Timestamp ties preserve existing list order, including equivalent explicit timezone representations, and database sub-millisecond precision is retained. Invalid/missing recording timestamps stay separately unpositioned and never fall back to observation or inbound time. Loading another page can insert an earlier record ahead of the current first item. Switching the display preserves imported/unsaved fields, target confirmation, review checkbox, queue and uncertain-save payload without making a request.
+
+The optional **source display date/time** view groups only the loaded/saved records, not all replies or an entire source period. Valid explicit `inboundWhen` calendar dates appear oldest first using the source's displayed date. Within a day, recognized clocks sort only within the same notation, explicit timezone (or unverified display basis), and precision. Equal clocks preserve the existing list order. Different clock bases do not imply an order relative to one another. No timezone is inferred and no date is shifted to UTC.
+
+Date-only records and malformed or ambiguous clocks remain visibly unpositioned within a valid explicit day. Relative strings such as `5일 전` and `약 20시간 전` stay in a separate uncertain-date section, in their existing order; observation timestamps do not turn them into absolute dates. Invalid/ambiguous dates remain in an unknown-date section. Raw strings and drafts are preserved without rewriting. This is a conservative review aid, not a complete or normalized received-message timeline.
+
+Pagination still follows the server's recording-time cursor. The screen labels unloaded pages, regroups the loaded records after each page, and never equates the end of saved pages with complete source coverage. Corrections remain separate visible records; the screen indicates whether the original and any correcting records are present in the currently loaded list. It never hides an original or declares a correction the latest verified source.
+
 ## Isolated backend
 
 `supabase/functions/creator-manual-notes` is a new small function, separate from `bright-function` and both existing Instagram functions. It uses the existing project environment and does not need a new credential or provider connection. Gateway JWT verification stays enabled; the handler also calls Auth and checks Sanji membership.
