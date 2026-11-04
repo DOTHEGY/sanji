@@ -1,7 +1,7 @@
 name: Verify production workspace
 on:
   push:
-    branches: [main, dot/persistent-inbox-20261104, dot/manual-notes-20261104]
+    branches: [main, dot/persistent-inbox-20261104, dot/manual-notes-20261104, dot/creator-email-isolated-20261104]
   pull_request:
 permissions:
   contents: read
@@ -17,6 +17,7 @@ jobs:
       - run: npm ci
       - run: npm ci --prefix local-worker --ignore-scripts
       - run: npm run build:supabase
+      - run: npm run build:creator-email-worker
       - run: git diff --exit-code -- public/workspace supabase/dashboard public/setup public/connect
       - run: npx playwright install --with-deps chromium
       - run: |

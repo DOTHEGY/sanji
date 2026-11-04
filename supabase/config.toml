@@ -14,3 +14,9 @@ verify_jwt = true
 entrypoint = "./functions/creator-manual-notes/index.ts"
 # Independent historical notes only; handler also checks user membership and owner.
 verify_jwt = true
+
+[functions.creator-email-worker]
+entrypoint = "./functions/creator-email-worker/index.ts"
+# NEW service-to-service endpoint only. It validates the existing Vault-backed
+# x-job-token itself. Activating its persistent access/schedule requires approval.
+verify_jwt = false
