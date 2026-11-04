@@ -1769,10 +1769,10 @@ const actions = {
 
   async logout() {
     if(manualNotesView&&!manualNotesView.canClose())return;
-    manualNotesDispose();
     if(!allowInboxChange())return;
     if($('#manual-inbox-root')&&!manualCanChange())return;
     if(transientInboxView&&!transientInboxView.canClose())return;
+    manualNotesDispose();
     if($('#manual-inbox-root')){manualDispose();$('#modal')?.close();}
     transientDispose();inboxEdited=false;inboxDirtyForms.clear();
     await api("/auth/logout", "POST", {});
