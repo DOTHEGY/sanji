@@ -41,14 +41,37 @@ export function publicManualNote(row: any) {
   const p = row.payload;
   return { id: row.note_id, creatorId: row.creator_id, handle: row.handle, recordedAt: row.recorded_at, supersedesId: row.supersedes_id || null, observedAt: p.observedAt, sourceUrl: p.sourceUrl, inboundWhen: p.inboundWhen, summary: p.summary, draft: p.draft, intent: p.intent, afterInboundOutbound: p.afterInboundOutbound, recorderType: p.recorderType, recordType: 'manual_historical_note', latestVerified: false, dispatchState: 'not_sent' };
 }
-async function readInput(req: Request) {
+const publicTopics = new Set(['travel','drone_photography','travel_sponsorships','packaged_vegetable_drink','parenting','household_bath','food_easy_meals','restaurants','home_interior','home_cafe','dining','household_lifestyle','beauty','fashion','fitness','pets','outdoors','baking','coffee','food','lifestyle','photography']);
+function publicProfile(value: any, target: string) {
+  if (typeof value !== 'string' || value.length > 200) return false;
+  try { const u = new URL(value); return u.protocol === 'https:' && ['instagram.com','www.instagram.com'].includes(u.hostname) && !u.port && !u.username && !u.password && !u.search && !u.hash && u.pathname.replace(/\/$/, '').toLowerCase() === '/' + target; } catch { return false; }
+}
+function publicText(value: any, max: number) {
+  if (typeof value !== 'string' || value.length > max || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value)) return '';
+  // Only public profile prose is projected. Contact details and credential-like text are not ranking evidence.
+  if (/(?:password|access[ _-]?token|refresh[ _-]?token|api[ _-]?key|client[ _-]?secret|authorization\s*:|bearer\s+)/i.test(value)) return '';
+  return value.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '').replace(/(?:\+?\d[\d\s().-]{6,}\d)/g, '').trim();
+}
+function storedPublicResearch(row: any, owner: string, target: string, now: number) {
+  if (!object(row) || row.owner !== owner || row.attested_by !== owner || row.handle !== target || row.revoked_at !== null || !publicProfile(row.profile_url, target)) return null;
+  const at = typeof row.observed_at === 'string' && /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,6})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(row.observed_at) ? Date.parse(row.observed_at) : NaN;
+  const calendar = Number.isFinite(at) ? new Date(row.observed_at.slice(0,10) + 'T00:00:00Z') : null;
+  if (!Number.isFinite(at) || !calendar || !Number.isFinite(calendar.getTime()) || calendar.toISOString().slice(0,10) !== row.observed_at.slice(0,10) || at > now || !/^[a-f0-9]{64}$/.test(row.capture_sha256 || '') || !Array.isArray(row.topics) || !row.topics.length || row.topics.length > 10 || row.topics.some((v: any) => typeof v !== 'string' || !publicTopics.has(v)) || !Array.isArray(row.sources) || !row.sources.length || row.sources.length > 10) return null;
+  const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (row.sources.some((value: any) => {
+    if (typeof value !== 'string' || value.length > 300) return true;
+    try { const u = new URL(value); return u.protocol !== 'https:' || u.hostname !== 'www.instagram.com' || !!u.port || !!u.username || !!u.password || !!u.search || !!u.hash || !new RegExp('^/' + escaped + '/(?:p|reel)/[A-Za-z0-9_-]{1,100}/?$', 'i').test(u.pathname); } catch { return true; }
+  })) return null;
+  return {profileUrl:row.profile_url, observedAt:row.observed_at, topics:[...new Set(row.topics)], sources:[...new Set(row.sources)], captureSha256:row.capture_sha256, provenance:'operator_attested',researchStatus:now-at > 7*86400000 ? 'historical' : 'current_observation_record'};
+}
+async function readInput(req: Request, maxBytes = 65536) {
   const declared = req.headers.get('content-length');
-  if (declared && (!/^\d+$/.test(declared) || Number(declared) > 65536)) { await req.body?.cancel().catch(() => {}); throw new ManualNoteError(413, 'INPUT_TOO_LARGE', '메모 입력 크기를 줄여 주세요.'); }
+  if (declared && (!/^\d+$/.test(declared) || Number(declared) > maxBytes)) { await req.body?.cancel().catch(() => {}); throw new ManualNoteError(413, 'INPUT_TOO_LARGE', '메모 입력 크기를 줄여 주세요.'); }
   if (!req.body) return {};
   const reader = req.body.getReader(), decoder = new TextDecoder('utf-8', { fatal: true });
   let raw = '', size = 0;
   try {
-    for (;;) { const {done, value} = await reader.read(); if (done) break; size += value.byteLength; if (size > 65536) { await reader.cancel().catch(() => {}); throw new ManualNoteError(413, 'INPUT_TOO_LARGE', '메모 입력 크기를 줄여 주세요.'); } raw += decoder.decode(value, {stream:true}); }
+    for (;;) { const {done, value} = await reader.read(); if (done) break; size += value.byteLength; if (size > maxBytes) { await reader.cancel().catch(() => {}); throw new ManualNoteError(413, 'INPUT_TOO_LARGE', '메모 입력 크기를 줄여 주세요.'); } raw += decoder.decode(value, {stream:true}); }
     raw += decoder.decode();
     try { return raw ? JSON.parse(raw) : {}; } catch { throw invalid(); }
   } finally { reader.releaseLock(); }
@@ -68,14 +91,44 @@ export function creatorManualNotesHandler({sb, env, now = () => Date.now()}: any
       if (parts[offset] !== 'creator-manual-notes') return json({error:'지원하지 않는 경로입니다.'},404);
       const path = '/' + parts.slice(offset + 1).join('/');
       if (path === '/health' && req.method === 'GET') return json({ok:true, capability:'manual_historical_notes', sendingEnabled:false});
-      if (req.method !== 'POST' || !['/creator-manual-notes/targets','/creator-manual-notes/list','/creator-manual-notes/save'].includes(path)) return json({error:'지원하지 않는 경로입니다.'},404);
+      if (req.method !== 'POST' || !['/creator-manual-notes/targets','/creator-manual-notes/list','/creator-manual-notes/save','/creator-manual-notes/context'].includes(path)) return json({error:'지원하지 않는 경로입니다.'},404);
       const authorization = req.headers.get('authorization') || '';
       if (!authorization.startsWith('Bearer ') || !authorization.slice(7)) throw new ManualNoteError(401, 'AUTH_REQUIRED', '로그인이 필요합니다.');
       const auth = await sb.auth.getUser(authorization.slice(7)), user = auth?.data?.user;
       if (auth?.error || !user || !validUuid(user.id)) throw new ManualNoteError(401, 'AUTH_REQUIRED', '로그인 상태를 확인하세요.');
       const member = await query(sb.from('sanji_members').select('user_id').eq('user_id', user.id).maybeSingle());
-      if (!member) throw new ManualNoteError(403, 'MEMBERSHIP_REQUIRED', '접근 권한이 없습니다.');
-      const owner = user.id, body = await readInput(req);
+      if (!member || member.user_id !== user.id) throw new ManualNoteError(403, 'MEMBERSHIP_REQUIRED', '접근 권한이 없습니다.');
+      const owner = user.id, body = await readInput(req, path.endsWith('/context') ? 1024 : 65536);
+      if (path.endsWith('/context')) {
+        keys(body, ['noteId','creatorId','handle']);
+        if (!validUuid(body.noteId) || !validUuid(body.creatorId) || body.noteId !== body.noteId.toLowerCase() || body.creatorId !== body.creatorId.toLowerCase() || body.handle !== handle(body.handle)) throw invalid();
+        const unavailable = () => new ManualNoteError(404, 'CONTEXT_UNAVAILABLE', '저장된 메모와 크리에이터를 정확히 확인하지 못했습니다. 목록을 다시 확인하세요.');
+        const gate = async () => {
+          const notes = await query(sb.from('sanji_creator_manual_notes').select('owner,note_id,creator_id,handle,supersedes_id').eq('owner',owner).eq('note_id',body.noteId).limit(2));
+          const n = Array.isArray(notes) && notes.length === 1 ? notes[0] : null;
+          if (!n || n.owner !== owner || n.note_id !== body.noteId || n.creator_id !== body.creatorId || n.handle !== body.handle || n.supersedes_id !== null) throw unavailable();
+          const corrections = await query(sb.from('sanji_creator_manual_notes').select('note_id').eq('owner',owner).eq('creator_id',body.creatorId).eq('supersedes_id',body.noteId).limit(1));
+          if (!Array.isArray(corrections) || corrections.length) throw unavailable();
+          const rows = await query(sb.from('sanji_creator_recovery').select('owner,id,handle,nickname,bio,category,profile_url,link_status,last_verified,entity_type,assessment,status').eq('owner',owner).ilike('handle',body.handle.replace(/[\\%_]/g,'\\$&')).limit(2));
+          const c = Array.isArray(rows) && rows.length === 1 ? rows[0] : null;
+          if (!c || c.owner !== owner || c.id !== body.creatorId || c.handle !== body.handle || c.entity_type !== 'creator_evidence' || !['candidate','explore','review'].includes(c.assessment) || !['new','hold','contacted'].includes(c.status) || c.link_status !== 'source_confirmed' || !publicProfile(c.profile_url, body.handle)) throw unavailable();
+          return c;
+        };
+        const creator = await gate();
+        const readResearch = async () => {
+          const rows = await query(sb.from('sanji_instagram_public_research').select('owner,attested_by,handle,profile_url,observed_at,topics,sources,capture_sha256,revoked_at').eq('owner',owner).eq('handle',body.handle).is('revoked_at',null).order('observed_at',{ascending:false}).limit(2));
+          if (!Array.isArray(rows)) throw unavailable();
+          return rows;
+        };
+        const rows = await readResearch();
+        const latest = await gate();
+        if (JSON.stringify(creator) !== JSON.stringify(latest)) throw unavailable();
+        const latestResearch = await readResearch();
+        if (JSON.stringify(rows) !== JSON.stringify(latestResearch)) throw unavailable();
+        // Equal-time evidence is ambiguous; never fall back to an older record when the newest is invalid.
+        const research = rows.length && !(rows.length > 1 && rows[0]?.observed_at === rows[1]?.observed_at) ? storedPublicResearch(rows[0],owner,body.handle,now()) : null;
+        return json({matched:true,noteId:body.noteId,creator:{id:creator.id,handle:creator.handle,nickname:publicText(creator.nickname,200),bio:publicText(creator.bio,4000),category:publicText(creator.category,1000),profileUrl:creator.profile_url,lastVerified:typeof creator.last_verified === 'string' && Number.isFinite(Date.parse(creator.last_verified)) && Date.parse(creator.last_verified) <= now() ? creator.last_verified : null,publicResearch:research,status:creator.status,assessment:creator.assessment}});
+      }
       if (path.endsWith('/targets')) {
         keys(body, ['handle']); const targetHandle = handle(body.handle);
         const rows = await query(sb.from('sanji_creator_recovery').select('id,handle,nickname,profile_url,entity_type,assessment,status').eq('owner',owner).ilike('handle',targetHandle.replace(/[\\%_]/g,'\\$&')).limit(2));

@@ -66,6 +66,7 @@ async function member() {
   return session;
 }
 async function edge(path, method, body, expectedOwner, stillActive) {
+  if (path === "/creator-manual-notes/context" && (typeof expectedOwner !== "string" || !expectedOwner || typeof stillActive !== "function" || !stillActive())) throw error("계정과 대상을 확인하세요.", 403);
   const session = await member();
   if (expectedOwner !== undefined && path === "/creator-instagram/transient-inbox" && session.user.id !== expectedOwner) { const e=error("계정이 변경됐습니다. 다시 확인하세요.",403); e.code="TRANSIENT_OWNER_CHANGED"; throw e; }
   if (expectedOwner !== undefined && path !== "/creator-instagram/transient-inbox") {
@@ -101,6 +102,10 @@ async function edge(path, method, body, expectedOwner, stillActive) {
   const data = await response
     .json()
     .catch(() => ({ error: "서버 응답을 읽지 못했습니다." }));
+  if (path === "/creator-manual-notes/context" || (path === "/creator-instagram/creator-context" && expectedOwner !== undefined)) {
+    const latest = await client.auth.getSession(), current = latest?.data?.session;
+    if (latest?.error || current?.user?.id !== expectedOwner || current?.access_token !== session.access_token || typeof stillActive !== "function" || !stillActive()) throw error("계정 또는 화면이 변경됐습니다. 다시 확인하세요.", 403);
+  }
   if (!response.ok) {
     if (data.code === "NOT_FOUND" || data.code === "BOOT_ERROR")
       throw error(
@@ -122,12 +127,36 @@ export async function manualWorkspaceApi(path, body, expectedOwner, stillActive)
   if (!MANUAL_OWNER_PATHS.has(path) || typeof expectedOwner !== "string" || !expectedOwner) throw error("계정과 대상을 확인하세요.", 403);
   return edge(path, "POST", body, expectedOwner, stillActive);
 }
-const MANUAL_NOTES_PATHS = new Set(["/creator-manual-notes/list", "/creator-manual-notes/save", "/creator-manual-notes/targets"]);
+const MANUAL_NOTES_PATHS = new Set(["/creator-manual-notes/list", "/creator-manual-notes/save", "/creator-manual-notes/targets", "/creator-manual-notes/context"]);
 export async function manualNotesApi(path, body, expectedOwner, stillActive) {
   if (!MANUAL_NOTES_PATHS.has(path) || typeof expectedOwner !== "string" || !expectedOwner || typeof stillActive !== "function") throw error("계정과 대상을 확인하세요.", 403);
-  const value = await edge(path, "POST", body, expectedOwner, stillActive);
+  let input = body;
+  if (path === "/creator-manual-notes/context") {
+    if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length !== 3 || Object.keys(body).some(k => !["noteId","creatorId","handle"].includes(k)) || ![body.noteId,body.creatorId].every(v => typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(v)) || typeof body.handle !== "string" || !/^[a-z0-9._]{1,30}$/.test(body.handle) || [".",".."].includes(body.handle)) throw error("저장된 메모와 대상을 확인하세요.", 400);
+    input = Object.freeze({noteId:body.noteId,creatorId:body.creatorId,handle:body.handle});
+  }
+  let contextToken;
+  if (path === "/creator-manual-notes/context") {
+    const initial = await client.auth.getSession();
+    if (initial?.error || initial?.data?.session?.user?.id !== expectedOwner || typeof initial.data.session.access_token !== "string" || !initial.data.session.access_token || !stillActive()) throw error("계정 또는 화면이 변경됐습니다.", 403);
+    contextToken = initial.data.session.access_token;
+  }
+  const value = await edge(path, "POST", input, expectedOwner, stillActive);
   const latest = await client.auth.getSession();
-  if (latest.error || latest.data?.session?.user?.id !== expectedOwner || !stillActive()) throw error("계정 또는 화면이 변경됐습니다.", 403);
+  if (latest.error || latest.data?.session?.user?.id !== expectedOwner || (contextToken !== undefined && latest.data?.session?.access_token !== contextToken) || !stillActive()) throw error("계정 또는 화면이 변경됐습니다.", 403);
+  if (path === "/creator-manual-notes/context" && (value?.matched !== true || value.noteId !== input.noteId || value.creator?.id !== input.creatorId || value.creator?.handle !== input.handle)) throw error("저장된 메모와 조회 결과가 일치하지 않습니다.", 409);
+  return value;
+}
+export async function creatorProposalContextApi(body, expectedOwner, stillActive) {
+  if (typeof expectedOwner !== "string" || !expectedOwner || typeof stillActive !== "function" || !stillActive()) throw error("계정과 대상을 확인하세요.", 403);
+  if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length !== 1 || Object.keys(body)[0] !== "peerId" || typeof body.peerId !== "string" || !/^\d{1,100}$/.test(body.peerId)) throw error("상대 계정을 확인하세요.", 400);
+  const input = Object.freeze({peerId:body.peerId}), initial = await client.auth.getSession();
+  if (initial?.error || initial?.data?.session?.user?.id !== expectedOwner || typeof initial.data.session.access_token !== "string" || !initial.data.session.access_token || !stillActive()) throw error("계정 또는 화면이 변경됐습니다.", 403);
+  const token = initial.data.session.access_token;
+  const value = await edge("/creator-instagram/creator-context", "POST", input, expectedOwner, stillActive);
+  const latest = await client.auth.getSession();
+  if (latest?.error || latest?.data?.session?.user?.id !== expectedOwner || latest?.data?.session?.access_token !== token || !stillActive()) throw error("계정 또는 화면이 변경됐습니다.", 403);
+  if (value?.matched !== true || typeof value.peerUsername !== "string" || !/^[A-Za-z0-9._]{1,30}$/.test(value.peerUsername) || [".",".."].includes(value.peerUsername) || typeof value.creator?.id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value.creator.id) || typeof value.creator.handle !== "string" || value.creator.handle !== value.peerUsername.toLowerCase()) throw error("상대 계정과 크리에이터 조회 결과가 일치하지 않습니다.", 409);
   return value;
 }
 export async function transientInboxApi(body, expectedOwner) {
@@ -185,8 +214,9 @@ export async function workspaceApi(path, method = "GET", body) {
   }
   const session = await member();
   if (path === "/state") {
+    const ownerId = session.user.id;
     const [rows, outbox, suppression] = await Promise.all([
-      loadStableStateRecords({owner:session.user.id,fetchPage:async({owner,cursor,summary,pageSize})=>{
+      loadStableStateRecords({owner:ownerId,fetchPage:async({owner,cursor,summary,pageSize})=>{
         let q=client.from("sanji_records").select(summary?"id,owner,version,updated":"*").eq("owner",owner).order("id",{ascending:true}).limit(pageSize);
         if(cursor)q=q.gt("id",cursor);
         return await result(q);
@@ -215,6 +245,7 @@ export async function workspaceApi(path, method = "GET", body) {
     return {
       candidates: records.filter((r) => r._kind === "candidate"),
       deals: records.filter((r) => r._kind === "deal"),
+      catalog: {complete:true,expectedCount:records.filter((r) => r._kind === "deal").length,observedAt:new Date().toISOString(),source:"owner-scoped stable state scan",scope:"owner_saved_deals",ownerId},
       templates: records.filter((r) => r._kind === "template"),
       threads: records.filter((r) => r._kind === "thread"),
       outbox,

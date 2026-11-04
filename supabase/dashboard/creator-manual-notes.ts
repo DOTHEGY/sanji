@@ -57,9 +57,41 @@ function publicManualNote(row) {
   const p = row.payload;
   return { id: row.note_id, creatorId: row.creator_id, handle: row.handle, recordedAt: row.recorded_at, supersedesId: row.supersedes_id || null, observedAt: p.observedAt, sourceUrl: p.sourceUrl, inboundWhen: p.inboundWhen, summary: p.summary, draft: p.draft, intent: p.intent, afterInboundOutbound: p.afterInboundOutbound, recorderType: p.recorderType, recordType: "manual_historical_note", latestVerified: false, dispatchState: "not_sent" };
 }
-async function readInput(req) {
+var publicTopics = /* @__PURE__ */ new Set(["travel", "drone_photography", "travel_sponsorships", "packaged_vegetable_drink", "parenting", "household_bath", "food_easy_meals", "restaurants", "home_interior", "home_cafe", "dining", "household_lifestyle", "beauty", "fashion", "fitness", "pets", "outdoors", "baking", "coffee", "food", "lifestyle", "photography"]);
+function publicProfile(value, target) {
+  if (typeof value !== "string" || value.length > 200) return false;
+  try {
+    const u = new URL(value);
+    return u.protocol === "https:" && ["instagram.com", "www.instagram.com"].includes(u.hostname) && !u.port && !u.username && !u.password && !u.search && !u.hash && u.pathname.replace(/\/$/, "").toLowerCase() === "/" + target;
+  } catch {
+    return false;
+  }
+}
+function publicText(value, max) {
+  if (typeof value !== "string" || value.length > max || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value)) return "";
+  if (/(?:password|access[ _-]?token|refresh[ _-]?token|api[ _-]?key|client[ _-]?secret|authorization\s*:|bearer\s+)/i.test(value)) return "";
+  return value.replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "").replace(/(?:\+?\d[\d\s().-]{6,}\d)/g, "").trim();
+}
+function storedPublicResearch(row, owner, target, now) {
+  if (!object(row) || row.owner !== owner || row.attested_by !== owner || row.handle !== target || row.revoked_at !== null || !publicProfile(row.profile_url, target)) return null;
+  const at = typeof row.observed_at === "string" && /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,6})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(row.observed_at) ? Date.parse(row.observed_at) : NaN;
+  const calendar = Number.isFinite(at) ? /* @__PURE__ */ new Date(row.observed_at.slice(0, 10) + "T00:00:00Z") : null;
+  if (!Number.isFinite(at) || !calendar || !Number.isFinite(calendar.getTime()) || calendar.toISOString().slice(0, 10) !== row.observed_at.slice(0, 10) || at > now || !/^[a-f0-9]{64}$/.test(row.capture_sha256 || "") || !Array.isArray(row.topics) || !row.topics.length || row.topics.length > 10 || row.topics.some((v) => typeof v !== "string" || !publicTopics.has(v)) || !Array.isArray(row.sources) || !row.sources.length || row.sources.length > 10) return null;
+  const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (row.sources.some((value) => {
+    if (typeof value !== "string" || value.length > 300) return true;
+    try {
+      const u = new URL(value);
+      return u.protocol !== "https:" || u.hostname !== "www.instagram.com" || !!u.port || !!u.username || !!u.password || !!u.search || !!u.hash || !new RegExp("^/" + escaped + "/(?:p|reel)/[A-Za-z0-9_-]{1,100}/?$", "i").test(u.pathname);
+    } catch {
+      return true;
+    }
+  })) return null;
+  return { profileUrl: row.profile_url, observedAt: row.observed_at, topics: [...new Set(row.topics)], sources: [...new Set(row.sources)], captureSha256: row.capture_sha256, provenance: "operator_attested", researchStatus: now - at > 7 * 864e5 ? "historical" : "current_observation_record" };
+}
+async function readInput(req, maxBytes = 65536) {
   const declared = req.headers.get("content-length");
-  if (declared && (!/^\d+$/.test(declared) || Number(declared) > 65536)) {
+  if (declared && (!/^\d+$/.test(declared) || Number(declared) > maxBytes)) {
     await req.body?.cancel().catch(() => {
     });
     throw new ManualNoteError(413, "INPUT_TOO_LARGE", "\uBA54\uBAA8 \uC785\uB825 \uD06C\uAE30\uB97C \uC904\uC5EC \uC8FC\uC138\uC694.");
@@ -72,7 +104,7 @@ async function readInput(req) {
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > 65536) {
+      if (size > maxBytes) {
         await reader.cancel().catch(() => {
         });
         throw new ManualNoteError(413, "INPUT_TOO_LARGE", "\uBA54\uBAA8 \uC785\uB825 \uD06C\uAE30\uB97C \uC904\uC5EC \uC8FC\uC138\uC694.");
@@ -108,14 +140,43 @@ function creatorManualNotesHandler({ sb: sb2, env: env2, now = () => Date.now() 
       if (parts[offset] !== "creator-manual-notes") return json({ error: "\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uACBD\uB85C\uC785\uB2C8\uB2E4." }, 404);
       const path = "/" + parts.slice(offset + 1).join("/");
       if (path === "/health" && req.method === "GET") return json({ ok: true, capability: "manual_historical_notes", sendingEnabled: false });
-      if (req.method !== "POST" || !["/creator-manual-notes/targets", "/creator-manual-notes/list", "/creator-manual-notes/save"].includes(path)) return json({ error: "\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uACBD\uB85C\uC785\uB2C8\uB2E4." }, 404);
+      if (req.method !== "POST" || !["/creator-manual-notes/targets", "/creator-manual-notes/list", "/creator-manual-notes/save", "/creator-manual-notes/context"].includes(path)) return json({ error: "\uC9C0\uC6D0\uD558\uC9C0 \uC54A\uB294 \uACBD\uB85C\uC785\uB2C8\uB2E4." }, 404);
       const authorization = req.headers.get("authorization") || "";
       if (!authorization.startsWith("Bearer ") || !authorization.slice(7)) throw new ManualNoteError(401, "AUTH_REQUIRED", "\uB85C\uADF8\uC778\uC774 \uD544\uC694\uD569\uB2C8\uB2E4.");
       const auth = await sb2.auth.getUser(authorization.slice(7)), user = auth?.data?.user;
       if (auth?.error || !user || !validUuid(user.id)) throw new ManualNoteError(401, "AUTH_REQUIRED", "\uB85C\uADF8\uC778 \uC0C1\uD0DC\uB97C \uD655\uC778\uD558\uC138\uC694.");
       const member = await query(sb2.from("sanji_members").select("user_id").eq("user_id", user.id).maybeSingle());
-      if (!member) throw new ManualNoteError(403, "MEMBERSHIP_REQUIRED", "\uC811\uADFC \uAD8C\uD55C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
-      const owner = user.id, body = await readInput(req);
+      if (!member || member.user_id !== user.id) throw new ManualNoteError(403, "MEMBERSHIP_REQUIRED", "\uC811\uADFC \uAD8C\uD55C\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.");
+      const owner = user.id, body = await readInput(req, path.endsWith("/context") ? 1024 : 65536);
+      if (path.endsWith("/context")) {
+        keys(body, ["noteId", "creatorId", "handle"]);
+        if (!validUuid(body.noteId) || !validUuid(body.creatorId) || body.noteId !== body.noteId.toLowerCase() || body.creatorId !== body.creatorId.toLowerCase() || body.handle !== handle(body.handle)) throw invalid();
+        const unavailable = () => new ManualNoteError(404, "CONTEXT_UNAVAILABLE", "\uC800\uC7A5\uB41C \uBA54\uBAA8\uC640 \uD06C\uB9AC\uC5D0\uC774\uD130\uB97C \uC815\uD655\uD788 \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uBAA9\uB85D\uC744 \uB2E4\uC2DC \uD655\uC778\uD558\uC138\uC694.");
+        const gate = async () => {
+          const notes = await query(sb2.from("sanji_creator_manual_notes").select("owner,note_id,creator_id,handle,supersedes_id").eq("owner", owner).eq("note_id", body.noteId).limit(2));
+          const n = Array.isArray(notes) && notes.length === 1 ? notes[0] : null;
+          if (!n || n.owner !== owner || n.note_id !== body.noteId || n.creator_id !== body.creatorId || n.handle !== body.handle || n.supersedes_id !== null) throw unavailable();
+          const corrections = await query(sb2.from("sanji_creator_manual_notes").select("note_id").eq("owner", owner).eq("creator_id", body.creatorId).eq("supersedes_id", body.noteId).limit(1));
+          if (!Array.isArray(corrections) || corrections.length) throw unavailable();
+          const rows2 = await query(sb2.from("sanji_creator_recovery").select("owner,id,handle,nickname,bio,category,profile_url,link_status,last_verified,entity_type,assessment,status").eq("owner", owner).ilike("handle", body.handle.replace(/[\\%_]/g, "\\$&")).limit(2));
+          const c = Array.isArray(rows2) && rows2.length === 1 ? rows2[0] : null;
+          if (!c || c.owner !== owner || c.id !== body.creatorId || c.handle !== body.handle || c.entity_type !== "creator_evidence" || !["candidate", "explore", "review"].includes(c.assessment) || !["new", "hold", "contacted"].includes(c.status) || c.link_status !== "source_confirmed" || !publicProfile(c.profile_url, body.handle)) throw unavailable();
+          return c;
+        };
+        const creator = await gate();
+        const readResearch = async () => {
+          const rows2 = await query(sb2.from("sanji_instagram_public_research").select("owner,attested_by,handle,profile_url,observed_at,topics,sources,capture_sha256,revoked_at").eq("owner", owner).eq("handle", body.handle).is("revoked_at", null).order("observed_at", { ascending: false }).limit(2));
+          if (!Array.isArray(rows2)) throw unavailable();
+          return rows2;
+        };
+        const rows = await readResearch();
+        const latest = await gate();
+        if (JSON.stringify(creator) !== JSON.stringify(latest)) throw unavailable();
+        const latestResearch = await readResearch();
+        if (JSON.stringify(rows) !== JSON.stringify(latestResearch)) throw unavailable();
+        const research = rows.length && !(rows.length > 1 && rows[0]?.observed_at === rows[1]?.observed_at) ? storedPublicResearch(rows[0], owner, body.handle, now()) : null;
+        return json({ matched: true, noteId: body.noteId, creator: { id: creator.id, handle: creator.handle, nickname: publicText(creator.nickname, 200), bio: publicText(creator.bio, 4e3), category: publicText(creator.category, 1e3), profileUrl: creator.profile_url, lastVerified: typeof creator.last_verified === "string" && Number.isFinite(Date.parse(creator.last_verified)) && Date.parse(creator.last_verified) <= now() ? creator.last_verified : null, publicResearch: research, status: creator.status, assessment: creator.assessment } });
+      }
       if (path.endsWith("/targets")) {
         keys(body, ["handle"]);
         const targetHandle = handle(body.handle);
