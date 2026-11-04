@@ -1355,20 +1355,30 @@ function upcomingMeetings(){
  if(!rows.length)return '';
  return '<section class="panel"><h2>확정된 미팅 일정</h2>'+rows.map(c=>'<div class="task"><div><strong>'+esc(c.meeting.companyName||c.name)+'</strong><p>'+esc(localTime(c.meeting.at))+' KST · '+esc(c.meeting.mode||'방식 미확인')+'</p><small>'+esc(c.meeting.location||(c.meeting.mode==='비대면'?'접속 링크 미정':'장소 미정'))+' · 운영자가 알려준 일정</small></div>'+button('업체·회신 기록','candidate',c.id)+'</div>').join('')+'</section>';
 }
+let trackingReportRequest=0;
+function trackingLoadError(error,scope){
+ const timeout=/statement timeout|timed out|timeout/i.test(String(error?.message||""));
+ return '이메일 '+scope+(timeout?' 조회 시간이 초과됐습니다.':' 조회에 실패했습니다.')+' 잠시 후 다시 시도해 주세요. 기존 이메일 기능은 유지됩니다.';
+}
 async function emailTrackingPage(){
  $("#app").innerHTML=head("이메일 성과·열람 추정","사람의 회신을 우선 확인하고, 이미지 요청을 보조 지표로 사용합니다.")+'<div class="panel">불러오는 중…</div>';
  try{const state=await api("/email-tracking");emailTrackingState=state;
  $("#app").innerHTML=head("이메일 성과","답장·미팅·열람 추정 현황을 확인하세요.")+'<details class="panel"><summary>추적 상태·집계 조건</summary><p class="notice">'+esc(state.activationApproved?"운영 추적 활성화 승인 적용됨":"운영 활성화 승인 전 · 실제 추적 기본 미적용")+'</p><p class="fine">'+esc(state.provider)+' · '+esc(trackingCaveat)+'</p><form id="tracking-report-form" class="form-grid"><label class="field">발송일 기준 최근 기간<select name="days"><option value="30">30일</option><option value="7">7일</option><option value="90">90일</option></select></label><label class="field">캠페인<select name="campaign"><option value="">전체</option>'+state.campaigns.map(c=>'<option value="'+esc(c.id)+'" '+(trackingSelectedCampaign===c.id?"selected":"")+'>'+esc(c.name)+'</option>').join("")+'</select></label><label class="field">회사·크리에이터<select name="target"><option value="">전체</option>'+data.candidates.map(c=>'<option value="'+esc(c.id)+'" '+(trackingSelectedTarget===c.id?"selected":"")+'>'+esc(c.name)+' / '+esc(c.kind)+'</option>').join("")+'</select></label>'+field("includeAutomated","자체 분류한 자동 요청 의심 이벤트도 열람 추정률에 포함",false,"checkbox")+'<button type="submit">집계 보기</button></form></details><div id="tracking-report"></div>'+upcomingMeetings()+'<details class="panel"><summary>서비스 추적·보관 기간</summary><form id="tracking-policy-form">'+field("enabled","서비스 이메일 추적 켜기",state.policy.enabled,"checkbox")+field("retentionDays","발송 건별 보관 기간 (7~90일) · 기존 메시지는 발송 시 설정 유지",state.policy.retention_days,"number")+'<p class="fine">운영 활성화 승인 전에는 설정을 켜도 픽셀을 삽입하지 않습니다. 서비스·캠페인을 끄면 이미 보낸 픽셀의 신규 수집도 중단됩니다.</p><button type="submit">설정 저장</button></form></details><details class="panel"><summary>캠페인·고지 설정</summary>'+state.campaigns.map(c=>'<div class="task"><strong>'+esc(c.name)+'</strong><span>'+(c.scope==="creator"?"크리에이터":"브랜드")+' · '+(c.enabled?"설정 켜짐":"꺼짐")+'</span>'+button("설정·고지 편집","tracking-campaign",c.id)+'</div>').join("")+button("캠페인 추가","tracking-campaign")+'</details>';
  await trackingLoadReport($("#tracking-report-form"));
- }catch(e){$("#app").innerHTML=head("이메일 성과·추적","")+'<div class="notice">추적 서버·DB가 아직 적용되지 않았습니다. 기존 이메일 기능은 유지됩니다. '+esc(e.message)+'</div>';}
+ }catch(e){$("#app").innerHTML=head("이메일 성과·추적","")+'<div class="notice" role="alert">'+esc(trackingLoadError(e,'추적 설정'))+'</div>';}
 }
 async function trackingLoadReport(form){
+ const reportBox=$('#tracking-report');if(!form||!reportBox)return;
+ const request=++trackingReportRequest,stillCurrent=()=>request===trackingReportRequest&&form.isConnected&&reportBox.isConnected;
+ reportBox.innerHTML='<div class="panel" role="status">집계를 불러오는 중…</div>';
+ try{
  const f=new FormData(form),end=new Date(),start=new Date(+end-Number(f.get("days"))*86400000),params=new URLSearchParams({from:start.toISOString(),to:end.toISOString(),includeAutomated:String(f.has("includeAutomated"))});
  if(f.get("campaign"))params.set("campaign",f.get("campaign"));if(f.get("target"))params.set("target",f.get("target"));
  const report=await api("/email-tracking/report?"+params),s=report.summary||{};
+ if(!stillCurrent())return;
  const replyRows=(report.rows||[]).filter(r=>r.human_reply||r.conversation_reply||r.manual_reply),otherRows=(report.rows||[]).filter(r=>!replyRows.includes(r));
  const table=rows=>'<div class="table-scroll"><table><thead><tr><th>업체·메일</th><th>답장</th><th>열람 추정</th></tr></thead><tbody>'+rows.map(r=>'<tr><td>'+esc(targetName(r.target))+'<br>'+button(esc(r.subject||'메일'),'tracking-detail',r.id)+'</td><td>'+esc(r.human_reply?'이 메일에 직접 회신':r.email_reply?'이메일 대화 회신':r.manual_reply?'문자·전화·수동 회신':r.conversation_reply?'연결 대화 회신':'회신 감지 없음')+'</td><td>'+tag(r.label)+(r.mode==='shared'?'<small>공용 본문 · 수신자별 구분 불가</small>':'')+'</td></tr>').join('')+'</tbody></table></div>';
- $('#tracking-report').innerHTML='<div class="actions">'+button('Gmail 회신 새로고침','tracking-sync-replies')+'</div><p class="fine">최근 '+Number(f.get('days'))+'일 발송 기준 · 접수 '+Number(s.sent||s.sent_targets||0)+'통 / '+Number(s.sent_targets||0)+'곳</p><div class="stats">'+
+ reportBox.innerHTML='<div class="actions">'+button('Gmail 회신 새로고침','tracking-sync-replies')+'</div><p class="fine">최근 '+Number(f.get('days'))+'일 발송 기준 · 접수 '+Number(s.sent||s.sent_targets||0)+'통 / '+Number(s.sent_targets||0)+'곳</p><div class="stats">'+
  '<div class="stat"><label>사람의 회신율 · 답장률</label><strong>'+trackingPercent(s.replied_targets,s.sent_targets)+'</strong><small>'+Number(s.replied_targets||0)+' / '+Number(s.sent_targets||0)+'곳 · 자동 응답 제외</small></div>'+
  '<div class="stat"><label>미팅 성사율</label><strong>'+trackingPercent(s.meeting_targets,s.sent_targets)+'</strong><small>'+Number(s.meeting_targets||0)+' / '+Number(s.sent_targets||0)+'곳 · 운영자가 확인한 일정</small></div>'+
  '<div class="stat"><label>열람 추정률</label><strong>'+trackingPercent(s.estimated,s.tracked)+'</strong><small>'+Number(s.estimated||0)+' / 추적 적용 '+Number(s.tracked||0)+'통 · 사람 열람 여부 확정 불가</small></div>'+
@@ -1377,7 +1387,11 @@ async function trackingLoadReport(form){
  '<section class="panel"><h2>답장 온 업체</h2>'+(replyRows.length?table(replyRows):'<p>현재 집계 기간에 연결된 사람 회신이 없습니다.</p>')+'</section>'+
  '<details class="panel"><summary>나머지 발송 내역 '+otherRows.length+'통 · 회신 감지 없음</summary>'+table(otherRows)+'</details>'+
  '<details class="panel"><summary>지표 기준·추적 한계</summary><p>'+esc(localTime(report.from))+' ~ '+esc(localTime(report.to))+' 발송 기준. 답장률·미팅 성사율은 중복 제거한 접수 업체 수가 분모입니다. 열람 추정률은 추적 적용·접수 메일 수가 분모이며 과거 추적 미적용 메일은 제외합니다.</p><p>자동 이미지 요청 의심 '+(report.includeAutomated?'포함':'제외')+' · 내부 테스트 제외. '+esc(trackingCaveat)+'</p><p>미팅은 운영자가 기록한 일정이며 공동구매 완료는 별도 확인 기록이 없어 미집계입니다. 미팅 일정은 선택한 발송 기간과 별도로 아래에 표시합니다.</p></details>';
-
+ }catch(e){
+  if(!stillCurrent())return;
+  reportBox.innerHTML='<div class="notice" role="alert">'+esc(trackingLoadError(e,'성과 집계'))+'<p>집계 기간을 줄이거나 “집계 보기”를 눌러 다시 시도하세요.</p></div>';
+  const conditions=form.closest('details');if(conditions)conditions.open=true;
+ }
 }
 function trackingCampaignForm(id=""){
  const c=emailTrackingState?.campaigns.find(c=>c.id===id)||{};
