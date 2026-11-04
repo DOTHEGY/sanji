@@ -135,7 +135,7 @@ function creatorInstagramManualInbox({ sb: sb2, query: query2, connection: conne
       const page = await get("me/conversations", params);
       if (!Array.isArray(page?.data) || page.data.length > 1) throw Error("\uB300\uD654 \uBAA9\uB85D \uD398\uC774\uC9C0 \uD06C\uAE30 \uC624\uB958");
       const more = !!page?.paging?.next, after = page?.paging?.cursors?.after, providerNextHash = await digest2([more, validCursor(after) ? after : null]);
-      if (resume && resume.providerNextHash !== providerNextHash) return { processed: 0, matched: 0, unverified: 0, scanned: 0, complete: false, nextCursor: null, limitation: LIMITATION + " Meta \uB300\uD654 \uBAA9\uB85D\uC774 \uC870\uD68C \uC911 \uBCC0\uACBD\uB418\uC5B4 \uC911\uB2E8\uD588\uC2B5\uB2C8\uB2E4. \uACB0\uACFC\uAC00 \uBD88\uC644\uC804\uD569\uB2C8\uB2E4." };
+      if (resume && resume.providerNextHash !== providerNextHash) return { processed: 0, matched: 0, unverified: 0, scanned: 0, complete: false, partial: true, nextCursor: null, limitation: LIMITATION + " Meta \uB300\uD654 \uBAA9\uB85D\uC774 \uC870\uD68C \uC911 \uBCC0\uACBD\uB418\uC5B4 \uC911\uB2E8\uD588\uC2B5\uB2C8\uB2E4. \uACB0\uACFC\uAC00 \uBD88\uC644\uC804\uD569\uB2C8\uB2E4." };
       let nextCursor = null, partial = more && !validCursor(after), processed = 0, matched = 0, unverified = 0, stopReason = "";
       const limitation = () => LIMITATION + (stopReason ? " " + stopReason : "");
       const issueSync = async (value) => {
@@ -161,36 +161,36 @@ function creatorInstagramManualInbox({ sb: sb2, query: query2, connection: conne
         return [...history, hash];
       };
       const nextProviderHistory = more && validCursor(after) ? await addCursor(after, providerHistory) : null;
-      if (more && validCursor(after) && !nextProviderHistory) return { processed, matched, unverified, scanned: 0, complete: false, nextCursor: null, limitation: limitation() };
+      if (more && validCursor(after) && !nextProviderHistory) return { processed, matched, unverified, scanned: 0, complete: false, partial: true, nextCursor: null, limitation: limitation() };
       const nextProvider = async () => nextProviderHistory ? await issueSync({ kind: "sync", phase: "provider", owner, account: a.id, since, page: after, providerHistory: nextProviderHistory, messageHistory: [] }) : null;
       const c = page.data[0];
       if (!c) {
         if (threadId || more) throw Error("\uB300\uD654 \uBAA9\uB85D\uC774 \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4");
-        return { processed, matched, unverified, scanned: 0, complete: true, nextCursor: null, limitation: limitation() };
+        return { processed, matched, unverified, scanned: 0, complete: true, partial: false, nextCursor: null, limitation: limitation() };
       }
       if (typeof c.id !== "string" || !c.id || c.id.length > 500 || [".", ".."].includes(c.id) || threadId && c.id !== threadId || !Array.isArray(c.participants?.data) || c.participants.data.length !== 2 || !!c.participants?.paging?.next) {
         if (threadId) throw Error("\uB300\uD654\uAC00 \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4");
-        return { processed, matched, unverified: 1, scanned: 1, complete: false, nextCursor: await nextProvider(), limitation: limitation() };
+        return { processed, matched, unverified: 1, scanned: 1, complete: false, partial: true, nextCursor: await nextProvider(), limitation: limitation() };
       }
       const ps = c.participants.data, own = ps.filter((x) => String(x.id) === a.id), peers = ps.filter((x) => String(x.id) !== a.id);
       if (own.length !== 1 || peers.length !== 1) {
         if (threadId) throw Error("\uB300\uD654\uAC00 \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4");
-        return { processed, matched, unverified: 1, scanned: 1, complete: false, nextCursor: await nextProvider(), limitation: limitation() };
+        return { processed, matched, unverified: 1, scanned: 1, complete: false, partial: true, nextCursor: await nextProvider(), limitation: limitation() };
       }
       const peer = peers[0], peerId = String(peer?.id || ""), username = String(peer?.username || "").toLowerCase(), updated = Date.parse(c.updated_time), start = Date.parse(koreanTenDayStart());
       if (!/^\d{1,100}$/.test(peerId) || !validHandle(username)) {
         if (threadId) throw Error("\uB300\uD654\uAC00 \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4");
-        return { processed, matched, unverified: 1, scanned: 1, complete: false, nextCursor: await nextProvider(), limitation: limitation() };
+        return { processed, matched, unverified: 1, scanned: 1, complete: false, partial: true, nextCursor: await nextProvider(), limitation: limitation() };
       }
       if (Number.isFinite(updated) && updated < start) {
         if (threadId) throw Error("\uB300\uD654\uAC00 \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4");
-        return { processed, matched, unverified, scanned: 1, complete: !more && !partial, nextCursor: await nextProvider(), limitation: limitation() };
+        return { processed, matched, unverified, scanned: 1, complete: !more && !partial, partial, nextCursor: await nextProvider(), limitation: limitation() };
       }
       if (resume && peerId !== resume.peer) throw Error(cursors.error);
       const syncId = crypto.randomUUID(), target = await query2(sb2.rpc("sanji_ig_manual_acquire_target", { p_owner: owner, p_account: a.id, p_peer: peerId, p_username: username, p_conversation: c.id, p_updated: Number.isFinite(updated) ? new Date(updated).toISOString() : null, p_sync: syncId, p_expected_creator: resume?.creator || null, p_expected_creator_generation: resume?.creatorGeneration || null, p_expected_conversation_generation: resume?.generation || null, p_expected_sync: resume?.syncId || null }));
       if (!target) {
         if (threadId) throw Error("\uB300\uD654\uAC00 \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4");
-        return { processed, matched, unverified: 1, scanned: 1, complete: false, nextCursor: await nextProvider(), limitation: limitation() };
+        return { processed, matched, unverified: 1, scanned: 1, complete: false, partial: true, nextCursor: await nextProvider(), limitation: limitation() };
       }
       if (!validGeneration(target.creatorId) || !validGeneration(target.creatorGeneration) || !validGeneration(target.conversationGeneration)) throw Error("\uB300\uD654 \uC0C1\uD0DC\uAC00 \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4");
       matched++;
@@ -211,8 +211,11 @@ function creatorInstagramManualInbox({ sb: sb2, query: query2, connection: conne
       if (offset > limit) throw Error("\uBA54\uC2DC\uC9C0 \uBAA9\uB85D\uC774 \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4");
       const prefix = data.slice(0, offset).map((x) => x?.id);
       if (prefix.some((x) => typeof x !== "string" || !x || x.length > 500) || threadId && await hashIds(prefix) !== expectedHash) throw Error("\uBA54\uC2DC\uC9C0 \uBAA9\uB85D\uC774 \uBCC0\uACBD\uB410\uC2B5\uB2C8\uB2E4");
-      const nextMessage = messagePage?.paging?.cursors?.after, nextMessageHistory = messagePage?.paging?.next && validCursor(nextMessage) ? await addCursor(nextMessage, messageHistory) : null;
-      if (messagePage?.paging?.next && validCursor(nextMessage) && !nextMessageHistory) return { processed, matched, unverified, scanned: 1, complete: false, nextCursor: null, limitation: limitation() };
+      const nextMessage = messagePage?.paging?.cursors?.after, messageRepeated = !!messagePage?.paging?.next && validCursor(nextMessage) && messageHistory.includes(await digest2(nextMessage)), nextMessageHistory = messagePage?.paging?.next && validCursor(nextMessage) ? await addCursor(nextMessage, messageHistory) : null;
+      if (messagePage?.paging?.next && validCursor(nextMessage) && !nextMessageHistory) {
+        const nextConversationCursor = messageRepeated ? await nextProvider() : null;
+        return { processed, matched, unverified, scanned: 1, complete: false, partial: true, nextCursor: null, ...nextConversationCursor ? { nextConversationCursor, gap: { kind: "message_cursor_repeated", messagesComplete: false, incompleteConversations: 1 } } : {}, limitation: limitation() };
+      }
       let uncertain = !!messagePage?.paging?.next || data.length > 4 || data.length === 0 || offset > 0 || !!messageCursor || !Number.isFinite(updated);
       const observed = [], pending = [];
       for (const m of data.slice(offset, end)) {
@@ -255,9 +258,6 @@ function creatorInstagramManualInbox({ sb: sb2, query: query2, connection: conne
         const ids = data.slice(0, end).map((x) => x?.id);
         if (ids.some((x) => typeof x !== "string" || !x || x.length > 500)) throw Error("\uBA54\uC2DC\uC9C0 \uC2DD\uBCC4\uC790 \uC624\uB958");
         nextCursor = await issueSync({ kind: "sync", phase: "resume", owner, account: a.id, since, page: providerCursor || null, message: messageCursor || null, thread: c.id, offset: end, hash: await hashIds(ids), peer: peerId, creator: creator.id, creatorGeneration, generation, syncId, providerNextHash, providerHistory, messageHistory });
-      } else if (messagePage?.paging?.next && data.length === 0) {
-        nextCursor = null;
-        partial = true;
       } else if (messagePage?.paging?.next) {
         if (nextMessageHistory) nextCursor = await issueSync({ kind: "sync", phase: "resume", owner, account: a.id, since, page: providerCursor || null, message: nextMessage, thread: c.id, offset: 0, hash: await hashIds([]), peer: peerId, creator: creator.id, creatorGeneration, generation, syncId, providerNextHash, providerHistory, messageHistory: nextMessageHistory });
         else {
@@ -265,7 +265,7 @@ function creatorInstagramManualInbox({ sb: sb2, query: query2, connection: conne
           partial = true;
         }
       } else nextCursor = await nextProvider();
-      return { processed, matched, unverified, scanned: 1, complete: !nextCursor && !partial && !more, nextCursor, limitation: limitation() };
+      return { processed, matched, unverified, scanned: 1, complete: !nextCursor && !partial && !more, partial, nextCursor, limitation: limitation() };
     } catch (e) {
       if (e?.status === 429) {
         e.retryCursor = null;

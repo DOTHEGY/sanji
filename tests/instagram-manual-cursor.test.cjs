@@ -10,3 +10,66 @@ test('sync slots bind exact generations, reject extra fields and never contain r
 test('trigger executes for service role without direct function EXECUTE grant',async()=>{const {db,cursor,genA}=await setup();try{await db.exec('grant select on public.sanji_creator_recovery to service_role;set role service_role');assert.equal((await db.query("select has_function_privilege('service_role','public.sanji_ig_manual_cursor_anchor_guard()','EXECUTE') p")).rows[0].p,false);const data={owner:A,account:'42',kind:'directory',creator:C,creatorGeneration:genA,peer:'43',generation:G,since:SINCE},token=await cursor.issue(data);assert.equal((await cursor.read(token,{owner:A,account:'42',kind:'directory'})).creator,C);}finally{await db.close();}});
 test('bounded sync histories fit the 20KB database limit and reject malformed or oversized histories',async()=>{const {db,cursor,genA}=await setup();try{const hashes=Array.from({length:100},(_,i)=>i.toString(16).padStart(64,'0')),resume={owner:A,account:'42',kind:'sync',since:SINCE,phase:'resume',page:'p'.repeat(512),message:'m'.repeat(512),thread:'t'.repeat(500),offset:996,hash:'a'.repeat(64),providerNextHash:'b'.repeat(64),peer:'43',creator:C,creatorGeneration:genA,generation:G,syncId:G,providerHistory:hashes,messageHistory:hashes};await db.query("update public.sanji_ig_manual_conversations set conversation_id=$2 where owner=$1 and peer_id='43'",[A,resume.thread]);const token=await cursor.issue(resume),row=(await db.query('select octet_length(payload::text) size from public.sanji_ig_manual_cursors where owner=$1',[A])).rows[0];assert.ok(row.size<=20000,`payload is ${row.size}`);assert.equal(syncCursorPayloadFits(resume),true);const multibyte={...resume,thread:'한'.repeat(500)};assert.equal(syncCursorPayloadFits(multibyte),true);assert.ok((await db.query('select octet_length($1::jsonb::text) n',[multibyte])).rows[0].n<20000);assert.deepEqual(await cursor.read(token,{owner:A,account:'42',kind:'sync'}),resume);await assert.rejects(()=>cursor.issue({...resume,providerHistory:[...hashes,'f'.repeat(64)]}),/check constraint/i);await assert.rejects(()=>cursor.issue({...resume,messageHistory:['not-a-hash']}),/check constraint/i);await assert.rejects(()=>cursor.issue({...resume,messageHistory:'not-an-array'}),/check constraint/i);}finally{await db.close();}});
 test('content conflict blocks thread and sync cursor issuance but still permits directory anchor',async()=>{const {db,cursor,genA}=await setup();try{await db.query("update public.sanji_ig_manual_conversations set content_conflict=true where owner=$1 and peer_id='43'",[A]);const common={owner:A,account:'42',creator:C,creatorGeneration:genA,peer:'43',generation:G,since:SINCE};const directory=await cursor.issue({...common,kind:'directory'});assert.match(directory,/^[A-Za-z0-9_-]{43}$/);await assert.rejects(()=>cursor.issue({...common,kind:'thread',at:AT,messageId:'fixture'}),/cursor anchor/);await assert.rejects(()=>cursor.issue({...common,kind:'sync',phase:'resume',page:null,message:null,thread:'thread43',offset:4,hash:'a'.repeat(64),providerNextHash:'b'.repeat(64),syncId:G,providerHistory:[],messageHistory:[]}),/cursor anchor/);}finally{await db.close();}});
+
+test('real scanner empty-page resume and provider cursor payloads satisfy the unchanged SQL contract',async()=>{
+ const {creatorInstagramManualInbox}=require('../supabase/functions/_shared/creator-instagram-manual-inbox.ts');
+ const {db,cursor}=await setup();
+ try{
+  await db.query('insert into public.sanji_connections values($1,$2,$3)',[A,'instagram:42',{connected:true,apiVerified:true,username:'valu_est',accountId:'42'}]);
+  const issued=[],calls=[],fingerprint='a'.repeat(64),now=new Date().toISOString();let repeatNext=false;
+  const metadata={id:'thread43',updated_time:now,participants:{data:[{id:'42',username:'valu_est'},{id:'43',username:'one'}]}};
+  // Run the scanner's actual query and payload construction against PGlite, not
+  // a hand-authored cursor shape or the permissive in-memory backend fixture.
+  const identifier=name=>{assert.match(name,/^[a-z_]+$/);return '"'+name+'"';};
+  class Query{
+   constructor(table){assert.ok(['sanji_connections','sanji_ig_manual_conversations'].includes(table));this.table=table;this.filters=[];this.columns='*';}
+   select(columns){this.columns=columns;return this;}
+   eq(name,value){this.filters.push([name,'=',value]);return this;}
+   like(name,value){this.filters.push([name,'like',value]);return this;}
+   update(value){this.value=value;return this;}
+  }
+  const sb={from:table=>new Query(table),rpc:(name,args)=>({name,args})};
+  const query=async q=>{
+   if(q.name){
+    assert.ok(['sanji_ig_manual_acquire_target','sanji_ig_manual_sync_active','sanji_ig_manual_cursor_issue','sanji_ig_manual_cursor_take'].includes(q.name));
+    if(q.name==='sanji_ig_manual_cursor_issue')issued.push(structuredClone(q.args.p_payload));
+    const args=Object.entries(q.args);
+    return (await db.query('select public.'+identifier(q.name)+'('+args.map(([key],i)=>identifier(key)+' => $'+(i+1)).join(',')+') value',args.map(([,value])=>value))).rows[0].value;
+   }
+   const values=[],parameter=value=>{values.push(value);return '$'+values.length;};
+   const columns=q.columns.split(',').map(identifier).join(',');
+   const prefix=q.value?'update public.'+identifier(q.table)+' set '+Object.entries(q.value).map(([key,value])=>identifier(key)+'='+parameter(value)).join(','):'select '+columns+' from public.'+identifier(q.table);
+   const where=q.filters.map(([key,op,value])=>identifier(key)+' '+op+' '+parameter(value)).join(' and ');
+   return (await db.query(prefix+' where '+where+(q.value?' returning '+columns:''),values)).rows;
+  };
+  const remote=async(url,options)=>{
+   calls.push({url,options});const u=new URL(url);
+   assert.equal(u.hostname,'graph.instagram.com');assert.equal(options.method,'GET');
+   if(u.pathname.endsWith('/me/conversations'))return u.searchParams.has('after')?{data:[]}:{data:[metadata],paging:{next:'https://untrusted.invalid/directory',cursors:{after:'directory-next'}}};
+   if(u.searchParams.get('fields')==='id,updated_time,participants{id,username}')return metadata;
+   if(u.pathname.endsWith('/thread43/messages')){assert.equal(u.searchParams.get('after'),'empty-next');return repeatNext?{data:[],paging:{next:'ignored',cursors:{after:'empty-next'}}}:{data:[]};}
+   assert.ok(u.pathname.endsWith('/thread43'));assert.equal(u.searchParams.get('fields'),'messages');
+   return {messages:{data:[],paging:{next:'https://untrusted.invalid/messages',cursors:{after:'empty-next'}}}};
+  };
+  const service=creatorInstagramManualInbox({sb,query,remote,env:()=>'',connection:async()=>({id:'42',username:'valu_est',access_token:'synthetic-token',expires:Date.now()+3600000,connectionFingerprint:fingerprint}),connectionFingerprint:async()=>fingerprint});
+  const first=await service.sync(A);assert.equal(first.processed,0);assert.equal(first.complete,false);assert.match(first.nextCursor,/^[A-Za-z0-9_-]{43}$/);assert.equal(calls.length,3);
+  assert.equal(issued[0].phase,'resume');assert.equal(issued[0].offset,0);assert.equal(issued[0].message,'empty-next');assert.equal(issued[0].messageHistory.length,1);
+  assert.deepEqual((await db.query("select payload from public.sanji_ig_manual_cursors where owner=$1 and kind='sync'",[A])).rows[0].payload,issued[0]);
+  calls.length=0;const second=await service.sync(A,{cursor:first.nextCursor});assert.equal(second.processed,0);assert.equal(second.complete,false);assert.match(second.nextCursor,/^[A-Za-z0-9_-]{43}$/);assert.equal(calls.length,3);
+  assert.equal(issued[1].phase,'provider');assert.equal(issued[1].page,'directory-next');assert.equal(issued[1].providerHistory.length,1);assert.deepEqual(issued[1].messageHistory,[]);
+  assert.deepEqual((await db.query("select payload from public.sanji_ig_manual_cursors where owner=$1 and kind='sync'",[A])).rows[0].payload,issued[1]);
+  await assert.rejects(()=>cursor.read(first.nextCursor,{owner:A,account:'42',kind:'sync'}));
+  calls.length=0;const terminal=await service.sync(A,{cursor:second.nextCursor});assert.equal(terminal.nextCursor,null);assert.equal(terminal.processed,0);assert.equal(calls.length,1);
+  assert.equal((await db.query("select payload from public.sanji_ig_manual_cursors where owner=$1 and kind='sync'",[A])).rows[0].payload,null);
+  await assert.rejects(()=>cursor.read(second.nextCursor,{owner:A,account:'42',kind:'sync'}));
+  assert.equal(issued.length,2);for(const payload of issued)assert.equal(syncCursorPayloadFits(payload),true);
+  repeatNext=true;calls.length=0;const repeatedFirst=await service.sync(A);calls.length=0;const stopped=await service.sync(A,{cursor:repeatedFirst.nextCursor});
+  assert.equal(stopped.nextCursor,null);assert.equal(stopped.complete,false);assert.equal(stopped.partial,true);assert.match(stopped.nextConversationCursor,/^[A-Za-z0-9_-]{43}$/);assert.deepEqual(stopped.gap,{kind:'message_cursor_repeated',messagesComplete:false,incompleteConversations:1});assert.equal(calls.length,2);
+  assert.equal((await db.query("select sync_in_progress from public.sanji_ig_manual_conversations where owner=$1 and peer_id='43'",[A])).rows[0].sync_in_progress,true);
+  assert.equal((await db.query("select payload->>'phase' phase from public.sanji_ig_manual_cursors where owner=$1 and kind='sync'",[A])).rows[0].phase,'provider');
+  calls.length=0;const afterGap=await service.sync(A,{cursor:stopped.nextConversationCursor});assert.equal(afterGap.nextCursor,null);assert.equal(calls.length,1);assert.match(calls[0].url,/after=directory-next/);
+  await assert.rejects(()=>cursor.read(stopped.nextConversationCursor,{owner:A,account:'42',kind:'sync'}));
+  assert.equal((await db.query("select sync_in_progress from public.sanji_ig_manual_conversations where owner=$1 and peer_id='43'",[A])).rows[0].sync_in_progress,true);
+
+ }finally{await db.close();}
+});

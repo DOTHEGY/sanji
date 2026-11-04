@@ -91,3 +91,46 @@ test('connection ciphertext replacement during provider detail prevents storage'
 test('connection rotation during participant reverify leaves content hidden',async()=>{let x,verify=false;const provider=(url,_o,meta,now)=>{const p=new URL(url).pathname;if(p.endsWith('/me/conversations'))return {data:[meta[0]]};if(p.endsWith('/good')&&verify){x.db.sanji_connections[0].fingerprint='c'.repeat(64);return {id:'good',updated_time:now,participants:meta[0].participants}};if(p.endsWith('/good'))return {messages:{data:[{id:'m1'}]}};return {id:'m1',created_time:now,from:{id:'43'},to:{data:[{id:'42'}]},message:'synthetic'}};x=fixture({provider});await x.service.sync('owner');verify=true;await assert.rejects(()=>x.service.reverify('owner',{peerId:'43',conversationGeneration:GEN}),/연결 상태가 변경/);assert.deepEqual((await x.service.list('owner')).items,[])});
 
 test('four-detail sync decrypts the connection once and only rehashes on later checks',async()=>{const x=fixture({provider:(url,_o,meta,now)=>{const p=new URL(url).pathname;if(p.endsWith('/me/conversations'))return {data:[meta[0]]};if(p.endsWith('/good'))return {messages:{data:Array.from({length:4},(_,i)=>({id:'m'+i}))}};return {id:p.split('/').pop(),created_time:now,from:{id:'43'},to:{data:[{id:'42'}]},message:'synthetic'}}});const r=await x.service.sync('owner');assert.equal(r.processed,4);assert.deepEqual(x.connectionCounts(),{connectionReads:1,fingerprintReads:17});assert.ok(x.calls.length<=7)});
+
+test('empty message page follows only a fresh validated after cursor and stays incomplete',async()=>{
+ const x=fixture({provider:(url,_o,meta,now)=>{
+  const u=new URL(url),p=u.pathname;
+  if(p.endsWith('/me/conversations'))return {data:[meta[0]],...(u.searchParams.has('after')?{}:{paging:{next:'ignored-directory-url',cursors:{after:'directory'}}})};
+  if(p.endsWith('/good'))return {messages:{data:[],paging:{next:'https://untrusted.invalid/never-follow',cursors:{after:'empty-A'}}}};
+  if(p.endsWith('/good/messages')){assert.equal(u.searchParams.get('after'),'empty-A');return {data:[{id:'m1'}]};}
+  return {id:'m1',created_time:now,from:{id:'43'},to:{data:[{id:'42'}]},message:'verified fixture'};
+ }});
+ const first=await x.service.sync('owner');assert.equal(first.processed,0);assert.equal(first.complete,false);assert.ok(first.nextCursor);assert.equal(x.calls.length,3);assert.equal(first.partial,true);assert.equal('partial' in x.db.sanji_ig_manual_cursors[0].payload,false);
+ x.calls.length=0;const second=await x.service.sync('owner',{cursor:first.nextCursor});assert.equal(second.processed,1);assert.ok(second.nextCursor);assert.equal(second.complete,false);assert.equal(x.calls.length,4);assert.equal(x.db.sanji_ig_manual_messages.length,1);assert.ok(x.calls.every(c=>new URL(c.url).hostname==='graph.instagram.com'&&c.opts.method==='GET'));
+ // The caller must retain first.partial across later, clean per-request results.
+ x.meta[0].updated_time='2020-01-01T00:00:00Z';x.calls.length=0;const terminal=await x.service.sync('owner',{cursor:second.nextCursor});assert.equal(terminal.nextCursor,null);assert.equal(terminal.complete,true);assert.equal(terminal.partial,false);assert.equal(x.calls.length,1);
+});
+
+test('empty message continuation without a valid cursor stops without following any next URL',async()=>{
+ for(const after of [undefined,'https://untrusted.invalid/secret','not a cursor']){
+  const x=fixture({provider:(url,_o,meta)=>new URL(url).pathname.endsWith('/me/conversations')?{data:[meta[0]]}:{messages:{data:[],paging:{next:'https://untrusted.invalid/never-follow',cursors:{after}}}}});
+  const r=await x.service.sync('owner');assert.equal(r.complete,false);assert.equal(r.nextCursor,null);assert.equal(r.processed,0);assert.equal(x.calls.length,3);assert.equal(x.db.sanji_ig_manual_messages.length,0);assert.ok(x.calls.every(c=>new URL(c.url).hostname==='graph.instagram.com'));
+ }
+});
+
+test('empty message cursor repetition and long distinct sequences keep the same bounds',async()=>{
+ for(const sequence of [['A','A'],['A','B','A'],Array.from({length:101},(_,i)=>'empty'+i)]){
+  let i=0;const x=fixture({provider:(url,_o,meta)=>{const p=new URL(url).pathname;if(p.endsWith('/me/conversations'))return {data:[meta[0]]};const page={data:[],paging:{next:'ignored',cursors:{after:sequence[i++]}}};return p.endsWith('/good/messages')?page:{messages:page};}});let r;
+  for(let n=0;n<sequence.length;n++){x.calls.length=0;r=await x.service.sync('owner',n?{cursor:r.nextCursor}:{});assert.ok(x.calls.length<=3);if(n<sequence.length-1)assert.ok(r.nextCursor);}
+  assert.equal(r.nextCursor,null);assert.equal(r.complete,false);assert.equal(r.processed,0);assert.equal(x.db.sanji_ig_manual_messages.length,0);assert.match(r.limitation,/반복|한도/);
+ }
+});
+
+test('repeated message cursor offers only a separately validated next-conversation cursor',async()=>{
+ for(const next of ['directory',null,'https://invalid.example/next']){
+  const x=fixture({provider:(url,_o,meta)=>{const u=new URL(url),p=u.pathname;if(p.endsWith('/me/conversations'))return u.searchParams.has('after')?{data:[]}:{data:[meta[0]],...(next===null?{}:{paging:{next:'never-follow',cursors:{after:next}}})};const page={data:[],paging:{next:'never-follow',cursors:{after:'repeat'}}};return p.endsWith('/good/messages')?page:{messages:page};}});
+  const first=await x.service.sync('owner');x.calls.length=0;const stopped=await x.service.sync('owner',{cursor:first.nextCursor});assert.equal(stopped.complete,false);assert.equal(stopped.partial,true);assert.equal(stopped.nextCursor,null);assert.equal(stopped.processed,0);assert.equal(x.calls.length,2);assert.equal(x.db.sanji_ig_manual_conversations[0].sync_in_progress,true);assert.equal(x.db.sanji_ig_manual_messages.length,0);
+  if(next==='directory'){assert.match(stopped.nextConversationCursor,/^[A-Za-z0-9_-]{43}$/);assert.deepEqual(stopped.gap,{kind:'message_cursor_repeated',messagesComplete:false,incompleteConversations:1});assert.equal(x.db.sanji_ig_manual_cursors[0].payload.phase,'provider');x.calls.length=0;const terminal=await x.service.sync('owner',{cursor:stopped.nextConversationCursor});assert.equal(terminal.nextCursor,null);assert.equal(x.calls.length,1);assert.match(x.calls[0].url,/after=directory/);assert.equal(x.db.sanji_ig_manual_conversations[0].sync_in_progress,true);}
+  else {assert.equal(stopped.nextConversationCursor,undefined);assert.equal(stopped.gap,undefined);}
+ }
+});
+
+test('message history cap and repeated provider cursor never offer next-conversation fallback',async()=>{
+ let i=0;const x=fixture({provider:(url,_o,meta)=>{const p=new URL(url).pathname;if(p.endsWith('/me/conversations'))return {data:[meta[0]],paging:{next:'ignored',cursors:{after:'directory'}}};const page={data:[],paging:{next:'ignored',cursors:{after:'unique'+(++i)}}};return p.endsWith('/good/messages')?page:{messages:page};}});let r;for(let n=0;n<=100;n++)r=await x.service.sync('owner',n?{cursor:r.nextCursor}:{});assert.equal(r.nextCursor,null);assert.equal(r.nextConversationCursor,undefined);assert.equal(r.gap,undefined);assert.match(r.limitation,/한도/);
+ const y=fixture({provider:(_url,_o,meta)=>({data:[{...meta[0],participants:{data:[]}}],paging:{next:'ignored',cursors:{after:'same'}}})});const first=await y.service.sync('owner');const second=await y.service.sync('owner',{cursor:first.nextCursor});assert.equal(second.nextCursor,null);assert.equal(second.nextConversationCursor,undefined);assert.equal(second.gap,undefined);assert.match(second.limitation,/반복/);
+});

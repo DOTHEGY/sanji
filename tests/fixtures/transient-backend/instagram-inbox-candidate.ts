@@ -488,6 +488,34 @@ function oauthStateProblem(state, row, time = Date.now()) {
   return "";
 }
 
+// Structural diagnostics only. Never return, persist or log a provider URL,
+// cursor, access token, conversation/message identifier or message content.
+function transientPagingDiagnostic(page,threadId,version) {
+  const classify=value=>value===undefined||value===null?'missing':typeof value!=='string'?'wrong_type':!value.length?'empty':value.length>512?'too_long':/^[A-Za-z0-9._~:+/=-]+$/.test(value)&&!value.includes('://')?'valid':'invalid_characters';
+  const diagnostic={stage:'message_pagination',emptyMessagePage:Array.isArray(page?.data)&&page.data.length===0,afterState:classify(page?.paging?.cursors?.after),nextShape:'unrecognized'};
+  const next=page?.paging?.next;
+  if(typeof next!=='string'||next.length>8192)return diagnostic;
+  try {
+    const url=new URL(next);
+    if(url.protocol!=='https:'||url.host!=='graph.instagram.com'||url.username||url.password||url.hash||url.pathname!=='/'+version+'/'+encodeURIComponent(threadId)+'/messages')return diagnostic;
+    const after=url.searchParams.getAll('after');
+    if(after.length===1&&classify(after[0])==='valid')diagnostic.nextShape='same_edge_after';
+    else if(after.length)diagnostic.nextShape='same_edge_invalid_after';
+    else if(url.searchParams.has('offset'))diagnostic.nextShape='same_edge_offset';
+    else if(url.searchParams.has('before'))diagnostic.nextShape='same_edge_before';
+    else diagnostic.nextShape='same_edge_other';
+  }catch{}
+  return diagnostic;
+}
+
+// Only fixed labels from the structural diagnostic are rendered in the
+// existing limitation text. Never concatenate provider data into this text.
+function transientPagingDiagnosticText(diagnostic) {
+  const after={missing:'누락',wrong_type:'자료형 불일치',empty:'빈 값',too_long:'길이 초과',valid:'정상',invalid_characters:'허용 형식 아님'};
+  const next={same_edge_after:'동일 메시지 경로의 after 방식',same_edge_invalid_after:'동일 메시지 경로의 after 값 불완전',same_edge_offset:'동일 메시지 경로의 offset 방식',same_edge_before:'동일 메시지 경로의 before 방식',same_edge_other:'동일 메시지 경로의 다른 방식',unrecognized:'확인되지 않은 형식'};
+  return '메시지 페이지 진단: 빈 페이지 '+(diagnostic?.emptyMessagePage===true?'예':'아니요')+' / 현재 커서 '+(Object.hasOwn(after,diagnostic?.afterState)?after[diagnostic.afterState]:'확인 불가')+' / 다음 페이지 '+(Object.hasOwn(next,diagnostic?.nextShape)?next[diagnostic.nextShape]:'확인 불가')+'.';
+}
+
 // Temporary read only: no persistence, no send and no application logging.
 function transientInbox({ sb, query, connection, remote, env }) {
   const safeCursor = (v) => typeof v === 'string' && v.length<=512 && /^[A-Za-z0-9._~:+/=-]+$/.test(v) && !v.includes('://');
@@ -528,7 +556,7 @@ function transientInbox({ sb, query, connection, remote, env }) {
     if(!Array.isArray(messages)||messages.length>20)throw Error('message page unavailable');
     const ids=messages.map(m=>m?.id);if(ids.some(id=>!validId(id))||new Set(ids).size!==ids.length)throw Error('invalid message ids');
     if(c.offset>ids.length||(c.offset&&await hash(ids.slice(0,c.offset))!==c.prefixHash))throw Error('message page changed');
-    const end=Math.min(ids.length,c.offset+3),result=[],since=Date.parse(startKorea());let partial=false;
+    const end=Math.min(ids.length,c.offset+3),result=[],since=Date.parse(startKorea());let partial=ids.length===0;
     for(let i=c.offset;i<end;i++){
       await still();const d=await get(ids[i],new URLSearchParams({fields:'id,created_time,from,to,message'}));await still();
       const at=Date.parse(d?.created_time),to=d?.to?.data;
@@ -536,8 +564,8 @@ function transientInbox({ sb, query, connection, remote, env }) {
       if(at>=since)result.push({messageId:d.id,receivedAt:new Date(at).toISOString(),body:d.message,direction:'inbound'});
     }
     const finalPeer=await participant();await still();if(!finalPeer||finalPeer.peerId!==peer.peerId||finalPeer.username!==peer.username)throw Error('participants changed');
-    let next=nextPage,stopReason=providerStop;if(end<ids.length)next={page:c.page,thread:t.id,offset:end,prefixHash:await hash(ids.slice(0,end)),messageAfter:c.messageAfter,providerHistory:c.providerHistory,messageHistory:c.messageHistory,expectedPageNextHash:pageNextHash};else if(messagePage?.paging?.next){const nextMessage=messagePage?.paging?.cursors?.after;if(safeCursor(nextMessage)&&ids.length>0){const nextHash=await hash(['message',nextMessage]);if(c.messageHistory.includes(nextHash)){next=null;partial=true;stopReason='메시지 이어보기가 반복되어 확인을 중단했습니다.';}else if(c.messageHistory.length>=100){next=null;partial=true;stopReason='메시지 확인 한도에 도달해 일부가 누락될 수 있습니다.';}else next={page:c.page,thread:t.id,offset:0,prefixHash:null,messageAfter:nextMessage,providerHistory:c.providerHistory,messageHistory:[...c.messageHistory,nextHash],expectedPageNextHash:pageNextHash};}else{next=null;partial=true;stopReason='메시지 이어보기 정보가 불완전해 확인을 중단했습니다.';}}
-    return {items:[{verifiedCreatorMatch:true,creatorId,peerId:peer.peerId,username:peer.username,conversationId:t.id,messages:result,lastDirection:'review',messageWindow:'unknown'}],nextCursor:next,complete:!next&&!partial&&!more,partial:partial||(more&&!nextPage),unverified:0,limitation:note+(stopReason?' '+stopReason:''),lastDirection:'review',messageWindow:'unknown'};
+    let next=nextPage,messageCursorRepeated=false,paginationDiagnostic=ids.length===0?transientPagingDiagnostic(messagePage,t.id,version):null,stopReason=ids.length===0?'Meta가 빈 메시지 페이지를 반환했습니다. 전체 확인은 보장되지 않습니다. '+transientPagingDiagnosticText(paginationDiagnostic):providerStop;if(end<ids.length)next={page:c.page,thread:t.id,offset:end,prefixHash:await hash(ids.slice(0,end)),messageAfter:c.messageAfter,providerHistory:c.providerHistory,messageHistory:c.messageHistory,expectedPageNextHash:pageNextHash};else if(messagePage?.paging?.next){const nextMessage=messagePage?.paging?.cursors?.after;if(safeCursor(nextMessage)){const nextHash=await hash(['message',nextMessage]);if(c.messageHistory.includes(nextHash)){next=null;partial=true;messageCursorRepeated=true;stopReason='메시지 이어보기가 반복되어 확인을 중단했습니다.';}else if(c.messageHistory.length>=100){next=null;partial=true;stopReason='메시지 확인 한도에 도달해 일부가 누락될 수 있습니다.';}else next={page:c.page,thread:t.id,offset:0,prefixHash:null,messageAfter:nextMessage,providerHistory:c.providerHistory,messageHistory:[...c.messageHistory,nextHash],expectedPageNextHash:pageNextHash};}else{next=null;partial=true;paginationDiagnostic=transientPagingDiagnostic(messagePage,t.id,version);stopReason='메시지 이어보기 정보가 불완전해 확인을 중단했습니다. '+transientPagingDiagnosticText(paginationDiagnostic);}}
+    return {items:[{verifiedCreatorMatch:true,creatorId,peerId:peer.peerId,username:peer.username,conversationId:t.id,messages:result,lastDirection:'review',messageWindow:'unknown'}],nextCursor:next,complete:!next&&!partial&&!more,partial:partial||(more&&!nextPage),unverified:0,limitation:note+(stopReason?' '+stopReason:''),lastDirection:'review',messageWindow:'unknown',...(paginationDiagnostic?{paginationDiagnostic}:{}),...(messageCursorRepeated&&nextPage?{nextConversationCursor:nextPage,continuationGap:{kind:'message_cursor_repeated',messagesComplete:false,incompleteConversations:1}}:{})};
   }
   return {read};
 }
