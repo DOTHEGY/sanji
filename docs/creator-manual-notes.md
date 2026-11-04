@@ -24,7 +24,7 @@ The handler derives owner from the authenticated user. It never accepts an owner
 
 ## Schema and access delta
 
-The reviewed SQL is `supabase/proposals/creator_manual_notes.sql`. The matching migration `supabase/migrations/20261104064214_creator_manual_notes.sql` was generated with Supabase CLI 3.0.0. Neither is installed automatically by the build.
+The reviewed SQL is `supabase/proposals/creator_manual_notes.sql`. The matching migration `supabase/migrations/20261104070352_creator_manual_notes.sql` was generated with Supabase CLI 3.0.0, then its filename was aligned to the migration service’s recorded version after application. Neither is installed automatically by the build.
 
 - New `sanji_creator_manual_notes` table, RLS enabled, no client policies.
 - Existing service role gets SELECT and INSERT only on six input columns. No UPDATE, DELETE, TRUNCATE or client-supplied recording timestamp.

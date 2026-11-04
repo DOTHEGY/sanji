@@ -92,4 +92,4 @@ test('composite owner/creator foreign key prevents cross-owner corrections and o
  assert.equal((await db.query('select count(*)::int n from sanji_creator_manual_notes')).rows[0].n,2);
 }));
 
-test('release migration exactly matches reviewed SQL after header',()=>{const migration=fs.readFileSync('supabase/migrations/20261104064214_creator_manual_notes.sql','utf8');const proposal=fs.readFileSync('supabase/proposals/creator_manual_notes.sql','utf8');assert.equal(migration.slice(migration.indexOf('\n')),proposal.slice(proposal.indexOf('\n')));});
+test('release migration exactly matches reviewed SQL after header',()=>{const migration=fs.readFileSync('supabase/migrations/20261104070352_creator_manual_notes.sql','utf8');const proposal=fs.readFileSync('supabase/proposals/creator_manual_notes.sql','utf8');assert.equal(migration.slice(migration.indexOf('\n')),proposal.slice(proposal.indexOf('\n')));});
