@@ -20,3 +20,8 @@ entrypoint = "./functions/creator-email-worker/index.ts"
 # NEW service-to-service endpoint only. It validates the existing Vault-backed
 # x-job-token itself. Activating its persistent access/schedule requires approval.
 verify_jwt = false
+
+[functions.youtube-discovery]
+entrypoint = "./functions/youtube-discovery/index.ts"
+# Independent, user-session-only, read-only API. Membership is also checked in handler.
+verify_jwt = true
