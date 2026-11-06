@@ -32,3 +32,7 @@ Chromium이 `/usr/bin/chromium`에 있어야 합니다. 다른 경로는 CHROMIU
 GitHub Pages 워크플로는 `public/`만 배포합니다. 실제 운영 UI·DB·서버 코드·시크릿을 Pages에 복사하지 마세요. 실제 영업 자료는 인증 API 뒤에서 관리합니다.
 
 구현 범위, 확인한 정책, 외부 연동 미검증 항목 및 운영 한계는 [docs/PRODUCTION.md](docs/PRODUCTION.md)에 명시했습니다. 이전 데모 설명은 [docs/OPERATIONS.md](docs/OPERATIONS.md)에 있습니다.
+
+## 별도 YouTube 크리에이터 탐색 (베타)
+
+메인 발굴·발송 큐와 독립된 검색/초안 화면입니다. `npm run build:youtube-discovery`로 `public/workspace/youtube/`를 빌드합니다. 자동 이메일 수집·자동 발송은 하지 않으며, 공개 비즈니스 문의용 연락처의 원문/용도를 확인한 뒤 초안을 준비할 수 있습니다. 활성화 전 설정·정책 제약·검증은 [YouTube 탐색 안내](docs/YOUTUBE-DISCOVERY.md)를 확인하세요.
