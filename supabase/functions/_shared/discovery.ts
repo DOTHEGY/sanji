@@ -57,7 +57,7 @@ export function parseOfficialPage(html: string, source: string, checked: string)
     if(!value||/^(javascript:|mailto:|tel:|#)/i.test(value))continue;
     const shop=/공식몰|자사몰|온라인\s*쇼핑몰|온라인몰|브랜드몰|쇼핑몰|공식\s*(?:스토어|샵)|몰(?:$|[)）])/i.test(label);
     const company=/회사\s*소개|기업\s*소개|기업\s*홈페이지|회사\s*홈페이지|공식\s*(?:홈페이지|사이트|웹)|오피셜|official\s*(?:site|website)/i.test(label);
-    const productLink=/\/(?:product|goods)\/|[?&](?:product_no|goodsNo|goodsno)=/i.test(value);
+    const productLink=/\/(?:product|products|goods)\/|\/shop\/shopdetail\.html|[?&](?:product_no|goodsNo|goodsno|branduid)=/i.test(value);
     const contact=/제휴|입점|도매|공동구매|문의|고객센터|고객상담|contact|partner|business|회사\s*소개|about/i.test(label+" "+value);
     if(!shop&&!contact&&!company&&!productLink)continue;
     try{const url=publicUrl(new URL(value,source).toString()).toString();if(!marketplace(url))found.push({url,label,type:shop?"shop":company?"company":productLink?"product":"contact",linkedFrom:source});}catch{}
@@ -66,7 +66,7 @@ export function parseOfficialPage(html: string, source: string, checked: string)
   const products:any[]=[];
   for(const m of visible.matchAll(/상품명\s*:\s*([\s\S]{3,300}?)(?=상품요약정보|소비자가|판매가|상품명|타임세일|$)/g)){const name=plainHtml(m[1]);if(realProductName(name)&&productDetailUrl(source))products.push({name,quote:name,url:source,evidenceType:"product_detail_label"});}
   for(const m of html.matchAll(/<script\b[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)){
-   try{const visit=(v:any,depth=0)=>{if(!v||depth>5)return;if(Array.isArray(v)){v.slice(0,30).forEach(x=>visit(x,depth+1));return;}if(typeof v!=="object")return;if([v["@type"]].flat().includes("Product")&&typeof v.name==="string"&&realProductName(plainHtml(v.name))&&(v.offers||productDetailUrl(source)))products.push({name:plainHtml(v.name),quote:plainHtml(v.name),url:typeof v.url==="string"?new URL(v.url,source).href:source,evidenceType:"structured_product",hasOffers:!!v.offers});if(v["@graph"])visit(v["@graph"],depth+1);if(v.itemListElement)visit(v.itemListElement,depth+1);if(v.item)visit(v.item,depth+1);};visit(JSON.parse(m[1]));}catch{}
+   try{const visit=(v:any,depth=0)=>{if(!v||depth>5)return;if(Array.isArray(v)){v.slice(0,30).forEach(x=>visit(x,depth+1));return;}if(typeof v!=="object")return;if([v["@type"]].flat().includes("Product")&&typeof v.name==="string"&&realProductName(plainHtml(v.name))&&(v.offers||productDetailUrl(source)))products.push({name:plainHtml(v.name),quote:plainHtml(v.name),url:typeof v.url==="string"?new URL(v.url,source).href:source,evidenceType:"structured_product",hasOffers:!!v.offers,description:typeof v.description==="string"?plainHtml(v.description).slice(0,600):"",category:typeof v.category==="string"?plainHtml(v.category).slice(0,150):""});if(v["@graph"])visit(v["@graph"],depth+1);if(v.itemListElement)visit(v.itemListElement,depth+1);if(v.item)visit(v.item,depth+1);};visit(JSON.parse(m[1]));}catch{}
   }
   const title=plainHtml(/<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1]||"");
   const description=Array.from(html.matchAll(/<meta\b([^>]*)>/gi)).map(m=>({name:attribute(m[1],"name")||attribute(m[1],"property"),content:attribute(m[1],"content")})).find(m=>/^(description|og:description)$/i.test(m.name))?.content||"";

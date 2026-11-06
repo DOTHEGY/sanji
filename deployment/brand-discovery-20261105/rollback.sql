@@ -1,0 +1,5 @@
+-- No SQL rollback is required for this additive release.
+-- Restore the exact approved v132 Edge Function artifact. It calls the untouched
+-- original RPCs. Leave the six new service-only functions inert; do not drop them,
+-- rewrite old functions, delete records, reset notifications, or retry messages.
+-- This file intentionally contains no executable statements.

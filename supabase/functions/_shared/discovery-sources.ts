@@ -1,18 +1,22 @@
 import { companyIdentity, publicUrl, marketplace, plainHtml, decodeHtml } from "./discovery.ts";
+import { type DiscoverySourceAudit, resetSourceAudit, rejectSource } from "./discovery-search.ts";
 const excludedHosts=/(^|\.)(google|bing|naver|coupang|facebook|instagram|youtube|kakao|twitter|wikimedia|wikipedia|wikidata|w3|adobe|microsoft)\.(com|co\.kr|org|net)$/i;
-export function sourceProspects(rows:any[],known:any[],date:string){
+export function sourceProspects(rows:any[],known:any[],date:string,audit:DiscoverySourceAudit={}){
+ resetSourceAudit(audit);
  const names=new Set(known.map(l=>companyIdentity(l.identity||l.data?.name||""))),hosts=new Set(known.map(l=>{try{return new URL(l.data?.website).hostname.replace(/^www\./,"");}catch{return "";}}));
  const out:any[]=[];
  for(const r of rows){
-  if(/restaurant|foodservice|catering|retail|holding|fast food|brewing|alcohol/i.test(String(r.industry||"")))continue;
-  const name=plainHtml(String(r.name||"")).trim().slice(0,150);if(name.length<2||/^Q\d+$/.test(name))continue;
-  let url;try{url=publicUrl(String(r.website||"").replace(/^http:/,"https:"));}catch{continue;}
-  const host=url.hostname.replace(/^www\./,"");if(marketplace(url.toString())||excludedHosts.test(host)||/\.gov\.|\.go\.kr$/.test(host))continue;
+  audit.input!++;
+  if(/restaurant|foodservice|catering|retail|holding|fast food|brewing|alcohol/i.test(String(r.industry||""))){rejectSource(audit,"excluded_industry");continue;}
+  const name=plainHtml(String(r.name||"")).trim().slice(0,150);if(name.length<2||/^Q\d+$/.test(name)){rejectSource(audit,"invalid_name");continue;}
+  let url;try{url=publicUrl(String(r.website||"").replace(/^http:/,"https:"));}catch{rejectSource(audit,"invalid_destination");continue;}
+  const host=url.hostname.replace(/^www\./,"");if(marketplace(url.toString())||excludedHosts.test(host)||/\.gov\.|\.go\.kr$/.test(host)){rejectSource(audit,"excluded_destination");continue;}
   const aliases:any={"한국야쿠르트":"hy","에이치와이":"hy","sempiofoodscompany":"샘표"};
-  const identity=aliases[companyIdentity(name)]||companyIdentity(name);if(names.has(identity)||hosts.has(host))continue;
+  const identity=aliases[companyIdentity(name)]||companyIdentity(name);if(names.has(identity)){rejectSource(audit,"duplicate_identity");continue;}if(hosts.has(host)){rejectSource(audit,"duplicate_host");continue;}
   names.add(identity);hosts.add(host);
-  out.push({identity,data:{name,website:url.toString(),source:r.source,sourceEntity:r.entity||"",searchQuery:r.searchQuery||"",searchResultUrl:r.searchResultUrl||"",channel:r.searchQuery?"공개 검색 · 홈페이지·소유 관계 검토 전":"공개 기업 데이터·협회 목록 · 소유 관계 검토 전",company:"",product:"",contacts:[],checked:date,officialVerified:false,classification:"미확인",authority:"미확인",researchNote:"외부 목록에 게시된 식품·건강 관련 업체 후보입니다. 홈페이지·이메일·법인 소유·상품 분류는 원문 확인 후 별도 검토합니다."}});
+  out.push({identity,data:{name,website:url.toString(),source:r.source,sourceEntity:r.entity||"",searchQuery:r.searchQuery||"",searchResultUrl:r.searchResultUrl||"",searchEngine:r.searchEngine||"",searchCursor:Number.isSafeInteger(r.searchCursor)&&r.searchCursor>=0?r.searchCursor:null,searchPlanVersion:r.searchPlanVersion||"",searchKeywordProvenance:r.searchKeywordProvenance||null,channel:r.searchQuery?"공개 검색 · 홈페이지·소유 관계 검토 전":"공개 기업 데이터·협회 목록 · 소유 관계 검토 전",company:"",product:"",contacts:[],checked:date,officialVerified:false,classification:"미확인",authority:"미확인",researchNote:"외부 목록에 게시된 웰니스 관련 업체 후보입니다. 홈페이지·이메일·법인 소유·상품 분류는 원문 확인 후 별도 검토합니다."}});
  }
+ audit.accepted=out.length;
  return out;
 }
 export const directoryRoots=["https://www.khff.or.kr/","https://www.kfia.or.kr/","https://seoulfood.or.kr/"];

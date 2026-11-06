@@ -1,0 +1,16 @@
+[
+  {
+    "proname": "sanji_claim_discovery_notification",
+    "definition": "CREATE OR REPLACE FUNCTION public.sanji_claim_discovery_notification(p_owner uuid)\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\ndeclare cfg public.sanji_discovery_config;u public.sanji_discovery_usage;d date:=(now() at time zone 'Asia/Seoul')::date;recipient text;s jsonb;n integer;\nbegin\n select * into cfg from public.sanji_discovery_config where owner=p_owner and enabled and notify_completion;\n if not found or not exists(select 1 from public.sanji_members where user_id=p_owner) then return null;end if;\n select * into u from public.sanji_discovery_usage where owner=p_owner and day=d;\n if not found or u.companies<cfg.target then return null;end if;\n select email into recipient from auth.users where id=p_owner;\n if recipient is null or recipient!~'^[^[:space:]@]+@[^[:space:]@]+\\.[^[:space:]@]+$' then return null;end if;\n s:=jsonb_build_object('day',d,'recipient',recipient,'target',cfg.target,'companies',u.companies,'emails',u.emails,'processed',u.processed);\n insert into public.sanji_discovery_notifications(owner,day,snapshot) values(p_owner,d,s) on conflict do nothing;\n get diagnostics n=row_count;\n if n=0 then return null;end if;\n return s;\nend $function$\n",
+    "acl": "{postgres=X/postgres,service_role=X/postgres}",
+    "security_definer": true,
+    "function_owner": "postgres"
+  },
+  {
+    "proname": "sanji_claim_search_sources",
+    "definition": "CREATE OR REPLACE FUNCTION public.sanji_claim_search_sources(p_owner uuid)\n RETURNS jsonb\n LANGUAGE plpgsql\n SECURITY DEFINER\n SET search_path TO ''\nAS $function$\ndeclare r public.sanji_discovery_config;s jsonb;d text:=(now() at time zone 'Asia/Seoul')::date::text;c integer;\nbegin\n select * into r from public.sanji_discovery_config where owner=p_owner and enabled for update;\n if not found then return null;end if;\n if exists(select 1 from public.sanji_discovery_usage where owner=p_owner and day=d::date and companies>=r.target) then return null;end if;\n if (select count(*) from public.sanji_discovery_leads where owner=p_owner and status='new')>=8 then return null;end if;\n s:=r.search_state;\n if s->>'day'=d then\n  if coalesce((s->>'leaseUntil')::timestamptz,now()-interval '1 day')>now() or coalesce((s->>'checked')::timestamptz,now()-interval '1 day')>now()-interval '15 minutes' then return null;end if;\n  c:=coalesce((s->>'queries')::integer,0);if c>=64 then return null;end if;\n else c:=0;end if;\n s:=jsonb_build_object('day',d,'queries',c+2,'cursor',c,'status','searching','checked',now(),'leaseUntil',now()+interval '3 minutes');\n update public.sanji_discovery_config set search_state=s where owner=p_owner;\n return s;\nend $function$\n",
+    "acl": "{postgres=X/postgres,service_role=X/postgres}",
+    "security_definer": true,
+    "function_owner": "postgres"
+  }
+]
