@@ -40,6 +40,14 @@ export function buildBriefReview(brief, explicitQueries){
  const extras=positive.split(/[^\p{L}\p{N}_-]+/u).filter(v=>!filler.has(normalize(v))).map(v=>v.replace(/(?:에서|에게|으로|들을|들이|을|를|은|는|에)$/u,'')).filter(v=>v.length>=2&&v.length<=30&&!filler.has(normalize(v))&&!excludedTerms.some(e=>has(v,e))&&!known.some(a=>has(v,a))&&!/^(?:논란|클린|안전|건전|출시|런칭|협업|찾아|제외|추천|되어)/.test(v));
  const requested=active.map(t=>({...t,requestedAliases:t.aliases.filter(a=>has(positive,a))}));
  for(const value of unique(extras).slice(0,5))requested.push({id:'literal:'+normalize(value),label:value,aliases:[value],requestedAliases:[value]});
+ const unknownSubject = extras.some(t=>!/^(?:마라|매운|매콤|불닭|spicy)$/i.test(t)&&!/^(?:크리에이터|유튜버|납품|판매|공급|런칭|출시|협업|찾아|원하|원해)/.test(t));
+ const explicitOtherField = unknownSubject || active.some(t=>['camping','travel','coffee','zero_waste','eco'].includes(t.id));
+ const excludedFoodDirection = excludedTerms.some(e=>['먹방','mukbang','음식','푸드','food','요리','레시피','cooking','recipe'].some(t=>has(e,t)));
+ const foodCollaboration = !requiresQueryReview && !explicitOtherField && !excludedFoodDirection && active.some(t=>['bun','school_meals','food'].includes(t.id)) && /협업|크리에이터|유튜버|출시|런칭|납품|IP|ip/.test(positive);
+ const primaryCategory = active.some(t=>t.id==='cooking') && !active.some(t=>t.id==='mukbang') ? '요리' : '먹방';
+ const categoryQuery = [active.some(t=>t.id==='vegan')?'비건':null,primaryCategory].filter(Boolean).join(' ');
+ const spicy = foodCollaboration && /마라|매운|매콤|불닭|spicy/i.test(positive);
+ const discoveryIntent = foodCollaboration ? { primaryCategory, secondaryCategories:['음식 리뷰'], productTerms:active.filter(t=>t.id==='bun').map(t=>t.label), contextTerms:active.filter(t=>t.id==='convenience').map(t=>t.label), modifiers:spicy?['매운맛']:[], inferred:true, explanation:'상품명 일치보다 먹방·음식 리뷰 분야부터 찾습니다. 분야는 요청에서 제안한 검색 방향이며 채널 검증 결과가 아닙니다.' } : null;
  const manualChecks=['협업 의사·조건·현재 소속은 직접 확인해야 합니다.','근거는 이번 검색의 제목·설명 일부만 포함하며 전체 채널을 검토한 것이 아닙니다.'];
  if(/클린|논란|안전|건전|clean|brand.safe/i.test(raw))manualChecks.unshift('클린 이미지·논란 없음·브랜드 안전성은 제목이나 설명만으로 확인할 수 없습니다.');
  if(/급식|청소년|학생|어린이|아동|school/i.test(raw))manualChecks.push('시청자 연령·급식 대상 적합성·광고 적법성은 확인되지 않았습니다.');
@@ -51,11 +59,14 @@ export function buildBriefReview(brief, explicitQueries){
  else {
    const base=unique([...active.map(t=>t.label),...extras]).join(' ').slice(0,100);
    queries=base?[base]:[];
-   if(active.some(t=>t.id==='school_meals')&&active.some(t=>t.id==='mukbang')&&/IP|ip|협업|업체/.test(raw))queries.push('먹방 음식 리뷰');
+   if(foodCollaboration) queries = [categoryQuery, [active.some(t=>t.id==='vegan')?'비건':null, spicy ? '매운 음식 '+primaryCategory : active.some(t=>t.id==='convenience') ? '편의점 음식 리뷰' : '음식 리뷰'].filter(Boolean).join(' ')];
+   else if(active.some(t=>t.id==='school_meals')&&active.some(t=>t.id==='mukbang')&&/IP|ip|협업|업체/.test(raw))queries.push('먹방 음식 리뷰');
  }
+ // Check every generated expansion, including legacy fallbacks, against explicit exclusions.
+ if(!explicitQueries?.length)queries=queries.filter(q=>!excludedTerms.some(e=>has(q,e)||topics.some(t=>[...t.aliases,...(t.related||[])].some(a=>has(e,a))&&[...t.aliases,...(t.related||[])].some(a=>has(q,a)))));
  // Explicit user search terms are an alternative when the brief states only review requirements.
  if(!requested.length&&explicitQueries?.length)for(const q of explicitQueries)for(const value of q.split(/\s+/).filter(v=>v.length>=2&&!v.startsWith('-')).slice(0,5))requested.push({id:'literal:'+normalize(value),label:value,aliases:[value],requestedAliases:[value]});
- return {requiresQueryReview,topicTerms:requested,excludedTerms:unique(excludedTerms),unresolvedRequirements:manualChecks,queries:unique(queries).slice(0,2),notes:['검색어와 접기 필터는 검토 보조입니다. 적합도·평판 점수를 계산하지 않습니다.',...(queries.length>1&&!explicitQueries?['두 번째 검색은 급식 직접 언급이 없는 먹방 채널도 검토하기 위한 확장 검색입니다.']:[])]};
+ return {discoveryIntent,requiresQueryReview,topicTerms:requested,excludedTerms:unique(excludedTerms),unresolvedRequirements:manualChecks,queries:unique(queries).slice(0,2),notes:['검색어와 접기 필터는 검토 보조입니다. 적합도·평판 점수를 계산하지 않습니다.',...(queries.length>1&&!explicitQueries?['두 번째 검색은 상품명 직접 언급이 없는 관련 분야 채널도 검토하기 위한 확장 검색입니다.']:[])]};
 }
 function excerpt(text,index,length){const start=Math.max(0,index-45),end=Math.min(text.length,index+length+90);return (start?'…':'')+text.slice(start,end)+(end<text.length?'…':'');}
 function textSources(channel){return [
