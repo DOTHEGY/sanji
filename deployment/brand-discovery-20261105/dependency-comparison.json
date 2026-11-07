@@ -1,0 +1,162 @@
+[
+  {
+    "path": "supabase/functions/_shared/brand-auto-plan.ts",
+    "baselinePresent": true,
+    "livePresent": true,
+    "identical": true,
+    "baselineSha256": "7fc5d52755ba4e90e0aca113f39ebe6029cd553af845a8241e28a01655213771",
+    "liveSha256": "7fc5d52755ba4e90e0aca113f39ebe6029cd553af845a8241e28a01655213771"
+  },
+  {
+    "path": "supabase/functions/_shared/brand-auto-schedule.ts",
+    "baselinePresent": true,
+    "livePresent": true,
+    "identical": true,
+    "baselineSha256": "7777c6052683f38b39ea3703b8333c92ac7bb34c06194606bf3e01f0b6a8f89a",
+    "liveSha256": "7777c6052683f38b39ea3703b8333c92ac7bb34c06194606bf3e01f0b6a8f89a"
+  },
+  {
+    "path": "supabase/functions/_shared/brand-auto-service.ts",
+    "baselinePresent": true,
+    "livePresent": true,
+    "identical": true,
+    "baselineSha256": "594ea874e1941d030fe396b9300debf2f00f3ad35c63c2f1aac06d9d1975fdac",
+    "liveSha256": "594ea874e1941d030fe396b9300debf2f00f3ad35c63c2f1aac06d9d1975fdac"
+  },
+  {
+    "path": "supabase/functions/_shared/brand-qualification.ts",
+    "baselinePresent": false,
+    "livePresent": false,
+    "identical": null,
+    "baselineSha256": null,
+    "liveSha256": null
+  },
+  {
+    "path": "supabase/functions/_shared/brand-research.ts",
+    "baselinePresent": true,
+    "livePresent": true,
+    "identical": true,
+    "baselineSha256": "c3957db940d499cd26e773f21034c74bd0d7e3970b1c6a96a45186cafc1fdfd2",
+    "liveSha256": "c3957db940d499cd26e773f21034c74bd0d7e3970b1c6a96a45186cafc1fdfd2"
+  },
+  {
+    "path": "supabase/functions/_shared/contact-safety.ts",
+    "baselinePresent": true,
+    "livePresent": true,
+    "identical": true,
+    "baselineSha256": "489a785f8efb5f96c4925a12c012dfa5ba28439359811dca976a91bab48854f8",
+    "liveSha256": "489a785f8efb5f96c4925a12c012dfa5ba28439359811dca976a91bab48854f8"
+  },
+  {
+    "path": "supabase/functions/_shared/discovery-health.ts",
+    "baselinePresent": true,
+    "livePresent": true,
+    "identical": true,
+    "baselineSha256": "d072da1cfe018309a53dad4fecd455de429bd183d297ffab0efe7defe61b2b08",
+    "liveSha256": "d072da1cfe018309a53dad4fecd455de429bd183d297ffab0efe7defe61b2b08"
+  },
+  {
+    "path": "supabase/functions/_shared/discovery-notification.ts",
+    "baselinePresent": true,
+    "livePresent": true,
+    "identical": true,
+    "baselineSha256": "ca8b7b28e70e9689d0ca48dd982ca2f409b69a85f9f5549386e341abb37852d6",
+    "liveSha256": "ca8b7b28e70e9689d0ca48dd982ca2f409b69a85f9f5549386e341abb37852d6"
+  },
+  {
+    "path": "supabase/functions/_shared/discovery-search.ts",
+    "baselinePresent": true,
+    "livePresent": true,
+    "identical": true,
+    "baselineSha256": "3f143e54ecdd59fa4fb595ee7618b8ccfa38cdebfee035b47a3991f9a9a9095e",
+    "liveSha256": "3f143e54ecdd59fa4fb595ee7618b8ccfa38cdebfee035b47a3991f9a9a9095e"
+  },
+  {
+    "path": "supabase/functions/_shared/discovery-service.ts",
+    "baselinePresent": true,
+    "livePresent": true,
+    "identical": true,
+    "baselineSha256": "8b15eadb2c8ca0f06b2c01e319dc49b8e0075e0c67426d55217b691902526457",
+    "liveSha256": "8b15eadb2c8ca0f06b2c01e319dc49b8e0075e0c67426d55217b691902526457"
+  },
+  {
+    "path": "supabase/functions/_shared/discovery-sources.ts",
+    "baselinePresent": true,
+    "livePresent": true,
+    "identical": true,
+    "baselineSha256": "1e512368f240283f239e6eb24862c28187556fff5faeb79b6a2c8d7b44c3a130",
+    "liveSha256": "1e512368f240283f239e6eb24862c28187556fff5faeb79b6a2c8d7b44c3a130"
+  },
+  {
+    "path": "supabase/functions/_shared/discovery.ts",
+    "baselinePresent": true,
+    "livePresent": true,
+    "identical": true,
+    "baselineSha256": "68a24d576a23d9177ba9dc84591b2b668a3c9962d58e52b3e22d67d65c0a0463",
+    "liveSha256": "68a24d576a23d9177ba9dc84591b2b668a3c9962d58e52b3e22d67d65c0a0463"
+  },
+  {
+    "path": "supabase/functions/_shared/gmail-signature.ts",
+    "baselinePresent": true,
+    "livePresent": true,
+    "identical": true,
+    "baselineSha256": "1273290925bf9d7a891d31be18ee8b64c0910c39bbb7cd393164433013e6cb6f",
+    "liveSha256": "1273290925bf9d7a891d31be18ee8b64c0910c39bbb7cd393164433013e6cb6f"
+  },
+  {
+    "path": "supabase/functions/_shared/mail-content.ts",
+    "baselinePresent": true,
+    "livePresent": true,
+    "identical": true,
+    "baselineSha256": "515d942c2cda6f3fdbbc6242cd9e8ed79c3e68f272a3c2c39793907f408c52a8",
+    "liveSha256": "515d942c2cda6f3fdbbc6242cd9e8ed79c3e68f272a3c2c39793907f408c52a8"
+  },
+  {
+    "path": "supabase/functions/_shared/mail-integrity.ts",
+    "baselinePresent": true,
+    "livePresent": true,
+    "identical": true,
+    "baselineSha256": "2f9fec8301ca13e8402d1e7a9bda4457ede56f8ef7c5a80017524b3b00ecbf69",
+    "liveSha256": "2f9fec8301ca13e8402d1e7a9bda4457ede56f8ef7c5a80017524b3b00ecbf69"
+  },
+  {
+    "path": "supabase/functions/_shared/mail-mime.ts",
+    "baselinePresent": true,
+    "livePresent": true,
+    "identical": true,
+    "baselineSha256": "30b11283ed274250baa810ffa1a292d8e0c5a00a18c52c61e3ad4804813b9856",
+    "liveSha256": "30b11283ed274250baa810ffa1a292d8e0c5a00a18c52c61e3ad4804813b9856"
+  },
+  {
+    "path": "supabase/functions/_shared/mail-recipients.ts",
+    "baselinePresent": true,
+    "livePresent": true,
+    "identical": true,
+    "baselineSha256": "353aa664f9fc885b62640cf6082501ddc38e874c84719d7177d89f8673605b6f",
+    "liveSha256": "353aa664f9fc885b62640cf6082501ddc38e874c84719d7177d89f8673605b6f"
+  },
+  {
+    "path": "supabase/functions/_shared/mail-template.ts",
+    "baselinePresent": true,
+    "livePresent": true,
+    "identical": true,
+    "baselineSha256": "a3677c4990ab9f349450713930e9ad0c92b7974bce6c9cbe3d8acd76bd54d153",
+    "liveSha256": "a3677c4990ab9f349450713930e9ad0c92b7974bce6c9cbe3d8acd76bd54d153"
+  },
+  {
+    "path": "supabase/functions/_shared/outbound-profile.ts",
+    "baselinePresent": true,
+    "livePresent": true,
+    "identical": true,
+    "baselineSha256": "7e5420404b03d7a98c8b4787f108ae095a5aa71ce848d76faf7f7e0b5c0ced38",
+    "liveSha256": "7e5420404b03d7a98c8b4787f108ae095a5aa71ce848d76faf7f7e0b5c0ced38"
+  },
+  {
+    "path": "supabase/functions/_shared/product-search.ts",
+    "baselinePresent": true,
+    "livePresent": true,
+    "identical": true,
+    "baselineSha256": "07acd9cb667f4e502ce6bfccd333bb617f4e50f1c37f79e730dcd0a58da1b52d",
+    "liveSha256": "07acd9cb667f4e502ce6bfccd333bb617f4e50f1c37f79e730dcd0a58da1b52d"
+  }
+]

@@ -1,3 +1,4 @@
+import {assessBrandQualification} from './brand-qualification.ts';
 import {assessMailLead,permanentFailureEmails} from './mail-integrity.ts';
 import {leadOutreach} from './mail-template.ts';
 import {brandNextSafeSlot} from './brand-auto-schedule.ts';
@@ -12,11 +13,13 @@ export function planAutomaticBrand({lead,template,enabledSince,now=new Date(),th
  if(!template?.id||!template?.version||template?.data?.channel!=='이메일'||!['brand_proposal','brand_auto_profile',undefined].includes(template.data.purpose))return {eligible:false,reason:'브랜드 이메일 템플릿이 없습니다.'};
  const refreshed=leadOutreach(template,data,new Date(now).toISOString());
  const enriched={...data,outreach:refreshed},review=assessMailLead(enriched,permanentFailureEmails(threads,suppression));
+ const qualification=assessBrandQualification({...lead,data:enriched},permanentFailureEmails(threads,suppression),new Date(now).getTime());
+ if(!qualification.eligible)return {eligible:false,reason:'제안 적합성 검토 대기: '+qualification.reasons.join(' / '),qualification};
  if(!review.allowed)return {eligible:false,reason:'검토 대기: '+review.reasons.join(' / ')};
  const blocked=new Set(suppression.map((s:any)=>String(s.identity||'').replace(/^email:/,'').toLowerCase()));
  const emails=mailRecipients({emails:review.contacts.map((c:any)=>c.email)}).filter((e:string)=>!blocked.has(e.toLowerCase()));
  if(!emails.length)return {eligible:false,reason:'검증된 수신 이메일 없음 또는 수신 거부'};
  if(!refreshed.subject||!refreshed.body||/\{\{/.test(refreshed.subject+refreshed.body)||/치료|예방|완치|항암|효능.{0,4}보장|혈당.{0,5}(낮|개선)/.test(refreshed.subject+refreshed.body))return {eligible:false,reason:'템플릿 변수 또는 표현 확인 필요'};
- const contacts=review.contacts.filter((c:any)=>emails.includes(c.email));const qualifiedAt=Math.max(Date.parse(discovered),Date.parse(contacts[0].checked));if(!Number.isFinite(qualifiedAt)||qualifiedAt>new Date(now).getTime())return {eligible:false,reason:'유효 연락처 확인 시각 미확인'};
- return {eligible:true,leadId:lead.id,discoveredAt:new Date(qualifiedAt).toISOString(),runAt:brandNextSafeSlot(qualifiedAt,now),emails,contacts,copy:refreshed,templateId:template.id,templateVersion:template.version};
+ const contacts=review.contacts.filter((c:any)=>emails.includes(c.email)).sort((a:any,b:any)=>Number(b.purpose==='사업 제휴')-Number(a.purpose==='사업 제휴'));const orderedEmails=contacts.map((c:any)=>c.email);const qualifiedAt=Math.max(Date.parse(discovered),Date.parse(contacts[0].checked));if(!Number.isFinite(qualifiedAt)||qualifiedAt>new Date(now).getTime())return {eligible:false,reason:'유효 연락처 확인 시각 미확인'};
+ return {eligible:true,leadId:lead.id,discoveredAt:new Date(qualifiedAt).toISOString(),runAt:brandNextSafeSlot(qualifiedAt,now),emails:orderedEmails,contacts,qualification,copy:refreshed,templateId:template.id,templateVersion:template.version};
 }

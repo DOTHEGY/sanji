@@ -1033,7 +1033,7 @@ test("Search replenishment rotates engines after denial and queues new sites wit
  const config={enabled:true,target:40,keywords:[],source_state:{}};
  class Q{constructor(t){this.t=t;}select(fields){this.fields=fields;return this;}eq(){return this;}lt(){return this;}order(){return this;}limit(){return this;}maybeSingle(){return this;}update(v){this.v=v;return this;}delete(){return this;}then(ok,bad){let data=this.t==="sanji_discovery_config"?(this.v?(Object.assign(config,this.v),config):(this.fields==="owner"?[{owner:"owner"}]:config)):[];if(this.v?.search_state)state=this.v.search_state;return Promise.resolve({data,error:null}).then(ok,bad);}}
  const sb={from:t=>new Q(t),rpc:(name,args)=>({name,args})};
- const query=async q=>{if(q instanceof Q){const r=await q;return r.data;}if(q.name==="sanji_claim_daily_sources")return false;if(q.name==="sanji_claim_search_sources")return {cursor:0,queries:2,day:"2026-10-22"};if(q.name==="sanji_enqueue_discovery_sources"){queued=q.args.p_rows;return queued.length;}return [];};
+ const query=async q=>{if(q instanceof Q){const r=await q;return r.data;}if(q.name==="sanji_claim_daily_sources")return false;if(q.name==="sanji_claim_adaptive_search_sources")return {cursor:0,queries:2,day:"2026-10-22",selections:q.args.p_selections,adaptive:q.args.p_adaptive};if(q.name==="sanji_enqueue_discovery_sources"){queued=q.args.p_rows;return queued.length;}return [];};
  global.fetch=async u=>{fetches.push(String(u));if(String(u).includes("google.com"))return new Response("denied",{status:429});return new Response('<a href="https://brand.co.kr/">브랜드 공식몰</a>',{headers:{"content-type":"text/html"}});};
  try{const service=m.exports.discoveryService({sb,query,audit:async()=>{},putRecord:async()=>{}});const r=await service.scheduled();assert.equal(r.added,1);assert.equal(state.queries,2);assert.equal(state.status,"replenished");assert.ok(fetches.some(u=>u.includes("naver.com")));assert.ok(queued[0].data.searchQuery);assert.equal(queued[0].data.contacts.length,0);}finally{global.fetch=oldFetch;}
 });
@@ -1078,16 +1078,16 @@ test("Discovery health separates active work, idle, stopped and stale heartbeat 
  const h=health(cfg,{processed:50,companies:10,emails:12},rows,at);assert.equal(h.status,"waiting");assert.equal(h.efficiency.companyYield,20);assert.equal(h.efficiency.failedSites,1);assert.equal(h.pending,1);assert.ok(h.nextRun);assert.equal(h.cost.billingVerified,false);
  assert.equal(health({...cfg,enabled:false},{},rows,at).status,"paused");assert.equal(health({...cfg,runtime:{lastStarted:new Date(at-13*60000).toISOString()}},{},rows,at).status,"delayed");
  assert.equal(health({...cfg,search_state:{status:"searching",leaseUntil:new Date(at+60000).toISOString()}},{},rows,at).status,"searching");
- assert.equal(health(cfg,{companies:40},rows,at).status,"target_reached");assert.equal(health({...cfg,search_state:{queries:64}},{},[],at).status,"search_budget");
+ assert.equal(health(cfg,{companies:40,qualified:40},rows,at).status,"target_reached");assert.equal(health({...cfg,search_state:{queries:64}},{},[],at).status,"search_budget");
 });
 
 test("Automatic brand research grounds exact product, proposes content rather than claims, checks email source and preserves finished copy",()=>{
  const compiled=esbuild.buildSync({entryPoints:["supabase/functions/_shared/brand-research.ts"],bundle:true,platform:"node",format:"cjs",write:false});const m={exports:{}};new Function("module","exports",compiled.outputFiles[0].text)(m,m.exports);
  const template={id:"t",version:4,data:{subject:"제안 {{브랜드명}}",body:"담당자님 {{개인화}}\n{{제품명}} 공통 본문 https://company.test/",signature:"원본 서명"}};
- const lead={name:"브랜드",website:"https://brand.co.kr/",contacts:[{email:"sales@brand.co.kr",source:"https://brand.co.kr/"}],publicEvidence:[{url:"https://brand.co.kr/",title:"브랜드 공식몰",description:"건강식품",checked:"2026-10-22",products:[{name:"브랜드 단백질 쉐이크 파우치 5종",quote:"브랜드 단백질 쉐이크 파우치 5종",url:"https://brand.co.kr/product/detail.html?product_no=10",evidenceType:"structured_product"}]}]};
+ const lead={name:"브랜드",website:"https://brand.co.kr/",contacts:[{email:"sales@brand.co.kr",source:"https://brand.co.kr/",checked:new Date().toISOString(),context:"영업 sales@brand.co.kr"}],publicEvidence:[{url:"https://brand.co.kr/",title:"브랜드 공식몰",description:"건강식품",excerpt:"영업 sales@brand.co.kr",checked:new Date().toISOString(),products:[{name:"브랜드 단백질 쉐이크 파우치 5종",quote:"브랜드 단백질 쉐이크 파우치 5종",url:"https://brand.co.kr/product/detail.html?product_no=10",evidenceType:"structured_product",hasOffers:true}]}]};
  const r=m.exports.researchBrand(lead,template);assert.equal(r.outreach.needsPersonalization,false);assert.match(r.outreach.intro,/파우치 5종/);assert.match(r.outreach.intro,/제안드리고/);assert.equal(r.research.ownership,"source_supported");assert.equal(m.exports.researchBrand({...lead,contacts:[{email:"sales@brand.co.kr",source:"https://brand.co.kr"}]},template).research.ownership,"source_supported");assert.match(r.outreach.body,/공통 본문 https/);assert.equal(r.outreach.signature,"원본 서명");assert.ok(!/효능|치료|무료|확정/.test(r.outreach.intro));
  assert.equal(m.exports.researchBrand({...lead,contacts:[{email:"sales@other.co.kr",source:"https://other.co.kr/"}]},template).research.ownership,"research_pending");
- const original={intro:"기존에 작성된 강화 개인화",body:"보존 본문",needsPersonalization:false};assert.deepEqual(m.exports.researchBrand({...lead,outreach:original},template).outreach,original);
+ const original={...r.outreach,intro:"기존에 작성된 강화 개인화",body:"보존 본문",needsPersonalization:false};assert.deepEqual(m.exports.researchBrand({...lead,research:r.research,outreach:original},template).outreach,original);
  const noProduct=m.exports.researchBrand({...lead,publicEvidence:[{url:lead.website,title:"브랜드 공식몰",checked:"2026-10-22",description:"건강식품"}]},template);assert.equal(noProduct.outreach.needsPersonalization,false);assert.equal(noProduct.outreach.draftMode,"brand_first");
 });
 
@@ -1105,13 +1105,14 @@ test("Discovery completion claim requires opted-in owner and actual KST target, 
 
 test("Completion notifier sends one real MIME contract to the owner only, preserves unknown outcomes and does not retry",async()=>{
  const c=esbuild.buildSync({entryPoints:['supabase/functions/_shared/discovery-notification.ts'],bundle:true,platform:'node',format:'cjs',write:false}),m={exports:{}};new Function('module','exports','require',c.outputFiles[0].text)(m,m.exports,require);
- let claimed=false,updates=[],requests=[],fail=false;
+ let claimed=false,updates=[],requests=[],fail=false,qualified=40;
  const sb={rpc:()=>({claim:true}),from:()=>({update(v){updates.push(v);return this;},eq(){return this;}})};
- const query=async q=>{if(q.claim){if(claimed)return null;claimed=true;return {day:'2026-10-22',recipient:'owner@example.test',target:40,companies:40,emails:53,processed:160};}return null;};
+ const query=async q=>{if(q.claim){if(claimed)return null;claimed=true;return {day:'2026-10-22',recipient:'owner@example.test',target:40,qualified,companies:40,emails:53,processed:160};}return null;};
  const notify=m.exports.discoveryCompletionNotifier({sb,query,gmailToken:async()=>({email:'sender@example.test',access_token:'mock-token'}),env:()=>"true",audit:async()=>{},remote:async(u,o)=>{requests.push({u,o});if(fail)throw Error('network timeout');return {id:'provider-id'};}});
  assert.equal((await notify(u1)).status,'accepted');assert.equal((await notify(u1)).status,'not_due_or_already_attempted');assert.equal(requests.length,1);assert.equal(updates[0].status,'accepted');
- const raw=Buffer.from(JSON.parse(requests[0].o.body).raw,'base64url').toString();assert.match(raw,/To: owner@example.test/);assert.equal(raw.includes('bcc:'),false);const body=Buffer.from(raw.split('\r\n\r\n')[1].replace(/\r\n/g,''),'base64').toString();assert.match(body,/매일 한국시간 자정/);assert.match(body,/이메일 확보 완료와 회사·상품 검증 완료는 구분/);assert.match(body,/40곳/);
+ const raw=Buffer.from(JSON.parse(requests[0].o.body).raw,'base64url').toString();assert.match(raw,/To: owner@example.test/);assert.equal(raw.includes('bcc:'),false);const body=Buffer.from(raw.split('\r\n\r\n')[1].replace(/\r\n/g,''),'base64').toString();assert.match(body,/매일 한국시간 자정/);assert.match(body,/법적 분류·유통 권한·공급 조건은 별도 확인/);assert.match(body,/40곳/);
  claimed=false;fail=true;assert.equal((await notify(u1)).status,'outcome_unknown');assert.equal((await notify(u1)).status,'not_due_or_already_attempted');assert.equal(requests.length,2);assert.equal(updates.at(-1).status,'outcome_unknown');
+ claimed=false;qualified=undefined;assert.equal((await notify(u1)).status,'failed');assert.equal(requests.length,2);assert.equal(updates.at(-1).status,'failed');
 });
 
 

@@ -2,15 +2,16 @@ import { mime } from "./mail-mime.ts";
 export function discoveryCompletionNotifier({sb,query,gmailToken,remote,audit,env}:any){
  return async function notifyOwner(owner:string){
   if(env("EMAIL_SENDING_ENABLED")!=="true")return {status:"sending_disabled"};
-  const snapshot=await query(sb.rpc("sanji_claim_discovery_notification",{p_owner:owner}));
+  const snapshot=await query(sb.rpc("sanji_claim_qualified_discovery_notification",{p_owner:owner}));
   if(!snapshot)return {status:"not_due_or_already_attempted"};
   let submitting=false;
   try{
+   if(!Number.isFinite(Number(snapshot.qualified))||Number(snapshot.qualified)<Number(snapshot.target))throw Error("검증 완료 집계가 없는 알림은 발송하지 않습니다. 서버와 DB 버전을 확인하세요.");
    const g=await gmailToken(owner);
-   const subject="[산지] "+snapshot.day+" 신규 업체 "+snapshot.target+"곳 이메일 발굴 완료";
-   const body="오늘의 이메일 발굴 목표를 달성했습니다.\n\n"+
-    "집계일: "+snapshot.day+" (한국시간)\n목표: 신규 업체 "+snapshot.target+"곳\n이메일 확보 업체: "+snapshot.companies+"곳\n신규 이메일: "+snapshot.emails+"개\n홈페이지 확인 처리: "+snapshot.processed+"회\n\n"+
-    "발굴 결과·제품 개인화·게시 출처 대조 상태를 서비스에서 확인하세요. 이메일 확보 완료와 회사·상품 검증 완료는 구분됩니다.\n"+
+   const subject="[산지] "+snapshot.day+" 제안 적합 업체 "+snapshot.target+"곳 검증 완료";
+   const body="오늘의 상품·공식 연락처 검증 목표를 달성했습니다.\n\n"+
+    "집계일: "+snapshot.day+" (한국시간)\n목표: 제안 적합 업체 "+snapshot.target+"곳\n검증 완료 업체: "+snapshot.qualified+"곳\n이메일 확보 업체: "+snapshot.companies+"곳\n신규 이메일: "+snapshot.emails+"개\n홈페이지 확인 처리: "+snapshot.processed+"회\n\n"+
+    "발굴 결과·제품 개인화·게시 출처 대조 상태를 서비스에서 확인하세요. 상품·공식 연락처 게시 근거 확인이며 법적 분류·유통 권한·공급 조건은 별도 확인 대상입니다.\n"+
     "https://dothegy.github.io/sanji/workspace/#brands\n\n"+
     "매일 한국시간 자정(00:00)에 새 날짜의 발굴을 시작합니다. 업체 대상 영업 메일은 별도 발송 승인 전에는 전송하지 않습니다.";
    const raw=mime({email:snapshot.recipient,subject,body,senderName:"산지 · 발굴 완료 알림",messageId:"discovery-"+owner+"-"+snapshot.day,attachments:[]},g.email);
