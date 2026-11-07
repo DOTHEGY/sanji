@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { reviewReasons, orderCandidates } from '../supabase/functions/youtube-discovery/review-filters.mjs';
 import { buildBriefReview } from '../supabase/functions/youtube-discovery/relevance.mjs';
 import { supabaseUrl, supabaseKey } from './supabase-config.js';
 
@@ -34,6 +35,7 @@ function clearDraft() {
 function clearPrivate() {
   epoch++; for (const controller of pending) controller.abort(); pending.clear();
   $('results').replaceChildren(); $('status').textContent = ''; $('brief').value = ''; $('queries').value = ''; queryOrigin = 'empty'; $('query-origin').textContent = '';
+  $('minimum-subscribers').value='0';$('minimum-views').value='0';$('result-order').value='source';
   submittedBrief = null; $('results-purpose').replaceChildren(); $('previous-results-note').textContent = '';
   resultCards = []; $('brief-plan').replaceChildren(); $('result-criteria').replaceChildren(); $('fold-news').checked = false; $('fold-business').checked = false; updateFolds();
   clearDraft(); searchBusy = false; $('search').disabled = false;
@@ -78,6 +80,8 @@ function warnings(container, values) {
 function showCriteria(container, criteria) {
   container.replaceChildren(); if (!criteria) return;
   container.append(el('h3', '검색 조건과 확인이 필요한 항목'));
+  container.append(el('p','공식 API 요청: 검색 최대 2회, 공개 통계·최근 업로드 조회 최대 23회. 프로젝트 할당량을 함께 사용하며 자동 재시도하지 않습니다.','muted'));
+  if(criteria.discoveryIntent){const intent=criteria.discoveryIntent;container.append(el('p', `우선 탐색 분야: ${intent.primaryCategory} · ${intent.secondaryCategories.join(' · ')} / 상품: ${intent.productTerms.join(' · ') || '요청 참조'} / 부가 특성: ${intent.modifiers.join(' · ') || '없음'}`),el('p',intent.explanation));}
   container.append(el('p', `검색 주제: ${(criteria.topicTerms || []).map(term => term.label).join(' · ') || '자동 분류하지 못함'}`));
   container.append(el('p', `검색어: ${(criteria.queries || []).join(' / ') || '직접 입력해 주세요'}`));
   if (criteria.requiresQueryReview || !criteria.queries?.length) container.append(el('p', '검색어 확인이 필요합니다. 조건을 자동 확정하지 않았으므로 검색어를 직접 입력하거나 요청을 명확하게 수정해 주세요.', 'notice'));
@@ -88,10 +92,13 @@ function updateFolds() {
   const folded = [];
   for (const { card, channel } of resultCards) {
     const reasons = (channel.contentFlags || []).filter(flag => (flag.kind === 'news_language' && $('fold-news').checked) || (flag.kind === 'business_language' && $('fold-business').checked));
+    const thresholdReasons = reviewReasons(channel,{minimumSubscribers:Number($('minimum-subscribers').value)||0,minimumViews:Number($('minimum-views').value)||0});
+    for(const label of thresholdReasons)reasons.push({label});
     card.hidden = reasons.length > 0;
     if (card.hidden) folded.push(`${channel.title}: ${reasons.map(flag => flag.label).join(' · ')}`);
   }
-  $('fold-summary').textContent = `${resultCards.length - folded.length}개 표시 · ${folded.length}개 접힘 (원래 검색 순서 유지)`;
+  for(const row of orderCandidates(resultCards,$('result-order').value))$('results').append(row.card);
+  $('fold-summary').textContent = `${resultCards.length - folded.length}개 표시 · ${folded.length}개 접힘 (선택한 표시 순서)`;
   $('fold-reasons').replaceChildren(...folded.map(reason => el('p', reason)));
   $('show-all').hidden = folded.length === 0;
   $('fold-empty').hidden = resultCards.length === 0 || folded.length !== resultCards.length;
@@ -118,8 +125,9 @@ $('preview-queries').addEventListener('click', () => {
 });
 $('brief').addEventListener('input', briefChanged);
 $('queries').addEventListener('input', () => { queryOrigin = $('queries').value.trim() ? 'manual' : 'empty'; $('brief-plan').replaceChildren(); updateQueryNotice(); });
-for (const id of ['fold-news', 'fold-business']) $(id).addEventListener('change', updateFolds);
-$('show-all').addEventListener('click', () => { $('fold-news').checked = false; $('fold-business').checked = false; updateFolds(); });
+$('use-30k').addEventListener('click',()=>{$('minimum-subscribers').value='30000';updateFolds();});
+for (const id of ['minimum-subscribers','minimum-views','result-order','fold-news', 'fold-business']) $(id).addEventListener('change', updateFolds);
+$('show-all').addEventListener('click', () => { $('minimum-subscribers').value='0';$('minimum-views').value='0'; $('fold-news').checked = false; $('fold-business').checked = false; updateFolds(); });
 function selectContact(contact, channel, brief) {
   selectedEmail = contact.email;
   $('recipient').replaceChildren(document.createTextNode(`수신자: ${selectedEmail} · ${channel.title} · `), link('직접 확인한 연락처 출처', contact.sourceUrl), el('span', ` · 공개 용도·확인 메모: ${contact.context}`));
@@ -133,6 +141,12 @@ function renderChannel(channel, ticket) {
   const card = el('article', undefined, 'card');
   const title = el('h2'); title.append(link(channel.title, channel.url)); card.append(title);
   card.append(el('p', `이 결과의 협업 목적: ${ticket.brief}`, 'result-purpose'));
+  card.append(el('p', `공개 구독자: ${channel.subscriberCount == null ? '비공개·미확인' : channel.subscriberCount.toLocaleString('ko-KR') + '명 (YouTube 공개 표시 수치, 세 자리 유효숫자로 내림)'}`));
+  const recent=el('section');recent.append(el('h3','최근 업로드 최대 5개 · YouTube 공개 조회수'));
+  recent.append(el('p','검색어와 무관하게 최신 업로드 목록에서 확인합니다. Shorts·일반 영상·라이브가 섞일 수 있으며 기간이 다른 누적 조회수입니다. 평균·참여율·종합 점수로 환산하지 않습니다.'));
+  if(!channel.recentVideos?.length)recent.append(el('p','최근 업로드 지표 미확인'));
+  for(const video of channel.recentVideos||[]){const row=el('p');row.append(link(video.title,video.url),document.createTextNode(` · ${video.publishedAt||'게시일 미확인'} · 조회 ${video.viewCount==null?'미확인':video.viewCount.toLocaleString('ko-KR')} · 길이 ${video.duration||'미확인'}`));recent.append(row);}
+  card.append(recent);
   card.append(el('p', channel.description || '', 'muted'));
   card.append(el('p', `이 후보를 가져온 검색어 (원문 근거와 별개): ${(channel.matchedQueries || []).join(' / ') || '응답에 없음'}`, 'muted'));
   for (const video of channel.videos || []) { const p = el('p'); p.append(link(video.title, video.url)); card.append(p, el('p', `게시: ${video.publishedAt || '알 수 없음'}`, 'muted'), el('p', video.descriptionPreview || '', 'evidence')); }
@@ -229,6 +243,7 @@ $('search-form').addEventListener('submit', async (event) => {
     $('status').textContent = result.channels?.length ? `${result.channels.length}개 채널 · 검색어: ${(result.queries || []).join(' / ')} · API 호출: 검색 ${result.quota?.searchCalls ?? '?'} / 조회 ${result.quota?.readCalls ?? '?'}` : '이번 검색에서 표시할 채널이 없습니다. 검색어를 바꿔 다시 확인해 보세요.';
     submittedBrief = ticket.brief; $('results-purpose').textContent = `이 결과의 협업 목적: ${submittedBrief}`; updatePreviousResultsNotice();
     showCriteria($('result-criteria'), result.criteria);
+    $('result-criteria').append(el('p',`공개 지표 조회 시각: ${result.observedAt || '미확인'}`));
     warnings($('results'), result.warnings);
     for (const channel of result.channels || []) renderChannel(channel, ticket);
     updateFolds();

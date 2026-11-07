@@ -4,6 +4,7 @@ export class DiscoveryError extends Error {
   constructor(status, code, message) { super(message); this.status = status; this.code = code; }
 }
 const fail = (status, code, message) => { throw new DiscoveryError(status, code, message); };
+export const publicCount = value => /^(?:0|[1-9][0-9]*)$/.test(String(value)) && Number.isSafeInteger(Number(value)) ? Number(value) : null;
 export const channelIdValid = value => typeof value === 'string' && /^UC[A-Za-z0-9_-]{22}$/.test(value);
 const videoIdValid = value => typeof value === 'string' && /^[A-Za-z0-9_-]{11}$/.test(value);
 export function publicText(value, max = 600) {
@@ -52,7 +53,7 @@ export async function discover(body, {apiKey, fetchImpl=fetch, now=()=>Date.now(
   const candidates = new Map();
   for (const query of plan.queries) {
     const items = await request('search',{part:'snippet',type:'video',q:query,maxResults:10,relevanceLanguage:'ko',safeSearch:'strict'});
-    for (const item of items) {
+    for (const item of items.slice(0,10)) {
       const c = item?.snippet?.channelId, v=item?.id?.videoId;
       if (!channelIdValid(c) || !videoIdValid(v)) continue;
       if (!candidates.has(c)) candidates.set(c, {channelId:c,title:publicText(item.snippet.channelTitle,150),description:'',url:'https://www.youtube.com/channel/'+c,matchedQueries:[],videos:[],reviewRequired:['콘텐츠·논란·광고 이력과 타깃 적합성을 직접 확인하세요.','클린 크리에이터 여부·시청자 연령·협업 가능성은 검증하지 않았습니다.']});
@@ -62,13 +63,34 @@ export async function discover(body, {apiKey, fetchImpl=fetch, now=()=>Date.now(
     }
   }
   if (candidates.size) {
-    const channels = await request('channels',{part:'snippet',id:[...candidates.keys()].join(','),maxResults:50});
+    const channels = await request('channels',{part:'snippet,statistics,contentDetails',id:[...candidates.keys()].join(','),maxResults:50});
     const visible = new Set();
     for (const item of channels) if (item && candidates.has(item.id)) {
       visible.add(item.id);
-      Object.assign(candidates.get(item.id), {title:publicText(item.snippet?.title,150)||candidates.get(item.id).title,description:publicText(item.snippet?.description)});
+      Object.assign(candidates.get(item.id), {title:publicText(item.snippet?.title,150)||candidates.get(item.id).title,description:publicText(item.snippet?.description), subscriberCount:item.statistics?.hiddenSubscriberCount ? null : publicCount(item.statistics?.subscriberCount), subscribersHidden:Boolean(item.statistics?.hiddenSubscriberCount), uploadsPlaylistId:/^UU[A-Za-z0-9_-]{22}$/.test(item.contentDetails?.relatedPlaylists?.uploads||'')?item.contentDetails.relatedPlaylists.uploads:null});
     }
     for (const id of candidates.keys()) if (!visible.has(id)) candidates.delete(id);
+  }
+  // Fetch latest uploads, not keyword-matched old videos. Bounded concurrency and no retries.
+  const queue=[...candidates.values()];let recentFailure=null;
+  await Promise.all(Array.from({length:Math.min(4,queue.length)},async()=>{
+    while(queue.length&&!recentFailure){const c=queue.shift();c.recentVideos=[];c.recentStatus='unavailable';
+      if(!c.uploadsPlaylistId)continue;
+      try{
+        const items=await request('playlistItems',{part:'contentDetails',playlistId:c.uploadsPlaylistId,maxResults:5});
+        c.recentIds=items.slice(0,5).map(i=>i?.contentDetails?.videoId).filter(videoIdValid);c.recentStatus='loaded';
+      }catch(error){recentFailure=recentFailure||error;}
+    }
+  }));
+  if(recentFailure)throw recentFailure;
+  const ids=[...new Set([...candidates.values()].flatMap(c=>c.recentIds||[]))];const videos=new Map();
+  for(let i=0;i<ids.length;i+=50){
+    const items=await request('videos',{part:'snippet,statistics,contentDetails',id:ids.slice(i,i+50).join(','),maxResults:50});
+    for(const v of items)if(videoIdValid(v?.id)&&ids.includes(v.id))videos.set(v.id,v);
+  }
+  for(const c of candidates.values()){
+    c.recentVideos=(c.recentIds||[]).map(id=>videos.get(id)).filter(v=>v?.snippet?.channelId===c.channelId).map(v=>({videoId:v.id,title:publicText(v.snippet.title,200),url:'https://www.youtube.com/watch?v='+v.id,publishedAt:Number.isFinite(Date.parse(v.snippet.publishedAt))?v.snippet.publishedAt:null,viewCount:publicCount(v.statistics?.viewCount),duration:v.contentDetails?.duration||null}));
+    delete c.recentIds;delete c.uploadsPlaylistId;
   }
   return {...plan,channels:[...candidates.values()].map(c=>annotateCandidate(c,plan.criteria)),observedAt:new Date(now()).toISOString(),quota,warnings:['YouTube 키워드 검색 결과이며 추천 순위·적합도 점수가 아닙니다. 전체 채널을 빠짐없이 검색하지 않습니다.','고정댓글 여부는 공식 API로 확인할 수 없습니다. 이메일 자동 수집은 제공하지 않습니다.','협업 문의용 공개 주소 또는 제공받은 연락처를 원문·용도와 함께 직접 확인하세요. 공개라는 이유만으로 대량 수집·무차별 발송하지 않습니다.','검색 결과와 초안은 이 화면에서만 유지되며 새로고침·로그아웃 시 지워집니다.']};
 }
