@@ -6,7 +6,7 @@ import { supabaseUrl, supabaseKey } from './supabase-config.js';
 // Default Supabase session key matches the main workspace; no new authentication flow.
 const client = createClient(supabaseUrl, supabaseKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, flowType: 'pkce' } });
 const $ = (id) => document.getElementById(id);
-let owner = null, epoch = 0, searchBusy = false, selectedEmail = '', disposed = false;
+let owner = null, epoch = 0, searchBusy = false, selectedEmail = '', selectedChannelId = '', disposed = false;
 const pending = new Set();
 let resultCards = [];
 let queryOrigin = 'empty';
@@ -27,17 +27,17 @@ function link(text, value) {
   return node;
 }
 function clearDraft() {
-  selectedEmail = ''; $('subject').value = ''; $('body').value = '';
+  selectedEmail = ''; selectedChannelId = ''; $('subject').value = ''; $('body').value = '';
   $('recipient').textContent = ''; $('draft').hidden = true;
   $('confirm').checked = false; $('open-mail').disabled = true;
   $('mail-status').textContent = '발송된 메일은 없습니다. 이 화면은 자동 발송하지 않습니다.';
 }
 function clearPrivate() {
   epoch++; for (const controller of pending) controller.abort(); pending.clear();
-  $('results').replaceChildren(); $('status').textContent = ''; $('brief').value = ''; $('queries').value = ''; queryOrigin = 'empty'; $('query-origin').textContent = '';
+  $('results').replaceChildren(); $('kept-results').replaceChildren(); $('excluded-results').replaceChildren(); $('status').textContent = ''; $('brief').value = ''; $('queries').value = ''; queryOrigin = 'empty'; $('query-origin').textContent = '';
   $('minimum-subscribers').value='0';$('minimum-views').value='0';$('result-order').value='source';
   submittedBrief = null; $('results-purpose').replaceChildren(); $('previous-results-note').textContent = '';
-  resultCards = []; $('brief-plan').replaceChildren(); $('result-criteria').replaceChildren(); $('fold-news').checked = false; $('fold-business').checked = false; updateFolds();
+  resultCards = []; $('brief-plan').replaceChildren(); $('result-criteria').replaceChildren(); $('fold-news').checked = true; $('fold-business').checked = false; updateFolds();
   clearDraft(); searchBusy = false; $('search').disabled = false;
 }
 function sessionChanged(session) {
@@ -80,7 +80,7 @@ function warnings(container, values) {
 function showCriteria(container, criteria) {
   container.replaceChildren(); if (!criteria) return;
   container.append(el('h3', '검색 조건과 확인이 필요한 항목'));
-  container.append(el('p','공식 API 요청: 검색 최대 2회, 공개 통계·최근 업로드 조회 최대 23회. 프로젝트 할당량을 함께 사용하며 자동 재시도하지 않습니다.','muted'));
+  container.append(el('p','공식 API 요청: 검색 최대 2회, 공개 통계·최근 업로드 조회 최대 23회. 검색은 별도 검색 한도, 조회는 일반 할당량을 사용합니다. 호출 횟수는 금전 비용이나 프로젝트 잔여량이 아닙니다. 자동 재시도하지 않습니다.','muted'));
   if(criteria.discoveryIntent){const intent=criteria.discoveryIntent;container.append(el('p', `우선 탐색 분야: ${intent.primaryCategory} · ${intent.secondaryCategories.join(' · ')} / 상품: ${intent.productTerms.join(' · ') || '요청 참조'} / 부가 특성: ${intent.modifiers.join(' · ') || '없음'}`),el('p',intent.explanation));}
   container.append(el('p', `검색 주제: ${(criteria.topicTerms || []).map(term => term.label).join(' · ') || '자동 분류하지 못함'}`));
   container.append(el('p', `검색어: ${(criteria.queries || []).join(' / ') || '직접 입력해 주세요'}`));
@@ -97,8 +97,9 @@ function updateFolds() {
     card.hidden = reasons.length > 0;
     if (card.hidden) folded.push(`${channel.title}: ${reasons.map(flag => flag.label).join(' · ')}`);
   }
-  for(const row of orderCandidates(resultCards,$('result-order').value))$('results').append(row.card);
-  $('fold-summary').textContent = `${resultCards.length - folded.length}개 표시 · ${folded.length}개 접힘 (선택한 표시 순서)`;
+  for(const row of orderCandidates(resultCards,$('result-order').value))$(row.reviewState==='kept'?'kept-results':row.reviewState==='excluded'?'excluded-results':'results').append(row.card);
+  $('review-summary').textContent=`내 검토 상태: 확인 전 ${resultCards.filter(r=>r.reviewState==='pending').length} · 직접 확인 후 남김 ${resultCards.filter(r=>r.reviewState==='kept').length} · 직접 제외 ${resultCards.filter(r=>r.reviewState==='excluded').length}`;
+  $('fold-summary').textContent = `표시 필터: ${resultCards.length - folded.length}개 통과 · ${folded.length}개 접힘 (내 검토 상태별 목록)`;
   $('fold-reasons').replaceChildren(...folded.map(reason => el('p', reason)));
   $('show-all').hidden = folded.length === 0;
   $('fold-empty').hidden = resultCards.length === 0 || folded.length !== resultCards.length;
@@ -128,7 +129,10 @@ $('queries').addEventListener('input', () => { queryOrigin = $('queries').value.
 $('use-30k').addEventListener('click',()=>{$('minimum-subscribers').value='30000';updateFolds();});
 for (const id of ['minimum-subscribers','minimum-views','result-order','fold-news', 'fold-business']) $(id).addEventListener('change', updateFolds);
 $('show-all').addEventListener('click', () => { $('minimum-subscribers').value='0';$('minimum-views').value='0'; $('fold-news').checked = false; $('fold-business').checked = false; updateFolds(); });
+function selectedCandidateExcluded(){return resultCards.some(row=>row.channel.channelId===selectedChannelId&&row.reviewState==='excluded');}
 function selectContact(contact, channel, brief) {
+  if(resultCards.some(row=>row.channel.channelId===channel.channelId&&row.reviewState==='excluded'))return;
+  selectedChannelId=channel.channelId;
   selectedEmail = contact.email;
   $('recipient').replaceChildren(document.createTextNode(`수신자: ${selectedEmail} · ${channel.title} · `), link('직접 확인한 연락처 출처', contact.sourceUrl), el('span', ` · 공개 용도·확인 메모: ${contact.context}`));
   $('subject').value = `[협업 제안] ${channel.title}님께`;
@@ -140,7 +144,22 @@ function selectContact(contact, channel, brief) {
 function renderChannel(channel, ticket) {
   const card = el('article', undefined, 'card');
   const title = el('h2'); title.append(link(channel.title, channel.url)); card.append(title);
+  const reviewRow={card,channel,reviewState:'pending'};
+  const reviewSelect=el('select');reviewSelect.setAttribute('aria-label',`내 검토 상태: ${channel.title}`);
+  for(const [value,label] of [['pending','영상 확인 전'],['kept','사람 중심 영상 직접 확인 · 후보로 남김'],['excluded','직접 검토 제외']]){const option=el('option',label);option.value=value;reviewSelect.append(option);}
+  reviewSelect.addEventListener('change',()=>{if(!active(ticket))return;reviewRow.reviewState=reviewSelect.value;choose.disabled=!valid();if(selectedChannelId===channel.channelId){invalidateConfirmation();$('mail-status').textContent=reviewRow.reviewState==='excluded'?'직접 제외한 후보입니다. 초안 내용은 보존했지만 메일 앱 열기는 차단했습니다. 후보 상태를 복원한 뒤 수신자를 다시 확인하세요.':'후보 상태가 변경되었습니다. 수신자와 초안을 다시 확인하세요.';}updateFolds();});
+  card.append(el('p','내 검토 상태 (사용자 입력, YouTube 데이터·자동 판정 아님)'),reviewSelect);
   card.append(el('p', `이 결과의 협업 목적: ${ticket.brief}`, 'result-purpose'));
+  const focus=channel.fieldEvidence;
+  if(focus?.fields?.length){
+    const section=el('section',undefined,'field-evidence');section.append(el('h3',`최근 제목에서 탐색 표현 찾기: ${focus.fields.join(' · ')}`),el('p',focus.note));
+    section.append(el('p',`표시된 자기소개 일부에서 찾은 표현: ${focus.description.matches.map(m=>m.field+' ('+m.matchedTerms.join(', ')+')').join(' · ')||'미확인'}`));
+    if(focus.description.matches.length)section.append(el('p',focus.description.text,'evidence'),link('채널 원문',focus.description.url));
+    for(const match of focus.description.matches)if(match.contextWarning)section.append(el('p',match.contextWarning,'notice'));
+    if(!focus.uploads.length)section.append(el('p','최근 업로드 원문 미확인. 제목 원문을 확인할 자료가 부족합니다.'));
+    for(const video of focus.uploads){const row=el('p');row.append(link(video.title,video.url),document.createTextNode(` · ${video.publishedAt||'게시일 미확인'} · 찾은 표현: ${video.matches.map(m=>m.field+' ('+m.matchedTerms.join(', ')+')').join(' · ')||'미확인'}`));section.append(row);for(const match of video.matches)if(match.contextWarning)section.append(el('p',match.contextWarning,'notice'));}
+    card.append(section);
+  }
   card.append(el('p', `공개 구독자: ${channel.subscriberCount == null ? '비공개·미확인' : channel.subscriberCount.toLocaleString('ko-KR') + '명 (YouTube 공개 표시 수치, 세 자리 유효숫자로 내림)'}`));
   const recent=el('section');recent.append(el('h3','최근 업로드 최대 5개 · YouTube 공개 조회수'));
   recent.append(el('p','검색어와 무관하게 최신 업로드 목록에서 확인합니다. Shorts·일반 영상·라이브가 섞일 수 있으며 기간이 다른 누적 조회수입니다. 평균·참여율·종합 점수로 환산하지 않습니다.'));
@@ -168,7 +187,7 @@ function renderChannel(channel, ticket) {
   warnings(card, channel.reviewRequired);
   card.append(el('p', '수동 검토 필요: 최근 콘텐츠, 광고 이력, 논란·클린 이미지, 시청자 연령, IP·초상 사용권과 브랜드 적합성을 직접 확인하세요. 안전성 검증 완료를 의미하지 않습니다.', 'notice'));
   const manual = el('div', undefined, 'contact');
-  manual.append(el('h3', '비즈니스 연락처로 초안 작성'), el('p', 'YouTube API를 통한 이메일 자동 수집과 고정 댓글 확인은 지원하지 않습니다. 채널 정보(About)나 공식 웹사이트의 비즈니스 연락처는 직접 확인할 수 있습니다. 공개된 문의 목적을 확인하세요. 공개 이메일이 모든 광고의 수신 동의를 의미하지는 않습니다.', 'notice'));
+  manual.append(el('h3', '비즈니스 연락처로 초안 작성'), el('p','연락처 상태: 이 검색에서 이메일을 자동 확보하지 않았습니다. 원문에서 확인한 업무용 주소와 출처를 입력하세요.','notice'), el('p', 'YouTube API를 통한 이메일 자동 수집과 고정 댓글 확인은 지원하지 않습니다. 채널 정보(About)나 공식 웹사이트의 비즈니스 연락처는 직접 확인할 수 있습니다. 공개된 문의 목적을 확인하세요. 공개 이메일이 모든 광고의 수신 동의를 의미하지는 않습니다.', 'notice'));
   const email = el('input'); email.type = 'email'; email.placeholder = '협업 문의용 이메일'; email.maxLength = 254; email.setAttribute('aria-label', '협업 문의용 이메일');
   const source = el('input'); source.type = 'url'; source.placeholder = '연락처 확인 출처 URL'; source.setAttribute('aria-label', '연락처 확인 출처 URL');
   const context = el('textarea'); context.rows = 2; context.maxLength = 500; context.placeholder = '공개 용도·확인 메모 (예: 광고·비즈니스 문의)'; context.setAttribute('aria-label', '공개 용도·확인 메모');
@@ -177,7 +196,7 @@ function renderChannel(channel, ticket) {
   const choose = el('button', '입력한 주소로 초안 작성'); choose.disabled = true;
   function valid() {
     let url; try { url = new URL(source.value); } catch { return false; }
-    return consent.checked && Boolean(context.value.trim()) && email.validity.valid && /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email.value) && url.protocol === 'https:' && !url.username && !url.password;
+    return reviewRow.reviewState!=='excluded' && consent.checked && Boolean(context.value.trim()) && email.validity.valid && /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email.value) && url.protocol === 'https:' && !url.username && !url.password;
   }
   for (const field of [email, source, context]) field.addEventListener('input', () => { consent.checked = false; choose.disabled = true; clearDraft(); });
   consent.addEventListener('change', () => { choose.disabled = !valid(); if (!consent.checked) clearDraft(); });
@@ -225,7 +244,7 @@ function renderChannel(channel, ticket) {
     manual.append(link('채널 정보(About)에서 직접 확인', aboutUrl), useAbout, el('p', '주소 입력은 이메일 조회, 원문 열람 또는 연락 동의 확인을 의미하지 않습니다.', 'muted'));
   }
   manual.append(email, source, lookup, evidence, context, label, choose); card.append(manual);
-  $('results').append(card); resultCards.push({ card, channel });
+  $('results').append(card); resultCards.push(reviewRow);
 }
 $('search-form').addEventListener('submit', async (event) => {
   event.preventDefault(); const brief = $('brief').value.trim();
@@ -233,7 +252,7 @@ $('search-form').addEventListener('submit', async (event) => {
   // Invalidate all previous result handlers without clearing the submitted brief.
   epoch++; for (const controller of pending) controller.abort(); pending.clear();
   const ticket = { owner, epoch, brief }; searchBusy = true; $('search').disabled = true;
-  $('results').replaceChildren(); resultCards = []; submittedBrief = null; $('results-purpose').replaceChildren(); updatePreviousResultsNotice(); updateFolds(); $('result-criteria').replaceChildren(); clearDraft(); $('status').textContent = '공개 YouTube 콘텐츠 검색 중…';
+  $('results').replaceChildren(); $('kept-results').replaceChildren(); $('excluded-results').replaceChildren(); resultCards = []; submittedBrief = null; $('results-purpose').replaceChildren(); updatePreviousResultsNotice(); updateFolds(); $('result-criteria').replaceChildren(); clearDraft(); $('status').textContent = '공개 YouTube 콘텐츠 검색 중…';
   try {
     const queries = $('queries').value.split('\n').map(value => value.trim()).filter(Boolean);
     if (queries.length > 2) throw new Error('검색어는 최대 2개까지 입력해 주세요.');
@@ -253,10 +272,10 @@ $('search-form').addEventListener('submit', async (event) => {
 for (const button of $('samples').querySelectorAll('button')) button.addEventListener('click', () => { $('brief').value = button.textContent; briefChanged(); $('brief').focus(); });
 function invalidateConfirmation() { $('confirm').checked = false; $('open-mail').disabled = true; }
 $('subject').addEventListener('input', invalidateConfirmation); $('body').addEventListener('input', invalidateConfirmation);
-$('confirm').addEventListener('change', () => { $('open-mail').disabled = !$('confirm').checked || !selectedEmail; });
+$('confirm').addEventListener('change', () => { $('open-mail').disabled = !$('confirm').checked || !selectedEmail || selectedCandidateExcluded(); });
 $('clear-draft').addEventListener('click', clearDraft);
 $('open-mail').addEventListener('click', () => {
-  if (!owner || disposed || !selectedEmail || !$('confirm').checked) return;
+  if (!owner || disposed || !selectedEmail || !$('confirm').checked || selectedCandidateExcluded()) return;
   const uri = `mailto:${encodeURIComponent(selectedEmail)}?subject=${encodeURIComponent($('subject').value)}&body=${encodeURIComponent($('body').value)}`;
   invalidateConfirmation();
   $('mail-status').textContent = '메일 앱에 초안 열기를 요청했습니다. 이 화면에서 발송된 메일은 없습니다. 메일 앱에서 수신자와 내용을 다시 확인하세요.';
