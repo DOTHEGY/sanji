@@ -90,6 +90,7 @@ function flags(channel){
  const clauses=description.split(/[.!?。\n]|\s*[|｜]\s*/).filter(Boolean);
  const rules=[
   {kind:'news_language',label:'뉴스·보도 자기소개 표현',pattern:/뉴스\s*전문\s*채널|보도\s*전문|뉴스\s*방송사|언론사\s*(?:공식|채널)|공식\s*뉴스\s*채널|대표\s*뉴스\s*채널|\b(?:news organization|news broadcaster|official news channel|news channel)\b/iu},
+  {kind:'corporate_mcn_language',label:'MCN 운영사 공식 채널 자기소개 표현',pattern:/(?:MCN|멀티채널\s*네트워크)\s*(?:회사|기업|운영사)의?\s*공식\s*(?:유튜브\s*)?채널|(?:크리에이터\s*매니지먼트\s*회사)의?\s*공식\s*채널|\bofficial MCN company channel\b/iu},
   {kind:'business_language',label:'업체·서비스 자기소개 표현',pattern:/(?:렌탈|대여)\s*전문\s*(?:업체|회사|기업)|공식\s*(?:렌탈|대여)\s*서비스|(?:회사|기업|업체|식당|제조사|브랜드)의?\s*공식\s*(?:유튜브\s*)?채널|공식\s*(?:식당|제조사|업체|기업|브랜드)\s*채널|\b(?:official rental service|rental company|official company channel|official brand channel)\b/iu},
  ];
  for(const rule of rules){

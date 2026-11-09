@@ -64,7 +64,7 @@ test('all automatic fallback expansions honor exclusions too',async()=>{
  const p=searchPlan({brief:'급식 IP 먹방 크리에이터 음식 제외'});assert.deepEqual(p.queries,['급식 먹방']);assert.ok(p.queries.every(q=>!q.includes('음식')));
  const en=searchPlan({brief:'급식 IP 먹방 크리에이터 food 제외'});assert.ok(en.queries.every(q=>!q.includes('음식')));
 });
-test('two searches cap candidates at twenty and raw statistics at two fifty-ID reads',async()=>{
+test('twenty fixture candidates use bounded fifty-ID statistic batches',async()=>{
  const {discover}=await mod();let searches=0,reads=0;const known=[];
  const r=await discover({brief:'호빵 출시 크리에이터'},{apiKey:'test',fetchImpl:async u=>{
  const resource=u.pathname.split('/').pop();

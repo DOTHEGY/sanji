@@ -25,3 +25,15 @@ verify_jwt = false
 entrypoint = "./functions/youtube-discovery/index.ts"
 # Independent, user-session-only, read-only API. Membership is also checked in handler.
 verify_jwt = true
+
+[functions.creator-daily-outreach]
+entrypoint = "./functions/creator-daily-outreach/index.ts"
+# User-session campaign API; server verifies membership and owner scope.
+# This declaration is not a deployment, permission grant or daily schedule.
+verify_jwt = true
+
+[functions.creator-daily-outreach-worker]
+entrypoint = "./functions/creator-daily-outreach-worker/index.ts"
+# NEW fixed service endpoint with existing Vault-backed x-job-token authentication.
+# Activating this persistent access and recurrence requires separate approval.
+verify_jwt = false
