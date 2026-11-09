@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const http = require('node:http');
-const YOUTUBE_TARGET_HEADING = '먹방 크리에이터 50개를 찾아보세요';
+const YOUTUBE_TARGET_HEADING = 'YouTube 크리에이터 이메일';
 const source = fs.readFileSync('private/ui/app.js', 'utf8');
 const declarations = source.slice(source.indexOf('const routes ='), source.indexOf('const statuses ='));
 const renderSource = source.slice(source.indexOf('function render() {'), source.indexOf('function dashboardExistingSummary('));

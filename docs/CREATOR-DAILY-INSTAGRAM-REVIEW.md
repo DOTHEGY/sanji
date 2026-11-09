@@ -38,6 +38,14 @@ The overlay adds `supplyReview:{source:'existing_instagram_database',sourceRecor
 
 reviewState may be pending, reviewed, stale or excluded. candidate contains native name/profileUrl/sourceRecordId/sourceRecordUpdated. A stale review can be remedied only by explicit new evidence bound to the current native version.
 
+### Bounded read-only review pages
+
+`GET /supply-review?cursor=<native UUID>` lists at most 50 native Instagram rows per request, plus the existing bounded current YouTube snapshots. Omit `cursor` for the first page. The response has `scope: 'paged_native_instagram_and_current_youtube_snapshots'`, `preparationEligibilityChecked: false`, and `pagination` with scope `existing_instagram_database`, the incoming cursor, nextCursor, pageSize, total, remaining, returned and hasMore. Counts include all native statuses, exclusions and unknown/missing qualification evidence. `remaining` includes the returned page; it is not an eligible-creator count. The next cursor is absent only when this ordered range is exhausted. Smaller server row caps still produce an explicit continuation. Each request verifies owner, UUID order, exact counts and a second unchanged read. Separate requests are fresh pages, not one frozen database snapshot.
+
+`GET /source-reviews?cursor=<source UUID>` independently pages up to 20 registered contact-source IDs. Its scope is `registered_contact_sources`; each item is the latest append-only registry version, including pending/revoked states. Total counts sources, not revisions or all native creators. Source registration still creates pending review only. No source is approved, fetched from a provider or sent a message by either GET.
+
+These pages are review views, not complete preparation inputs. The complete candidate/history scans, deduplication and execution limits remain unchanged and fail closed. In particular, a native database above the current full-scan limit can now be browsed but still cannot be prepared or dispatched until the separate complete-source execution path is reviewed. Pagination does not silently truncate execution inputs or certify that all global history was checked.
+
 ## Storage and revocation
 
 Apply only after approval: `supabase/pending/creator-daily-instagram-review.sql`.

@@ -7,6 +7,7 @@ export function createSupplyRepository(sb){
  const params=c=>({p_owner:c.owner,p_campaign:c.campaign,p_day:c.day,p_token:c.token});
  async function read(query){const result=await query;if(result.error)fail('SUPPLY_STORE_UNAVAILABLE');return result;}
  return {
+  async snapshot(owner,campaign,creatorKey){if(typeof creatorKey!=='string'||!/^youtube:UC[A-Za-z0-9_-]{22}$/.test(creatorKey))fail('SUPPLY_REVIEW_STALE');const r=await read(sb.from('sanji_daily_supply_snapshots').select('owner,campaign,channel_id,snapshot,observed_at,expires_at').eq('owner',owner).eq('campaign',campaign).eq('channel_id',creatorKey.slice(8)).gt('expires_at',new Date().toISOString()).maybeSingle());return r.data?[r.data]:[];},
   claim:c=>rpc('sanji_daily_supply_claim',params(c)),
   reserve:c=>rpc('sanji_daily_supply_reserve',{...params(c),p_project:c.projectId,p_kind:c.kind,p_request:c.requestId}),
   // Treat all uncertain finishes specially. Never retry a write blindly.
@@ -25,22 +26,26 @@ export function createSupplyRepository(sb){
    }
    fail('SUPPLY_REVIEWS_INCOMPLETE');
   },
-  async instagramReviews(owner,campaign){
+  async instagramReviews(owner,campaign,creatorIds){
+   if(creatorIds!==undefined&&(!Array.isArray(creatorIds)||creatorIds.length>50||creatorIds.some(id=>typeof id!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id))))fail('INSTAGRAM_REVIEW_PAGE_INVALID');
+   if(creatorIds?.length===0)return [];
    const rows=[];let cursor='',total=null;
    for(let page=0;page<100;page++){
-    let q=sb.from('sanji_daily_supply_instagram_reviews').select('owner,campaign,creator_id,source_updated,creator_key,review,expires_at',{count:'exact'}).eq('owner',owner).eq('campaign',campaign).gt('expires_at',new Date().toISOString()).order('creator_id',{ascending:true}).limit(500);if(cursor)q=q.gt('creator_id',cursor);
+    let q=sb.from('sanji_daily_supply_instagram_reviews').select('owner,campaign,creator_id,source_updated,creator_key,review,expires_at',{count:'exact'}).eq('owner',owner).eq('campaign',campaign).gt('expires_at',new Date().toISOString()).order('creator_id',{ascending:true}).limit(500);if(creatorIds)q=q.in('creator_id',creatorIds);if(cursor)q=q.gt('creator_id',cursor);
     const r=await read(q);if(!Array.isArray(r.data)||!Number.isSafeInteger(r.count)||r.count<r.data.length)fail('INSTAGRAM_REVIEWS_INCOMPLETE');if(total===null)total=r.count;if(total>5000||rows.length+r.count!==total)fail('INSTAGRAM_REVIEWS_CHANGED');
-    for(const row of r.data){if(row.owner!==owner||row.campaign!==campaign||typeof row.creator_id!=='string'||row.creator_id<=cursor)fail('INSTAGRAM_REVIEWS_INCOMPLETE');rows.push(row);cursor=row.creator_id;}
+    for(const row of r.data){if(row.owner!==owner||row.campaign!==campaign||typeof row.creator_id!=='string'||row.creator_id<=cursor||(creatorIds&&!creatorIds.includes(row.creator_id)))fail('INSTAGRAM_REVIEWS_INCOMPLETE');rows.push(row);cursor=row.creator_id;}
     if(rows.length===total)return rows;if(!r.data.length)break;
    }
    fail('INSTAGRAM_REVIEWS_INCOMPLETE');
   },
-  async instagramReviewGuards(owner,campaign){
+  async instagramReviewGuards(owner,campaign,creatorIds){
+   if(creatorIds!==undefined&&(!Array.isArray(creatorIds)||creatorIds.length>50||creatorIds.some(id=>typeof id!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id))))fail('INSTAGRAM_REVIEW_PAGE_INVALID');
+   if(creatorIds?.length===0)return [];
    const rows=[];let cursor='',total=null;
    for(let page=0;page<100;page++){
-    let q=sb.from('sanji_daily_supply_instagram_review_guards').select('owner,campaign,creator_id,last_reviewed_at',{count:'exact'}).eq('owner',owner).eq('campaign',campaign).order('creator_id',{ascending:true}).limit(500);if(cursor)q=q.gt('creator_id',cursor);
+    let q=sb.from('sanji_daily_supply_instagram_review_guards').select('owner,campaign,creator_id,last_reviewed_at',{count:'exact'}).eq('owner',owner).eq('campaign',campaign).order('creator_id',{ascending:true}).limit(500);if(creatorIds)q=q.in('creator_id',creatorIds);if(cursor)q=q.gt('creator_id',cursor);
     const r=await read(q);if(!Array.isArray(r.data)||!Number.isSafeInteger(r.count)||r.count<r.data.length)fail('INSTAGRAM_REVIEW_GUARDS_INCOMPLETE');if(total===null)total=r.count;if(total>5000||rows.length+r.count!==total)fail('INSTAGRAM_REVIEW_GUARDS_CHANGED');
-    for(const row of r.data){if(row.owner!==owner||row.campaign!==campaign||typeof row.creator_id!=='string'||row.creator_id<=cursor)fail('INSTAGRAM_REVIEW_GUARDS_INCOMPLETE');rows.push(row);cursor=row.creator_id;}
+    for(const row of r.data){if(row.owner!==owner||row.campaign!==campaign||typeof row.creator_id!=='string'||row.creator_id<=cursor||(creatorIds&&!creatorIds.includes(row.creator_id)))fail('INSTAGRAM_REVIEW_GUARDS_INCOMPLETE');rows.push(row);cursor=row.creator_id;}
     if(rows.length===total)return rows;if(!r.data.length)break;
    }
    fail('INSTAGRAM_REVIEW_GUARDS_INCOMPLETE');

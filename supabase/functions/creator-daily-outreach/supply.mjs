@@ -1,4 +1,4 @@
-import { DAILY_OUTREACH, OutreachError, creatorIdentity, outreachDay } from './domain.mjs';
+import { DAILY_OUTREACH, audienceBounds, OutreachError, creatorIdentity, outreachDay } from './domain.mjs';
 import {validateInstagramReview,applyInstagramReview,instagramReviewState} from './supply-instagram-review.mjs';
 import {validateSupplyReview,applySupplyReview} from './supply-review.mjs';
 import { channelIdValid, publicCount, publicText } from '../youtube-discovery/discovery.mjs';
@@ -38,24 +38,26 @@ export function mergeSupplyCandidates(manual,snapshots,now=Date.now(),reviews=[]
  if(result.length>5000)fail('SOURCES_INCOMPLETE','후보 원본의 안전 조회 한도를 초과했습니다.');
  return result;
 }
-export function createDailySupply({repository,sourceRepository,apiKey='',projectId='',enabled=false,fetchImpl=fetch,now=()=>Date.now(),uuid=()=>crypto.randomUUID(),sweepDownstream}){
- async function status(owner){const configurationReady=Boolean(apiKey&&/^[a-z0-9][a-z0-9._:-]{2,127}$/i.test(projectId));return {enabled,configurationReady,state:enabled?(configurationReady?'ready':'blocked'):'stopped',blockers:[...(!apiKey?['existing_youtube_key_required']:[]),...(!/^[a-z0-9][a-z0-9._:-]{2,127}$/i.test(projectId)?['existing_google_project_id_required']:[])],campaign:CAMPAIGN,recentActivityDays:90,provisionalActivityWindow:true,targets:{youtube:50,instagram:10},quotaScope:'daily_supply_worker_only',quotaTimezone:'America/Los_Angeles',limits:SUPPLY_LIMITS,latest:await repository.latest(owner,CAMPAIGN),sendingEnabled:false,schedulerEnabled:false};}
+export function createDailySupply({repository,sourceRepository,apiKey='',projectId='',enabled=false,fetchImpl=fetch,now=()=>Date.now(),uuid=()=>crypto.randomUUID(),sweepDownstream,executionRepository}){
+ async function status(owner){const configurationReady=Boolean(apiKey&&/^[a-z0-9][a-z0-9._:-]{2,127}$/i.test(projectId));return {enabled,configurationReady,state:enabled?(configurationReady?'ready':'blocked'):'stopped',blockers:[...(!apiKey?['existing_youtube_key_required']:[]),...(!/^[a-z0-9][a-z0-9._:-]{2,127}$/i.test(projectId)?['existing_google_project_id_required']:[])],campaign:CAMPAIGN,recentActivityDays:90,provisionalActivityWindow:true,audienceBounds:DAILY_OUTREACH.audienceBounds,targetUnit:DAILY_OUTREACH.targetUnit,targets:{youtube:50,instagram:10},quotaScope:'daily_supply_worker_only',quotaTimezone:'America/Los_Angeles',limits:SUPPLY_LIMITS,latest:await repository.latest(owner,CAMPAIGN),sendingEnabled:false,schedulerEnabled:false};}
  async function sourceCandidates(owner){
   const [source,snapshots,reviews,instagramReviews,instagramReviewGuards]=await Promise.all([sourceRepository.candidates(owner),repository.snapshots(owner,CAMPAIGN),repository.reviews?repository.reviews(owner,CAMPAIGN):[],repository.instagramReviews?repository.instagramReviews(owner,CAMPAIGN):[],repository.instagramReviewGuards?repository.instagramReviewGuards(owner,CAMPAIGN):[]]);
   if(source?.complete!==true||!Array.isArray(source.candidates))fail('SOURCES_INCOMPLETE','기존 후보 원본을 완전하게 확인하지 못했습니다.');
   return {complete:true,candidates:mergeSupplyCandidates(source.candidates,snapshots,now(),reviews,instagramReviews,instagramReviewGuards)};
  }
- async function listReview(owner){
-  const [snapshots,reviews,source,instagramReviews,instagramReviewGuards]=await Promise.all([repository.snapshots(owner,CAMPAIGN),repository.reviews?repository.reviews(owner,CAMPAIGN):[],sourceRepository.candidates(owner),repository.instagramReviews?repository.instagramReviews(owner,CAMPAIGN):[],repository.instagramReviewGuards?repository.instagramReviewGuards(owner,CAMPAIGN):[]]);
-  if(source?.complete!==true||!Array.isArray(source.candidates))fail('SOURCES_INCOMPLETE','기존 후보 원본을 완전하게 확인하지 못했습니다.');
+ async function listReview(owner,options={}){
+  const source=await sourceRepository.reviewCandidates(owner,options);
+  if(source?.pageComplete!==true||!Array.isArray(source.candidates)||source.candidates.length>50||!source.pagination)fail('REVIEW_PAGE_INCOMPLETE','기존 후보 검토 페이지를 확인하지 못했습니다.');
+  const ids=source.candidates.map(row=>row.sourceRecordId);
+  const [snapshots,reviews,instagramReviews,instagramReviewGuards]=await Promise.all([repository.snapshots(owner,CAMPAIGN),repository.reviews?repository.reviews(owner,CAMPAIGN):[],repository.instagramReviews?repository.instagramReviews(owner,CAMPAIGN,ids):[],repository.instagramReviewGuards?repository.instagramReviewGuards(owner,CAMPAIGN,ids):[]]);
   const youtube=snapshots.map(row=>({...row,platform:'youtube',review:reviews.find(r=>r.creator_key==='youtube:'+(row.snapshot||row).channelId)?.review||null}));
   const instagram=source.candidates.filter(row=>row.platform==='instagram'&&row.existingDatabaseRecord===true).map(row=>{const review=instagramReviews.find(r=>(r.review||r).sourceRecordId===row.sourceRecordId)?.review||null;return {platform:'instagram',creator_key:creatorIdentity(row),creator_id:row.sourceRecordId,candidate:row,review,reviewState:instagramReviewState(row,review,now(),instagramReviewGuards.some(g=>g.creator_id===row.sourceRecordId))};});
-  return {source:'youtube_data_api',sources:['youtube_data_api','existing_instagram_database'],requiresHumanReview:true,items:[...youtube,...instagram],contactCollectionSupported:false};
+  return {source:'youtube_data_api',sources:['youtube_data_api','existing_instagram_database'],scope:'paged_native_instagram_and_current_youtube_snapshots',preparationEligibilityChecked:false,pagination:source.pagination,requiresHumanReview:true,items:[...youtube,...instagram],contactCollectionSupported:false};
  }
  async function review(owner,input){
   if(!enabled)fail('DAILY_SUPPLY_DISABLED','일일 후보 근거 검토는 아직 운영 활성화 전입니다.');
   if(typeof input?.creatorKey==='string'&&input.creatorKey.startsWith('instagram:')){
-   const source=await sourceRepository.candidates(owner);if(source?.complete!==true||!Array.isArray(source.candidates))fail('SOURCES_INCOMPLETE','기존 후보 원본을 완전하게 확인하지 못했습니다.');
+   const source=executionRepository?await executionRepository.instagramReviewSource(owner,input.creatorKey,input.sourceRecordId):await sourceRepository.candidates(owner);if(source?.complete!==true||!Array.isArray(source.candidates))fail('SOURCES_INCOMPLETE','기존 후보 원본을 완전하게 확인하지 못했습니다.');
    const matched=source.candidates.filter(row=>row.platform==='instagram'&&row.sourceRecordId===input.sourceRecordId&&creatorIdentity(row)===input.creatorKey);
    if(matched.length!==1)fail('INSTAGRAM_REVIEW_SOURCE_CHANGED','기존 Instagram 후보를 다시 불러오세요.',409);
    const evidence=validateInstagramReview(owner,input,matched[0],now());
@@ -63,7 +65,7 @@ export function createDailySupply({repository,sourceRepository,apiKey='',project
    if(saved?.saved!==true)fail('INSTAGRAM_REVIEW_SAVE_UNCERTAIN','근거 저장 결과를 확인하지 못했습니다. 목록을 새로고침하세요.');
    return {...saved,platform:'instagram',sendingEnabled:false,reviewed:true,contactEvidenceReady:evidence.contactEvidence.length>0};
   }
-  const snapshots=await repository.snapshots(owner,CAMPAIGN),row=snapshots.find(r=>'youtube:'+(r.snapshot||r).channelId===input?.creatorKey);
+  const snapshots=executionRepository&&repository.snapshot?await repository.snapshot(owner,CAMPAIGN,input?.creatorKey):await repository.snapshots(owner,CAMPAIGN),row=snapshots.find(r=>'youtube:'+(r.snapshot||r).channelId===input?.creatorKey);
   if(!row)fail('SUPPLY_REVIEW_STALE','검토할 최신 후보를 다시 불러오세요.',409);
   const evidence=validateSupplyReview(owner,input,row.snapshot||row,now());
   const saved=await repository.saveReview({owner,campaign:CAMPAIGN,review:evidence});
@@ -107,15 +109,25 @@ export function createDailySupply({repository,sourceRepository,apiKey='',project
   }
   const summary=(state,code=null)=>({state,day,campaign:CAMPAIGN,stagedYoutube:staged,examined,skippedExisting,excludedBounds,unverifiedActivity,targets:{youtube:50,instagram:10},youtubeResearchShortfall:Math.max(0,50-staged),contactReadyGuaranteed:false,quota,quotaScope:'daily_supply_worker_only',recentActivityDays:90,provisionalActivityWindow:true,stopCode:code,sendingEnabled:false,schedulerEnabled:false});
   try{
-   [source,history]=await Promise.all([sourceRepository.candidates(owner),sourceRepository.history(owner)]);
-   if(source?.complete!==true||!Array.isArray(source.candidates)||history?.complete!==true||!Array.isArray(history.creatorKeys))fail('SUPPLY_HISTORY_INCOMPLETE','기존 후보·연락 이력을 완전하게 확인하지 못해 수집을 중단했습니다.');
-   const snapshots=await repository.snapshots(owner,CAMPAIGN);
-   const excluded=new Set([...source.candidates.map(creatorIdentity),...history.creatorKeys,...snapshots.map(r=>'youtube:'+(r.snapshot||r).channelId)].filter(Boolean));
+   let excluded=new Set();
+   if(!executionRepository){
+    [source,history]=await Promise.all([sourceRepository.candidates(owner),sourceRepository.history(owner)]);
+    if(source?.complete!==true||!Array.isArray(source.candidates)||history?.complete!==true||!Array.isArray(history.creatorKeys))fail('SUPPLY_HISTORY_INCOMPLETE','기존 후보·연락 이력을 완전하게 확인하지 못해 수집을 중단했습니다.');
+    const snapshots=await repository.snapshots(owner,CAMPAIGN);
+    excluded=new Set([...source.candidates.map(creatorIdentity),...history.creatorKeys,...snapshots.map(r=>'youtube:'+(r.snapshot||r).channelId)].filter(Boolean));
+   }
+   async function checkExclusions(keys){
+    if(!executionRepository)return;
+    const checked=await executionRepository.exclusions(owner,keys);
+    if(checked?.complete!==true||!Array.isArray(checked.creatorKeys)||checked.creatorKeys.some(k=>!keys.includes(k)))fail('SUPPLY_HISTORY_INCOMPLETE','전체 기존 후보·연락 이력을 확인하지 못했습니다.');
+    for(const key of checked.creatorKeys)excluded.add(key);
+   }
    const found=new Map();
    while(quota.searchCalls<SUPPLY_LIMITS.searchCalls&&found.size<SUPPLY_LIMITS.candidates){
     const available=cursor.queries.map((s,index)=>({s,index})).filter(({s})=>!s.done);if(!available.length)break;
     const {s,index}=available.find(x=>x.index>=cursor.next)||available[0];
     const page=await request('search',{part:'snippet',type:'video',q:s.query,order:'date',maxResults:50,relevanceLanguage:'ko',safeSearch:'strict',publishedAfter:new Date(Date.parse(cursor.anchor)-90*DAY).toISOString(),fields:'nextPageToken,items(id/videoId,snippet(channelId,channelTitle,title,publishedAt))',...(s.pageToken?{pageToken:s.pageToken}:{})});
+    await checkExclusions([...new Set(page.items.slice(0,50).map(item=>item?.snippet?.channelId).filter(channelIdValid).map(id=>'youtube:'+id))]);
     for(const item of page.items.slice(0,50)){
      const id=item?.snippet?.channelId;if(!channelIdValid(id)||!videoIdValid(item?.id?.videoId))continue;
      if(excluded.has('youtube:'+id)){skippedExisting++;continue;}
@@ -126,6 +138,9 @@ export function createDailySupply({repository,sourceRepository,apiKey='',project
     // Persist cursor only together with staged channel results below. A crash
     // before that checkpoint may repeat a read with a NEW paid reservation.
    }
+   // Recheck all found identities immediately before channel hydration.
+   await checkExclusions([...found.keys()].map(id=>'youtube:'+id));
+   for(const id of found.keys())if(excluded.has('youtube:'+id)){found.delete(id);skippedExisting++;}
    examined=found.size;
    const details=[];const ids=[...found.keys()];
    for(let offset=0;offset<ids.length;offset+=50){const page=await request('channels',{part:'snippet,statistics,contentDetails',id:ids.slice(offset,offset+50).join(','),maxResults:50,fields:'items(id,snippet/title,statistics(subscriberCount,hiddenSubscriberCount),contentDetails/relatedPlaylists/uploads)'});details.push(...page.items);}
@@ -133,7 +148,7 @@ export function createDailySupply({repository,sourceRepository,apiKey='',project
    for(const c of details){
     if(!found.has(c?.id)||seenDetails.has(c.id))continue;seenDetails.add(c.id);
     const count=c.statistics?.hiddenSubscriberCount?null:publicCount(c.statistics?.subscriberCount);
-    if(count===null||count<30000||count>500000){excludedBounds++;continue;}
+    if(count===null||count<audienceBounds('youtube').minimum||count>audienceBounds('youtube').maximum){excludedBounds++;continue;}
     const playlist=c.contentDetails?.relatedPlaylists?.uploads;if(!/^UU[A-Za-z0-9_-]{22}$/.test(playlist||'')){unverifiedActivity++;continue;}
     const uploads=await request('playlistItems',{part:'contentDetails',playlistId:playlist,maxResults:5,fields:'items/contentDetails(videoId)'});
     const videoIds=[...new Set(uploads.items.map(v=>v?.contentDetails?.videoId).filter(videoIdValid))].slice(0,5);
@@ -152,8 +167,11 @@ export function createDailySupply({repository,sourceRepository,apiKey='',project
     rows.push({channelId:c.channelId,title:c.title,url:c.url,subscriberCount:c.subscriberCount,lastActiveAt:recentVideos[0].publishedAt,lastActivityUrl:recentVideos[0].url,recentVideos,observedAt,expiresAt,source:'youtube_data_api',reviewRequired:true});
    }
    // Finish atomically checkpoints the cursor and API snapshots under the lease.
-   staged=rows.length;
-   let result;try{result=await repository.finish({...context,cursor,snapshots:rows,summary:summary('completed')});}catch{fail('SUPPLY_SAVE_UNCERTAIN','수집 저장 결과를 확인하지 못했습니다. 상태를 새로고침하세요.');}
+   // A source/contact/suppression may have appeared during provider reads.
+   await checkExclusions(rows.map(r=>'youtube:'+r.channelId));
+   const finalRows=rows.filter(r=>!excluded.has('youtube:'+r.channelId));skippedExisting+=rows.length-finalRows.length;
+   staged=finalRows.length;
+   let result;try{result=await repository.finish({...context,cursor,snapshots:finalRows,summary:summary('completed')});}catch{fail('SUPPLY_SAVE_UNCERTAIN','수집 저장 결과를 확인하지 못했습니다. 상태를 새로고침하세요.');}
    if(result?.state!=='completed')fail('SUPPLY_SAVE_UNCERTAIN','수집 저장 결과를 확인하지 못했습니다. 상태를 새로고침하세요.');
    return {...result,newlyCollected:true};
   }catch(error){

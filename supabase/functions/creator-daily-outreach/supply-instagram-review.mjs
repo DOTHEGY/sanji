@@ -1,4 +1,4 @@
-import {OutreachError,sourceUrl,creatorIdentity,profileMatches,fresh,qualifyOutreachCandidate} from './domain.mjs';
+import {audienceBounds,OutreachError,sourceUrl,creatorIdentity,profileMatches,fresh,qualifyOutreachCandidate} from './domain.mjs';
 const DAY=86400000;
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const fields=['creatorKey','sourceRecordId','sourceRecordUpdated','audience','audienceSource','audienceCheckedAt','lastActiveAt','activitySource','activityCheckedAt','mukbang','contactEvidence'];
@@ -13,7 +13,7 @@ export function validateInstagramReview(owner,input,row,now=Date.now()){
  if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(k=>!fields.includes(k))||JSON.stringify(input).length>16000)fail();
  if(row?.platform!=='instagram'||row.existingDatabaseRecord!==true||!UUID.test(row.sourceRecordId||'')||!Number.isFinite(Date.parse(row.sourceRecordUpdated))||input.creatorKey!==creatorIdentity(row)||input.sourceRecordId!==row.sourceRecordId||input.sourceRecordUpdated!==row.sourceRecordUpdated||!profileMatches(row,row.profileUrl))fail('INSTAGRAM_REVIEW_SOURCE_CHANGED');
  if(instagramReviewState(row,null,now)==='excluded')fail('INSTAGRAM_REVIEW_NATIVE_EXCLUDED');
- if(!Number.isSafeInteger(input.audience)||input.audience<30000||input.audience>500000||!sourceUrl(input.audienceSource)||!fresh(input.audienceCheckedAt,now,29))fail('INSTAGRAM_REVIEW_AUDIENCE_REQUIRED');
+ if(!Number.isSafeInteger(input.audience)||input.audience<audienceBounds('instagram').minimum||input.audience>audienceBounds('instagram').maximum||!sourceUrl(input.audienceSource)||!fresh(input.audienceCheckedAt,now,29))fail('INSTAGRAM_REVIEW_AUDIENCE_REQUIRED');
  if(!sourceUrl(input.activitySource)||!fresh(input.activityCheckedAt,now,29)||!fresh(input.lastActiveAt,now,90))fail('INSTAGRAM_REVIEW_ACTIVITY_REQUIRED');
  const m=input.mukbang;
  if(!m||m.verified!==true||!sourceUrl(m.sourceUrl)||typeof m.sourceText!=='string'||!m.sourceText.trim()||m.sourceText.length>2000||!fresh(m.checkedAt,now,29))fail('INSTAGRAM_REVIEW_MUKBANG_REQUIRED');

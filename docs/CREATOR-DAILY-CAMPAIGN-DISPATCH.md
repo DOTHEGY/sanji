@@ -4,7 +4,7 @@
 
 이 변경은 기존 준비 기능 다음의 **비공개 설정 → 당일 큐 → claim → 기존 outbox 예약 → Gmail 재검사 → 일회성 발송 허가 → 공급자 결과 저장**을 구현합니다. 로컬 테스트에서는 Gmail과 계정 연결을 모두 모의 처리합니다. 실제 메일, Gmail 초안, 운영 DB 쓰기, 마이그레이션 적용, 반복 작업 등록, 인증정보 읽기·변경, 병합 및 배포는 수행하지 않습니다.
 
-운영 활성화에 필요한 저장·권한·배포·스케줄 승인은 별도입니다. 공개 업무 이메일이 있다는 이유로 수신 동의나 메시지의 법적 분류를 승인하지 않습니다. 검토 근거가 없는 수신자는 `recipient_basis_required`로 보류합니다. 하루 50명 YouTube + 기존 DB 10명 Instagram은 최대 목표이며 부족분을 다른 대상으로 채우지 않습니다.
+운영 활성화에 필요한 저장·권한·배포·스케줄 승인은 별도입니다. 공개 업무 이메일이 있다는 이유로 수신 동의나 메시지의 법적 분류를 승인하지 않습니다. 검토 근거가 없는 수신자는 `recipient_basis_required`로 보류합니다. 하루 YouTube 50개 + 기존 DB Instagram 10개의 서로 다른 검증된 공개 업무 이메일 주소가 최대 목표이며 부족분을 다른 대상으로 채우지 않습니다.
 
 ## 새 파일
 
@@ -125,3 +125,13 @@ node --test tests/creator-daily-campaign.test.cjs tests/creator-daily-campaign-s
 테스트는 합성 PNG/가짜 연결, mock HTTP, 로컬 PGlite만 사용합니다. 원본 PNG 두 장은 별도로 로컬 검증했고 공개 코드에는 포함하지 않습니다. SQL 테스트는 실제 pending 준비/캠페인 SQL과 native/공급/연락처 schema fixture를 사용합니다. 전체 앱 및 실제 pending 공급·연락처 schema 조합 검증은 통합 단계에서 별도로 실행합니다.
 
 2026-11-09 운영 `pg_catalog`/`information_schema` 읽기 전용 확인으로 native records/outbox/drafts/recovery/evidence/connections/suppression/audit의 참조 열·형식, owner lock/차단 helper, service_role 권한, insert 관련 trigger와 고유 index를 대조했습니다. `sanji_creator_evidence`는 id가 없는 복합 PK이며 native company/email/handle 고유 제약을 보존합니다. 출처는 기존 `202610210001_workspace.sql`, `202610270001_creator_recovery.sql`, `202610290002_creator_proposal_guard.sql`, `20261104073138_creator_email_isolated.sql` 및 현재 catalog입니다. 행 데이터·인증정보는 이 검증에서 읽지 않았습니다. 운영 insert smoke test는 하지 않았습니다. 운영 SQL·Gmail 동작·실제 배포·반복 트리거 확인의 대체가 아닙니다. SQL을 운영에 적용하기 전에 그 시점의 schema drift, Supabase 보안 advisors, 전체 pending SQL 적용 및 실제 서비스 client의 호출 권한을 별도 확인해야 합니다. 필요한 순서는 준비 SQL, 공급/독립 검토/Instagram 추가 검토 및 연락처 보강 SQL, 이 캠페인 SQL입니다. 이 파일들은 자동 적용되지 않습니다.
+
+## Recipient criteria revision 2
+
+New private snapshots must use `version:2` and an explicit `recipientCriteria` object: `version:1`, `audienceBounds:{youtube:{minimum:30000,maximum:200000},instagram:{minimum:30000,maximum:500000}}`, `targets:{youtube:50,instagram:10}`, `targetUnit:'distinct_verified_business_email'`, `maxEmailsPerCreator:1`, `dedupeScope:'cross_platform'` and the exact current user grant in `approvalSource`. The entire object is included in both the immutable scope and content hashes and in the dispatch plan. Changing approval source or criteria invalidates the old snapshot/review binding. Old version 1 snapshots remain readable for historical preview only; new imports, scheduling and dispatch are rejected until a new explicitly approved version 2 snapshot is configured.
+
+The fixed approved body and subject still change only at `[채널명]`. Both original inline photos, their order and the current Gmail signature are unchanged. No old 500k YouTube approval, secondary-directory lead, public-address discovery or candidate count is promoted into recipient approval. Fresh qualification, SQL preparation and the final reservation/provider-grant validation all enforce the new YouTube ceiling; existing Instagram limits stay separate. This is local review code only, with no production migration, recipient approval, send or scheduler activation.
+
+### Existing production schema upgrade
+
+`creator-daily-recipient-criteria-upgrade.sql` is a pending forward update for installations that already applied the six original daily campaign scripts. It uses `CREATE OR REPLACE` for six existing invoker functions and checks their prerequisite signatures first. It preserves stored rows, policies, RLS, function identities and ACLs, with no new grants or data cleanup. Apply it before the execution read/checkpoint extension when that extension is included. Its definitions must match the corresponding current pending source files. Local PGlite replay against the original six-function baseline verifies repeated application, preservation of legacy version 1 snapshots and 500k historical reservations, rejection of legacy activation, and paused configuration of a newly approved version 2 snapshot. This file has not been applied to production.

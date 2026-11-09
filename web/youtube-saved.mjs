@@ -1,3 +1,4 @@
+import {inAudienceRange,savedEmailDisplay} from './youtube-email-view.mjs';
 import {loadStableStateRecords} from './state-records.mjs';
 import {DEFAULT_YOUTUBE_COLLECTION,collectionName,recordCollections,collectionNames,withCollection,collectionStats} from './youtube-collections.mjs';
 // Manually researched CRM records only. This module never persists YouTube API
@@ -22,9 +23,9 @@ export function manualYoutubeRecord(input,now=new Date().toISOString()) {
 export const isYoutubeRecord=row=>row?.kind==='candidate'&&row.data?.kind==='크리에이터'&&Boolean(youtubeProfile(row.data.profile));
 function node(tag,text){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;return e;}
 function sourceLink(text,value){const url=https(value);if(!url)return node('span',text);const a=node('a',text);a.href=url;a.target='_blank';a.rel='noopener noreferrer';return a;}
-export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=()=>{}}) {
+export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=()=>{},onPreview=()=>{}}) {
   let revision=0,busy=false,records=[],saveOperation=0,selected=DEFAULT_YOUTUBE_COLLECTION,drafts=[],loaded=false,uncertain=false;
-  const heading=node('h2','산지에 저장한 YouTube 후보');
+  const heading=node('h2','YouTube 크리에이터');
   const status=node('p','로그인 후 저장한 후보를 불러옵니다.');status.setAttribute('role','status');
   const refresh=node('button','저장한 후보 새로고침');refresh.type='button';
   const list=node('div');list.className='saved-youtube-list';
@@ -39,7 +40,9 @@ export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=
   const existingWrap=node('div');existingWrap.className='youtube-collection-existing';
   const existingLabel=node('label','이 모음에 기존 후보 추가'),existing=node('select');existing.setAttribute('aria-label','이 모음에 추가할 기존 후보');existingLabel.append(existing);
   const addExisting=node('button','선택한 후보를 이 모음에 추가');addExisting.type='button';existingWrap.append(existingLabel,addExisting);
-  container.replaceChildren(heading,explain,refresh,collectionBox,createForm,collectionStatus,collectionInfo,existingWrap,search,status,list);
+  const manage=node('details');manage.className='saved-management';manage.append(node('summary','모음 관리 · 후보 추가'),explain,createForm,collectionStatus,existingWrap);
+  container.replaceChildren(heading,collectionBox,search,status,list,refresh,manage);
+  manage.append(collectionInfo);
   function controls(){refresh.disabled=busy;save.disabled=busy||!loaded||uncertain;create.disabled=busy||!loaded;addExisting.disabled=busy||!loaded||uncertain||!existing.value;for(const b of collectionBox.children)b.disabled=busy;}
   function drawCollections(){
     collectionBox.replaceChildren();
@@ -53,8 +56,19 @@ export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=
   }
   function draw(){
     drawCollections();const q=search.value.trim().toLowerCase();const rows=collectionStats(records,selected).rows.filter(r=>[r.data.name,r.data.reason,r.data.note].join(' ').toLowerCase().includes(q));
-    list.replaceChildren();status.textContent=`산지 저장 ${records.length}명 · 표시 ${rows.length}명`;
-    for(const r of rows){const d=r.data,card=node('details');card.className='card';const summary=node('summary',d.name);card.append(summary,sourceLink('YouTube 채널 원문',d.profile));
+    const hasAddress=row=>inAudienceRange(row.data.followers)&&savedEmailDisplay(row.data).email!==null;const current=rows.filter(hasAddress),history=rows.filter(r=>!hasAddress(r));
+    list.replaceChildren();status.textContent=`산지 저장 ${records.length}명 · 표시 ${rows.length}명 · 3만–20만 규모·공개 주소 후보 ${current.length}명 (검증 주소 수가 아닙니다)`;
+    function table(records,label){const wrap=node('div');wrap.className='creator-table-wrap';const table=node('table');table.className='creator-table';table.setAttribute('aria-label',label);const head=node('thead'),hr=node('tr');for(const title of ['채널명','이메일주소','구독자수']){const th=node('th',title);th.setAttribute('scope','col');hr.append(th);}head.append(hr);const body=node('tbody');table.append(head,body);wrap.append(table);return {wrap,body};}
+    const activeTable=table(current,'공개 주소가 기록된 구독자 3만–20만 YouTube 조사 후보');list.append(activeTable.wrap);
+    if(!current.length)list.append(node('p','이 모음에 공개 주소가 기록된 구독자 3만–20만 채널이 없습니다. 이메일 미확인·기존 조사 기록은 아래에 보존되어 있습니다.'));
+    const historyBox=node('details');historyBox.className='creator-history';historyBox.append(node('summary',`이메일 미확인·규모 미확인/범위 외 조사 기록 (${history.length}명)`),node('p','기존 후보·주소·주제 모음을 그대로 보존합니다. 이메일 미확인, 3만–20만 범위 밖 또는 규모 미확인 기록은 현재 50개 주소 목표에 포함하지 않습니다.'));
+    const oldTable=table(history,'기존 YouTube 조사 기록');historyBox.append(oldTable.wrap);list.append(historyBox);
+    for(const r of rows){const d=r.data,card=node('details');card.className='creator-detail';const summary=node('summary','상세 근거');card.append(summary,sourceLink('YouTube 채널 원문',d.profile));
+      const tr=node('tr'),name=node('td'),email=node('td'),audience=node('td'),contact=savedEmailDisplay(d);
+      name.append(sourceLink(d.name,d.profile));const key=youtubeProfile(d.profile)?.match(/\/channel\/(UC[A-Za-z0-9_-]{22})$/)?.[1];
+      const preview=node('button','카피 보기');preview.type='button';preview.className='compact secondary';preview.disabled=!key;preview.setAttribute('aria-label',`${d.name} 개별 카피 보기`);const owner=getOwner(),ticket=revision;preview.addEventListener('click',()=>{if(!loaded||busy||ticket!==revision||!isCurrent(owner)||getOwner()!==owner||!key)return;onPreview('youtube:'+key);});name.append(preview,card);
+      email.append(node('span',contact.email||'미확인'));const hint=node('small',contact.label);hint.className='muted';email.append(hint);if(contact.otherCount)card.append(node('p',`추가 주소 근거 ${contact.otherCount}개는 아래에 보존합니다. 수신자는 크리에이터당 최대 1개 주소만 선택하며 플랫폼 간 공유 수신함도 중복 제외합니다.`));
+      audience.textContent=Number.isSafeInteger(d.followers)&&d.followers>=0?d.followers.toLocaleString('ko-KR'):'미확인';tr.append(name,email,audience);(hasAddress(r)?activeTable.body:oldTable.body).append(tr);
       if(d.followers!=null)card.append(node('p',`공개 구독자 수: ${Number(d.followers).toLocaleString('ko-KR')} · 출처 확인일 ${d.metricsChecked||'미확인'}`),sourceLink('수치 확인 출처',d.metricsSource));
       card.append(node('p','모음: '+(recordCollections(d).join(' · ')||'미분류')),node('p',d.reason||'주제 근거 확인 필요'),node('p',d.note||''));
       for(const e of d.evidence||[]){const p=node('p');p.append(sourceLink(e.description||'확인 출처',e.url),document.createTextNode(` · 확인 ${e.checked||'미확인'}`));card.append(p);}
@@ -62,7 +76,7 @@ export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=
       for(const lead of leads){if(!lead?.email)continue;card.append(node('p',`공개 주소 근거: ${lead.email} · 소속·수신 가능 여부·연락 동의 미확인`),sourceLink('업무 연락처 확인 출처',lead.sourceUrl||lead.source),node('p',`출처 확인일: ${lead.checked||lead.observedAt||'미확인'} · ${[lead.purpose,lead.context,lead.note].filter(Boolean).join(' · ')||'업무 용도 원문 확인 필요'}`));}
       if(d.contact?.email)card.append(node('p',`공개 업무 연락처: ${d.contact.email} · 수신 가능 여부·연락 동의 미확인`),sourceLink('연락처 공개 출처',d.contact.source));
       else if(!leads.some(lead=>lead?.email))card.append(node('p','공개 업무 이메일 미확인 · 이메일 개수가 아닌 후보 수로 집계합니다.'));
-      card.append(node('p',`상태: ${d.status||'검토 중'} · ${d.next||'원문 검토 필요'}`));list.append(card);
+      card.append(node('p',`상태: ${d.status||'검토 중'} · ${d.next||'원문 검토 필요'}`));
     }
   }
   async function checkedSession(owner,ticket){
@@ -105,7 +119,7 @@ export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=
   const fields={};
   for(const [key,label,type] of [['name','채널명','text'],['profile','YouTube 채널 ID 주소 (https://www.youtube.com/channel/UC…)','url'],['source','주제 근거를 확인한 공개 출처 URL','url'],['reason','주제·콘텐츠 근거·확인하지 못한 내용','textarea']]){const wrap=node('label',label),f=node(type==='textarea'?'textarea':'input');if(type!=='textarea')f.type=type;f.required=true;f.name=key;f.maxLength=key==='reason'?4000:500;wrap.append(f);form.append(wrap);fields[key]=f;}
   const checkbox=node('input');checkbox.type='checkbox';const label=node('label');label.append(checkbox,document.createTextNode(' 공개 원문에서 직접 확인한 내용입니다.'));form.append(label);
-  const save=node('button','산지 후보로 저장');save.type='submit';const saveStatus=node('p');saveStatus.setAttribute('role','status');form.append(save,saveStatus);manual.append(form);container.append(manual);
+  const save=node('button','산지 후보로 저장');save.type='submit';const saveStatus=node('p');saveStatus.setAttribute('role','status');form.append(save,saveStatus);manual.append(form);manage.append(manual);
   form.addEventListener('submit',async event=>{
     event.preventDefault();if(busy||!loaded||uncertain||!selected)return;const owner=getOwner(),ticket=revision;if(!owner)return;const operation=++saveOperation;busy=true;controls();
     const snapshot=()=>JSON.stringify({...Object.fromEntries(Object.entries(fields).map(([k,f])=>[k,f.value])),attested:checkbox.checked,collection:selected});const submitted=snapshot();

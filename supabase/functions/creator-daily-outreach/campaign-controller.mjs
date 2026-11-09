@@ -1,8 +1,11 @@
-import {DAILY_OUTREACH,OutreachError,outreachDay} from './domain.mjs';
+import {DAILY_OUTREACH,hasCurrentRecipientGoal,OutreachError,outreachDay} from './domain.mjs';
+import {createExecutionPreparation} from './execution-service.mjs';
 import {dailyOutreachService} from './service.mjs';
+import {reviewCursor} from './review-pages.mjs';
 // Full orchestration, still stopped until the separately reviewed deployments,
 // source policies, immutable copy/images and recurring trigger are configured.
-export function createOutreachController({repository,supply,enrichment,dispatch,sourceReviews,env=()=>'',now=()=>Date.now()}){
+export function createOutreachController({repository,supply,enrichment,dispatch,sourceReviews,preview,preparedRecipients,execution,env=()=>'',now=()=>Date.now()}){
+ const paged=execution?createExecutionPreparation({repository,execution,enrichment,now}):null;
  const prepared=dailyOutreachService({repository:{...repository,async candidates(owner){
   const sources=await supply.sourceCandidates(owner);
   if(sources?.complete!==true||!Array.isArray(sources.candidates))throw new OutreachError('SOURCES_INCOMPLETE','현재 후보 원본을 완전하게 확인하지 못했습니다.',503);
@@ -20,10 +23,10 @@ export function createOutreachController({repository,supply,enrichment,dispatch,
  async function prepare(owner){
   if(env('CREATOR_DAILY_PREPARATION_ENABLED')!=='true')throw new OutreachError('PREPARATION_DISABLED','일일 후보 준비가 아직 운영 활성화 전입니다.',503);
   if(env('CREATOR_DAILY_RETENTION_ENABLED')!=='true')throw new OutreachError('RETENTION_REQUIRED','API 자료 정리 작업을 먼저 연결해야 합니다.',503);
-  const existing=await repository.findRun(owner,outreachDay(now()));if(existing&&(!existing.counts||existing.counts.youtube>=50&&existing.counts.instagram>=10))return {...existing,duplicate:true};
+  const existing=await repository.findRun(owner,outreachDay(now()));if(!execution&&existing&&(!existing.counts||hasCurrentRecipientGoal(existing)&&existing.counts.youtube>=50&&existing.counts.instagram>=10))return {...existing,duplicate:true};
   const discovery=await supply.status(owner),latest=discovery.latest;
   if(latest?.day!==outreachDay(now())||latest?.state!=='completed')throw new OutreachError('COLLECTION_REQUIRED','오늘 신규 후보 탐색을 먼저 완료하고 근거를 검토하세요.',409);
-  return prepared.prepare(owner);
+  return paged?paged.prepare(owner):prepared.prepare(owner);
  }
  async function collect(owner){
   if(env('CREATOR_DAILY_PREPARATION_ENABLED')!=='true')throw new OutreachError('PREPARATION_DISABLED','일일 후보 준비가 아직 운영 활성화 전입니다.',503);
@@ -33,11 +36,11 @@ export function createOutreachController({repository,supply,enrichment,dispatch,
   if(result?.state!=='completed')throw new OutreachError('DAILY_SUPPLY_FAILED','오늘의 후보 탐색을 완료하지 못했습니다. 저장된 결과를 확인하세요.',503);
   return result;
  }
- return {status,prepare,collect,currentPlan:owner=>repository.findRun(owner,outreachDay(now())),configuration:owner=>dispatch.configuration(owner),configure:(owner,input)=>dispatch.configure(owner,input),schedule:(owner,input)=>dispatch.schedule(owner,input),pause:(owner,input)=>dispatch.pause(owner,input),runs:owner=>dispatch.runs(owner),recipientReviews:owner=>dispatch.recipientReviews(owner),reviewRecipient:(owner,input)=>dispatch.reviewRecipient(owner,input),supplyReview:owner=>supply.listReview(owner),reviewCandidate:(owner,input)=>supply.review(owner,input),sourceReviewList:owner=>sourceReviews?.list(owner)||Promise.resolve({items:[],registrationEnabled:false}),registerSourceReview:(owner,input)=>{if(!sourceReviews?.register)throw new OutreachError('SOURCE_REGISTRATION_DISABLED','출처 검토 등록이 아직 연결되지 않았습니다.',503);return sourceReviews.register(owner,input);}};
+ return {status,prepare,collect,preparedRecipients:owner=>{if(typeof preparedRecipients!=='function')throw new OutreachError('PREPARED_RECIPIENTS_UNAVAILABLE','오늘 준비한 수신 주소 조회가 아직 연결되지 않았습니다.',503);return preparedRecipients(owner);},preview:(owner,input)=>{if(typeof preview!=='function')throw new OutreachError('PREVIEW_UNAVAILABLE','개별 문안 미리보기가 아직 연결되지 않았습니다.',503);return preview(owner,input);},currentPlan:owner=>repository.findRun(owner,outreachDay(now())),configuration:owner=>dispatch.configuration(owner),configure:(owner,input)=>dispatch.configure(owner,input),schedule:(owner,input)=>dispatch.schedule(owner,input),pause:(owner,input)=>dispatch.pause(owner,input),runs:owner=>dispatch.runs(owner),recipientReviews:owner=>dispatch.recipientReviews(owner),reviewRecipient:(owner,input)=>dispatch.reviewRecipient(owner,input),supplyReview:(owner,options)=>supply.listReview(owner,options),reviewCandidate:(owner,input)=>supply.review(owner,input),sourceReviewList:(owner,options)=>sourceReviews?.list(owner,options)||Promise.resolve({items:[],registrationEnabled:false}),registerSourceReview:(owner,input)=>{if(!sourceReviews?.register)throw new OutreachError('SOURCE_REGISTRATION_DISABLED','출처 검토 등록이 아직 연결되지 않았습니다.',503);return sourceReviews.register(owner,input);}};
 }
 const routes={
- '/status':['GET','status',0],'/configuration':['GET','configuration',0],'/runs':['GET','runs',0],'/recipient-reviews':['GET','recipientReviews',0],'/supply-review':['GET','supplyReview',0],'/source-reviews':['GET','sourceReviewList',0],
- '/collect':['POST','collect',32],'/review-candidate':['POST','reviewCandidate',24000],'/prepare':['POST','prepare',32],'/configure':['POST','configure',5*1024*1024],'/schedule':['POST','schedule',512],'/pause':['POST','pause',512],'/review-recipient':['POST','reviewRecipient',16000],'/register-source-review':['POST','registerSourceReview',24000]
+ '/prepared-recipients':['GET','preparedRecipients',0],'/status':['GET','status',0],'/configuration':['GET','configuration',0],'/runs':['GET','runs',0],'/recipient-reviews':['GET','recipientReviews',0],'/supply-review':['GET','supplyReview',0],'/source-reviews':['GET','sourceReviewList',0],
+ '/preview':['POST','preview',512],'/collect':['POST','collect',32],'/review-candidate':['POST','reviewCandidate',24000],'/prepare':['POST','prepare',32],'/configure':['POST','configure',5*1024*1024],'/schedule':['POST','schedule',512],'/pause':['POST','pause',512],'/review-recipient':['POST','reviewRecipient',16000],'/register-source-review':['POST','registerSourceReview',24000]
 };
 async function jsonBody(req,max){
  if(Number(req.headers.get('Content-Length')||0)>max)throw new OutreachError('BODY_TOO_LARGE','요청 파일 또는 내용이 너무 큽니다.',413);
@@ -61,7 +64,11 @@ export function campaignHandler({sb,controller,env=()=>''}){
    const auth=await sb.auth.getUser(token),owner=auth.data?.user?.id;if(auth.error||!owner)throw new OutreachError('AUTH_REQUIRED','로그인이 필요합니다.',401);
    const member=await sb.from('sanji_members').select('user_id').eq('user_id',owner).maybeSingle();if(member.error||member.data?.user_id!==owner)throw new OutreachError('MEMBERSHIP_REQUIRED','현재 Sanji 회원 확인이 필요합니다.',403);
    const path=new URL(req.url).pathname.replace(/^.*\/creator-daily-outreach/,''),route=routes[path];if(!route||req.method!==route[0])throw new OutreachError('NOT_FOUND','지원하지 않는 요청입니다.',404);
-   if(req.method==='GET')return json(await controller[route[1]](owner));
+   if(req.method==='GET'){
+    const params=new URL(req.url).searchParams,paged=['/supply-review','/source-reviews'].includes(path);
+    if([...params.keys()].some(key=>!paged||key!=='cursor')||params.getAll('cursor').length>1)throw new OutreachError('REVIEW_QUERY_INVALID','검토 목록의 조회 조건을 확인하세요.',400);
+    return json(await controller[route[1]](owner,...(paged?[{cursor:reviewCursor(params.get('cursor'))}]:[])));
+   }
    const body=await jsonBody(req,route[2]);
    if(['/prepare','/collect'].includes(path)){
     if(Object.keys(body).length)throw new OutreachError('INVALID_INPUT','준비 요청은 빈 객체만 허용합니다.');

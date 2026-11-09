@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {emailIdentity,OutreachError,renderOutreachCopy,sourceUrl} from './domain.mjs';
+import {RECIPIENT_CRITERIA,emailIdentity,OutreachError,renderOutreachCopy,sourceUrl} from './domain.mjs';
 import {validateInlineImages} from './inline-mail.mjs';
 import {gmailSignature} from '../_shared/gmail-signature.ts';
 
@@ -25,12 +25,20 @@ export function settingsSignature(settings,connection){
  if(!signature.text||signature.text!==d.emailSignature||signature.html!==d.gmailSignatureHtml)fail('CURRENT_GMAIL_SIGNATURE_CHANGED');
  return {verified:true,source:'existing_gmail_signature',senderEmail:email,html:signature.html,text:signature.text,settingsId:settings.id,settingsVersion:settings.version,senderName:d.senderName};
 }
+export function requireRecipientCriteria(snapshot){
+ if(snapshot?.version!==2)fail('RECIPIENT_CRITERIA_REVIEW_REQUIRED');
+ const criteria=snapshot.recipientCriteria;keys(criteria,[...Object.keys(RECIPIENT_CRITERIA),'approvalSource']);
+ if(!safeText(criteria.approvalSource,4000))fail('RECIPIENT_CRITERIA_REVIEW_REQUIRED');
+ const {approvalSource,...scope}=criteria;if(stableJSON(scope)!==stableJSON(RECIPIENT_CRITERIA))fail('RECIPIENT_CRITERIA_CHANGED');
+ return criteria;
+}
 function scopeOf(snapshot){
- return {templateRevision:snapshot.template.revision,templateHash:hashValue(snapshot.template),signatureHash:hashValue(snapshot.signature),products:snapshot.products,...(snapshot.productMode==='approved_campaign_assets'?{productMode:snapshot.productMode,campaignProducts:snapshot.campaignProducts}:{}),images:snapshot.template.requiredInlineImageIds.map(id=>{const x=snapshot.images.find(i=>i.id===id);return {id:x.id,sha256:x.sha256,bytes:x.bytes};})};
+ return {...(snapshot.version===2?{recipientCriteria:snapshot.recipientCriteria}:{}),templateRevision:snapshot.template.revision,templateHash:hashValue(snapshot.template),signatureHash:hashValue(snapshot.signature),products:snapshot.products,...(snapshot.productMode==='approved_campaign_assets'?{productMode:snapshot.productMode,campaignProducts:snapshot.campaignProducts}:{}),images:snapshot.template.requiredInlineImageIds.map(id=>{const x=snapshot.images.find(i=>i.id===id);return {id:x.id,sha256:x.sha256,bytes:x.bytes};})};
 }
 function validateSnapshotData(data,owner){
- keys(data,['version','owner','template','signature','images','products','productMode','campaignProducts','scopeHash','contentHash']);
- if(data.version!==1||data.owner!==owner||!UUID.test(owner))fail('PRIVATE_SNAPSHOT_OWNER_MISMATCH');
+ keys(data,['version','owner','template','signature','images','products','productMode','campaignProducts','recipientCriteria','scopeHash','contentHash']);
+ if(![1,2].includes(data.version)||data.owner!==owner||!UUID.test(owner))fail('PRIVATE_SNAPSHOT_OWNER_MISMATCH');
+ if(data.version===2)requireRecipientCriteria(data);else if(data.recipientCriteria!==undefined)fail('RECIPIENT_CRITERIA_CHANGED');
  keys(data.template,['owner','revision','approved','approvalSource','subject','body','requiredInlineImageIds']);
  if(data.template.owner!==owner||!Number.isSafeInteger(data.template.revision)||data.template.revision<1)fail('TEMPLATE_REVISION_REQUIRED');
  keys(data.signature,['verified','source','senderEmail','html','text','settingsId','settingsVersion','senderName']);
@@ -57,13 +65,14 @@ function validateSnapshotData(data,owner){
 // The browser's "verified" flags are not evidence of a stored Gmail signature.
 // Current account/settings and product digests are supplied by server-side reads.
 export function createPrivateSnapshot(input,{owner,settings,connection,products}){
- keys(input,['version','owner','template','signature','images','products','productMode','campaignProducts','scopeHash','contentHash']);
- if(input.owner!==owner||input.version!==1)fail('PRIVATE_SNAPSHOT_OWNER_MISMATCH');
+ keys(input,['version','owner','template','signature','images','products','productMode','campaignProducts','recipientCriteria','scopeHash','contentHash']);
+ if(input.owner!==owner)fail('PRIVATE_SNAPSHOT_OWNER_MISMATCH');
+ requireRecipientCriteria(input);
  const signature=settingsSignature(settings,connection);
  if(input.signature&&stableJSON(input.signature)!==stableJSON(signature))fail('CURRENT_GMAIL_SIGNATURE_CHANGED');
  if(!Array.isArray(input.products)||!Array.isArray(products)||products.length!==input.products.length)fail('PRODUCT_SCOPE_REQUIRED');
  const selected=input.products.map(p=>{keys(p,['id','version','sha256']);const current=products.find(r=>r.id===p.id);if(!current||current.version!==p.version||!HASH.test(current.sha256||'')||(p.sha256&&p.sha256!==current.sha256))fail('PRODUCT_SCOPE_CHANGED');return {id:p.id,version:p.version,sha256:current.sha256};});
- const data=JSON.parse(JSON.stringify({version:1,owner,template:input.template,signature,images:input.images,products:selected,...(input.productMode!==undefined?{productMode:input.productMode}:{}),...(input.campaignProducts!==undefined?{campaignProducts:input.campaignProducts}:{})}));
+ const data=JSON.parse(JSON.stringify({version:input.version,owner,...(input.recipientCriteria!==undefined?{recipientCriteria:input.recipientCriteria}:{}),template:input.template,signature,images:input.images,products:selected,...(input.productMode!==undefined?{productMode:input.productMode}:{}),...(input.campaignProducts!==undefined?{campaignProducts:input.campaignProducts}:{})}));
  data.scopeHash=hashValue(scopeOf(data));data.contentHash=hashValue(data);
  if((input.scopeHash&&input.scopeHash!==data.scopeHash)||(input.contentHash&&input.contentHash!==data.contentHash))fail('PRIVATE_SNAPSHOT_HASH_MISMATCH');
  return validateSnapshotData(data,owner);
