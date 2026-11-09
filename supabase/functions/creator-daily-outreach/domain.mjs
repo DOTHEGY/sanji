@@ -1,5 +1,8 @@
 // Qualification and copy rendering. Public contact evidence is not permission to send.
-export const DAILY_OUTREACH = Object.freeze({campaign:'mara-jjamppong-bread',label:'마라쫀득빵·짬뽕쫀득빵',youtubeTarget:50,instagramTarget:10,minimumAudience:30000,maximumAudience:500000,activityDays:90,evidenceDays:30,timezone:'Asia/Seoul',sendingEnabled:false,schedulerEnabled:false});
+export const DAILY_OUTREACH = Object.freeze({campaign:'mara-jjamppong-bread',label:'마라쫀득빵·짬뽕쫀득빵',youtubeTarget:50,instagramTarget:10,audienceBounds:Object.freeze({youtube:Object.freeze({minimum:30000,maximum:200000}),instagram:Object.freeze({minimum:30000,maximum:500000})}),targetUnit:'distinct_verified_business_email',maxEmailsPerCreator:1,dedupeScope:'cross_platform',activityDays:90,evidenceDays:30,timezone:'Asia/Seoul',sendingEnabled:false,schedulerEnabled:false});
+export const audienceBounds=platform=>DAILY_OUTREACH.audienceBounds[platform]||null;
+export const RECIPIENT_CRITERIA=Object.freeze({version:1,audienceBounds:DAILY_OUTREACH.audienceBounds,targets:Object.freeze({youtube:DAILY_OUTREACH.youtubeTarget,instagram:DAILY_OUTREACH.instagramTarget}),targetUnit:DAILY_OUTREACH.targetUnit,maxEmailsPerCreator:DAILY_OUTREACH.maxEmailsPerCreator,dedupeScope:DAILY_OUTREACH.dedupeScope});
+export function hasCurrentRecipientGoal(value){return Boolean(value&&value.targetUnit===DAILY_OUTREACH.targetUnit&&value.maxEmailsPerCreator===1&&value.dedupeScope===DAILY_OUTREACH.dedupeScope&&['youtube','instagram'].every(platform=>value.audienceBounds?.[platform]?.minimum===audienceBounds(platform).minimum&&value.audienceBounds?.[platform]?.maximum===audienceBounds(platform).maximum));}
 const DAY=86400000;
 const clean=v=>typeof v==='string'?v.trim():'';
 export class OutreachError extends Error {constructor(code,message,status=400){super(message);this.code=code;this.status=status;}}
@@ -44,8 +47,8 @@ function contactEvidence(row,now){
 export function qualifyOutreachCandidate(row,now=Date.now()){
  const creatorKey=creatorIdentity(row),reasons=[];
  if(!creatorKey)return {eligible:false,reasons:['creator_identity_required']};
- const audience=row.audience;
- if(!Number.isSafeInteger(audience)||audience<DAILY_OUTREACH.minimumAudience||audience>DAILY_OUTREACH.maximumAudience)reasons.push('audience_out_of_range_or_unknown');
+ const audience=row.audience,bounds=audienceBounds(row.platform);
+ if(!Number.isSafeInteger(audience)||!bounds||audience<bounds.minimum||audience>bounds.maximum)reasons.push('audience_out_of_range_or_unknown');
  if(!sourceUrl(row.audienceSource)||!fresh(row.audienceCheckedAt,now))reasons.push('fresh_audience_evidence_required');
  if(!sourceUrl(row.activitySource)||!fresh(row.activityCheckedAt,now)||!fresh(row.lastActiveAt,now,DAILY_OUTREACH.activityDays))reasons.push('recent_activity_unverified');
  if(row.mukbang?.verified!==true||!sourceUrl(row.mukbang?.sourceUrl)||!fresh(row.mukbang?.checkedAt,now)||(!clean(row.mukbang?.sourceText)||clean(row.mukbang?.sourceText).length>2000))reasons.push('mukbang_evidence_required');
@@ -93,14 +96,14 @@ export function buildDailyOutreachBatch({candidates,history,now=Date.now()}){
   selected.push({...c,status:'awaiting_dispatch_review',expiresAt:new Date(Math.min(...[c.contact.checkedAt,c.audienceCheckedAt,c.activityCheckedAt,c.mukbang.checkedAt,...(c.contact.affiliation?[c.contact.affiliation.checkedAt]:[])].map(at=>Date.parse(at)+30*DAY),Date.parse(c.lastActiveAt)+90*DAY,c.apiSnapshot?Date.parse(c.apiSnapshot.expiresAt):Infinity,c.displayNameEvidence?Date.parse(c.displayNameEvidence.checkedAt)+29*DAY:Infinity,c.supplyReview?Date.parse(c.supplyReview.expiresAt):Infinity)).toISOString()});counts[c.platform]++;creatorKeys.add(c.creatorKey);emailKeys.add(c.contact.key);
  }
  const holdReasons={};for(const h of held)for(const reason of new Set(h.reasons))holdReasons[reason]=(holdReasons[reason]||0)+1;
- return {holdReasons,campaign:DAILY_OUTREACH.campaign,day:outreachDay(now),timezone:DAILY_OUTREACH.timezone,preparedAt:new Date(now).toISOString(),targets:{youtube:50,instagram:10},selected,held:held.slice(0,5000),counts,shortfall:{youtube:50-counts.youtube,instagram:10-counts.instagram},sendingEnabled:false,schedulerEnabled:false,copyStatus:'private_template_required',note:'후보 및 공개 연락처 준비 수입니다. 발송·수신 동의·전달 성공을 의미하지 않습니다.'};
+ return {holdReasons,campaign:DAILY_OUTREACH.campaign,day:outreachDay(now),timezone:DAILY_OUTREACH.timezone,preparedAt:new Date(now).toISOString(),targetUnit:DAILY_OUTREACH.targetUnit,maxEmailsPerCreator:DAILY_OUTREACH.maxEmailsPerCreator,dedupeScope:DAILY_OUTREACH.dedupeScope,audienceBounds:DAILY_OUTREACH.audienceBounds,targets:{youtube:50,instagram:10},selected,held:held.slice(0,5000),counts,shortfall:{youtube:50-counts.youtube,instagram:10-counts.instagram},sendingEnabled:false,schedulerEnabled:false,copyStatus:'private_template_required',note:'플랫폼 간 중복을 제외한 검증된 공개 업무 이메일 주소 수입니다. 크리에이터당 한 주소만 선택합니다. 발송·수신 동의·전달 성공을 의미하지 않습니다.'};
 }
 export function renderOutreachCopy({template,channelName,signature,attachments=[],inlineImages=[]}){
  const name=clean(channelName);
- if(!name||name.length>150||/[\r\n\[\]{}<>]/.test(name))throw new OutreachError('CHANNEL_NAME_INVALID','실제 채널명을 확인하세요.');
+ if(!name||name.length>150||/[\u0000-\u001f\u007f]/.test(name))throw new OutreachError('CHANNEL_NAME_INVALID','실제 채널명을 확인하세요.');
  if(template?.approved!==true||!clean(template.approvalSource)||typeof template.subject!=='string'||typeof template.body!=='string'||!template.subject||!template.body||template.subject.length>200||template.body.length>20000||/[\r\n]/.test(template.subject))throw new OutreachError('COPY_REVIEW_REQUIRED','사용자 승인 제목·본문이 필요합니다.');
  if(signature?.verified!==true||signature.source!=='existing_gmail_signature'||!clean(signature.senderEmail)||!emailIdentity(signature.senderEmail)||!clean(signature.text)||!clean(signature.html))throw new OutreachError('SIGNATURE_REQUIRED','기존 Gmail 서명을 확인해야 합니다.');
- const subject=template.subject.replaceAll('[채널명]',name),body=template.body.replaceAll('[채널명]',name);
+ const subject=template.subject.replaceAll('[채널명]',()=>name),body=template.body.replaceAll('[채널명]',()=>name);
  if(/\[채널명\]/.test(subject+body))throw new OutreachError('PLACEHOLDER_UNRESOLVED','채널명 치환을 확인하세요.');
  // Do not rewrite the approved closing, facts, fan statement, or offer terms.
  const occurrences=body.split(signature.text).length-1;

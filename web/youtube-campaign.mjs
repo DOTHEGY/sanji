@@ -1,3 +1,4 @@
+import {verifiedMailboxSummary} from './youtube-email-view.mjs';
 import {mountFullCampaign} from './youtube-campaign-full.mjs';
 // Preparation-only UI. No send, schedule, recipient or copy payload is exposed.
 const count=(value,max)=>Number.isSafeInteger(value)&&value>=0&&value<=max;
@@ -7,7 +8,7 @@ export function campaignSummary(raw){
   if(typeof raw!=='object'||Array.isArray(raw)||raw.sendingEnabled!==false||raw.schedulerEnabled!==false||!/^\d{4}-\d{2}-\d{2}$/.test(raw.day||'')||!Number.isFinite(Date.parse(raw.day+'T00:00:00Z'))||new Date(raw.day+'T00:00:00Z').toISOString().slice(0,10)!==raw.day||!Number.isFinite(Date.parse(raw.preparedAt||'')))throw Error('준비 결과 형식을 확인하지 못했습니다. 상태를 새로고침하세요.');
   if(!count(raw.counts?.youtube,50)||!count(raw.counts?.instagram,10)||!count(raw.shortfall?.youtube,50)||!count(raw.shortfall?.instagram,10)||raw.counts.youtube+raw.shortfall.youtube!==50||raw.counts.instagram+raw.shortfall.instagram!==10)throw Error('준비 인원 집계를 확인하지 못했습니다. 상태를 새로고침하세요.');
   if(!count(raw.duplicateSkippedAtSave,5000)||!count(raw.heldCount,5000))throw Error('보류·중복 집계를 확인하지 못했습니다. 상태를 새로고침하세요.');
-  return {day:raw.day,preparedAt:raw.preparedAt,counts:{...raw.counts},shortfall:{...raw.shortfall},duplicate:raw.duplicate===true,duplicateSkippedAtSave:raw.duplicateSkippedAtSave,heldCount:raw.heldCount};
+  return {...raw,day:raw.day,preparedAt:raw.preparedAt,counts:{...raw.counts},shortfall:{...raw.shortfall},duplicate:raw.duplicate===true,duplicateSkippedAtSave:raw.duplicateSkippedAtSave,heldCount:raw.heldCount};
 }
 const blockerLabels={
  production_activation_required:'운영 활성화 확인 필요',live_gmail_preflight_required:'발송 직전 Gmail 전체 이력 확인 필요',approved_recipient_basis_required:'수신자별 공개 업무 연락처·발송 근거 확인 필요',verified_product_attachments_required:'서명 위 본문 사진 확인 필요',verified_inline_product_images_required:'서명 위 본문 사진 확인 필요',inline_product_images_required:'서명 위 본문 사진 확인 필요',daily_discovery_adapter_required:'매일 새 후보를 찾는 검색 연결 확인 필요',private_template_required:'전달받은 고정 문안의 서버 적용 확인 필요',existing_gmail_signature_required:'기존 Gmail 서명 확인 필요',gmail_signature_required:'기존 Gmail 서명 확인 필요',template_required:'고정 문안 적용 확인 필요',dispatch_not_implemented:'발송 기능은 아직 연결되지 않았습니다.'
@@ -29,7 +30,7 @@ export function campaignError(error,prepare=false){
 function el(tag,text){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;}
 function mountLegacyCampaign({container,client,functionUrl,apiKey,getOwner,isCurrent,fetchImpl=fetch,onCampaign}){
   let revision=0,busy=false,enabled=false,uncertain=false,uncertainDay=null;const pending=new Set();
-  const heading=el('h2','일일 제안 준비 · YouTube 50명 + 기존 Instagram 10명');
+  const heading=el('h2','Gmail 준비 · YouTube 50개 주소 + Instagram 10개 주소');
   const safety=el('p','후보와 중복 이력을 확인해 오늘의 검토 목록만 만듭니다. 메일 발송·예약·매일 자동 실행은 하지 않습니다.');safety.className='notice';
   const required=el('p','발송 전에는 고정 문안, 수신자별 업무 연락처, 기존 Gmail 서명과 서명 위에 표시할 본문 사진 2장을 확인해야 합니다.');
   const prepare=el('button','오늘의 제안 후보 준비');prepare.type='button';prepare.disabled=true;
@@ -39,7 +40,7 @@ function mountLegacyCampaign({container,client,functionUrl,apiKey,getOwner,isCur
   container.replaceChildren(heading,safety,required,prepare,refresh,status,conditions,result);
   function controls(){prepare.disabled=busy||!enabled||uncertain||!getOwner();refresh.disabled=busy||!getOwner();}
   function draw(summary){result.replaceChildren();if(!summary){result.append(el('p','아직 확인된 일일 준비 기록이 없습니다.'));return;}
-    result.append(el('p',`${summary.day} · 한국시간 기준 검토 목록`),el('p',`준비: YouTube ${summary.counts.youtube}/50명 · Instagram ${summary.counts.instagram}/10명`));
+    result.append(el('p',`${summary.day} · 한국시간 기준 검토 목록`),el('p',verifiedMailboxSummary(summary)?`검증 주소 준비: YouTube ${summary.counts.youtube}/50개 · Instagram ${summary.counts.instagram}/10개`:'이전 기준의 준비 기록입니다. 현재 목표의 검증 주소 집계는 아직 확인되지 않았습니다.'));
     result.append(el('p',`부족: YouTube ${summary.shortfall.youtube}명 · Instagram ${summary.shortfall.instagram}명 · 검토 보류 ${summary.heldCount}명 · 저장 시 중복 제외 ${summary.duplicateSkippedAtSave}명`));
     result.append(el('p','준비된 수신자는 발송 완료 인원이 아닙니다. 조건에 맞는 후보가 부족하면 부족한 수 그대로 표시합니다.'));
   }
@@ -70,7 +71,7 @@ function mountLegacyCampaign({container,client,functionUrl,apiKey,getOwner,isCur
     finally{if(current(owner,ticket)){busy=false;controls();}}
   });
   refresh.addEventListener('click',load);
-  return {load,clear(){revision++;for(const c of pending)c.abort();pending.clear();busy=false;enabled=false;uncertain=false;uncertainDay=null;conditions.replaceChildren();result.replaceChildren();status.textContent='로그인 후 준비 상태를 불러옵니다.';controls();}};
+  return {load,previewRecipient(){result.replaceChildren();status.textContent='개별 카피 연결과 비공개 설정을 확인 중입니다. 상태를 새로고침한 뒤 다시 확인하세요. 메일을 보내지 않았습니다.';container.scrollIntoView?.({behavior:'smooth',block:'start'});},clear(){revision++;for(const c of pending)c.abort();pending.clear();busy=false;enabled=false;uncertain=false;uncertainDay=null;conditions.replaceChildren();result.replaceChildren();status.textContent='로그인 후 준비 상태를 불러옵니다.';controls();}};
 }
 
 // Preserve the preparation-only deployment while upgrading after an explicit server contract.
@@ -78,5 +79,5 @@ export function mountYoutubeCampaign(options){
  let controller;
  const legacy=()=>mountLegacyCampaign({...options,onCampaign:async raw=>{controller.clear();controller=mountFullCampaign({...options,initialStatus:raw});await controller.load();}});
  controller=legacy();
- return {load:()=>controller.load(),clear(){controller.clear();controller=legacy();}};
+ return {load:()=>controller.load(),previewRecipient:creatorKey=>controller.previewRecipient?controller.previewRecipient(creatorKey):null,clear(){controller.clear();controller=legacy();}};
 }

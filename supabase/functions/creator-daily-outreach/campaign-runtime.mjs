@@ -1,4 +1,5 @@
 import {OutreachError,DAILY_OUTREACH,creatorIdentity} from './domain.mjs';
+import {createExecutionRepository} from './execution-repository.mjs';
 import {createOutreachRepository} from './repository.mjs';
 import {createDailySupply,supplyConfig} from './supply.mjs';
 import {createSupplyRepository} from './supply-repository.mjs';
@@ -7,15 +8,18 @@ import {createContactEnrichmentRepository} from './contact-enrichment-repository
 import {createPinnedPublicReader} from './contact-enrichment-network.mjs';
 import {createDailyDispatchRuntime} from './sender-runtime.mjs';
 import {campaignDue} from './dispatch.mjs';
+import {createPrivatePreview} from './preview.mjs';
+import {createPreparedRecipients} from './prepared-recipients.mjs';
+import {dailyDispatchRepository} from './dispatch-repository.mjs';
 import {createOutreachController} from './campaign-controller.mjs';
 const fail=code=>{throw new OutreachError(code,'캠페인 실행 조건과 현재 원본을 확인해야 합니다.',503);};
 export function createCampaignRuntime({sb,env=()=>'',request=fetch,now=Date.now,network=createPinnedPublicReader(),triggerVerified=()=>false}){
- const repository=createOutreachRepository(sb),contactRepository=createContactEnrichmentRepository(sb);
+ const repository=createOutreachRepository(sb),execution=createExecutionRepository(sb,{now}),contactRepository=createContactEnrichmentRepository(sb);
  const query=async promise=>{const r=await promise;if(r.error)fail('CAMPAIGN_DATABASE_UNAVAILABLE');return r.data;};
- const supply=createDailySupply({repository:createSupplyRepository(sb),sourceRepository:repository,...supplyConfig(env),fetchImpl:request,now,sweepDownstream:()=>query(sb.rpc('sanji_daily_outreach_sweep',{}))});
+ const supply=createDailySupply({repository:createSupplyRepository(sb),sourceRepository:repository,executionRepository:execution,...supplyConfig(env),fetchImpl:request,now,sweepDownstream:()=>query(sb.rpc('sanji_daily_outreach_sweep',{}))});
  const enrichment=createContactEnrichment({repository:contactRepository,network,enabled:env('CREATOR_DAILY_CONTACT_ENRICHMENT_ENABLED')==='true',now});
  async function candidateResolver(owner,prepared){
-  const source=await supply.sourceCandidates(owner);if(source?.complete!==true)fail('CURRENT_EVIDENCE_INCOMPLETE');
+  const source=await execution.current(owner,prepared.creator_key,prepared.snapshot?.sourceRecordId||null);if(source?.complete!==true)fail('CURRENT_EVIDENCE_INCOMPLETE');
   const matched=source.candidates.filter(row=>creatorIdentity(row)===prepared.creator_key);if(matched.length!==1)fail('CURRENT_EVIDENCE_AMBIGUOUS');
   const enriched=await enrichment.enrich(owner,{candidates:matched});if(enriched?.complete!==true||enriched.candidates.length!==1)fail('CURRENT_EVIDENCE_INCOMPLETE');
   const candidate=enriched.candidates[0];
@@ -29,8 +33,9 @@ export function createCampaignRuntime({sb,env=()=>'',request=fetch,now=Date.now,
   return {candidate};
  }
  const dispatch=createDailyDispatchRuntime({sb,env,request,now,candidateResolver,recurringTriggerVerified:triggerVerified});
- const sourceReviews={async list(owner){const source=await supply.sourceCandidates(owner);if(source?.complete!==true)fail('SOURCES_INCOMPLETE');const loaded=await contactRepository.load(owner,[...new Set(source.candidates.map(creatorIdentity).filter(Boolean))]);return {items:loaded.sources,registrationEnabled:true,approvalEnabled:false};},register:(owner,input)=>contactRepository.requestSource(owner,input)};
- const controller=createOutreachController({repository,supply,enrichment,dispatch,sourceReviews,env,now});
+ const sourceReviews={list:(owner,options)=>contactRepository.listRegisteredSources(owner,options),register:(owner,input)=>contactRepository.requestSource(owner,input)};
+ const preview=createPrivatePreview({repository:dailyDispatchRepository(sb),resolveTarget:(owner,key)=>execution.current(owner,key),now});
+ const controller=createOutreachController({repository,supply,enrichment,dispatch,sourceReviews,preview,preparedRecipients:createPreparedRecipients({sb,now}),execution,env,now});
  async function run(){
   // Once API records exist, retention must continue even when sending is paused.
   if(env('CREATOR_DAILY_RETENTION_ENABLED')!=='true')return {state:'stopped',reason:'retention_not_enabled',sendingEnabled:false};
@@ -48,11 +53,11 @@ export function createCampaignRuntime({sb,env=()=>'',request=fetch,now=Date.now,
   const collected=await controller.collect(policy.owner);
   if(collected.newlyCollected===true)return {state:'collected',campaign:DAILY_OUTREACH.campaign,maintenance,collected,morePassesMayBeRequired:true,sendingEnabled:false};
   let prepared=await controller.currentPlan(policy.owner);
-  if(!prepared){prepared=await controller.prepare(policy.owner);return {state:'prepared',campaign:DAILY_OUTREACH.campaign,maintenance,prepared,morePassesMayBeRequired:true,sendingEnabled:false};}
+  if(!prepared||prepared.morePreparationRequired===true){prepared=await controller.prepare(policy.owner);return {state:'prepared',campaign:DAILY_OUTREACH.campaign,maintenance,prepared,morePassesMayBeRequired:true,sendingEnabled:false};}
   // Existing partial plans dispatch without a second publication/research pass.
   // Newly reviewed additions use the explicit prepare action and atomic quota.
   const dispatched=await dispatch.run(policy.owner,{maxItems:60,budgetMs:40000});
   return {state:'completed_pass',campaign:DAILY_OUTREACH.campaign,maintenance,prepared,dispatched,morePassesMayBeRequired:true};
  }
- return {controller,run,supply,enrichment,dispatch,candidateResolver};
+ return {controller,run,supply,enrichment,dispatch,candidateResolver,execution};
 }

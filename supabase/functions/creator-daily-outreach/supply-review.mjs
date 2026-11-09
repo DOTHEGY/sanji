@@ -16,6 +16,7 @@ export function validateSupplyReview(owner,input,snapshot,now=Date.now()){
  // Canonicalize the same evidence ultimately used by preparation; copied About
  // text, unverified purpose/affiliation and ambiguous contacts cannot be approved.
  const q=qualifyOutreachCandidate({...row,name:clean(d.name),profileUrl:profile,audience:snapshot.subscriberCount,audienceSource:profile,audienceCheckedAt:snapshot.observedAt,lastActiveAt:snapshot.lastActiveAt,activitySource:snapshot.lastActivityUrl,activityCheckedAt:snapshot.observedAt,mukbang:m,contactEvidence},now);
+ if(q.reasons.includes('audience_out_of_range_or_unknown'))fail('SUPPLY_REVIEW_AUDIENCE_REQUIRED');
  if(contactEvidence.length&&q.contactReason)fail('SUPPLY_CONTACT_REVIEW_REQUIRED');
  const times=[Date.parse(d.checkedAt),Date.parse(m.checkedAt),...contactEvidence.flatMap(e=>[Date.parse(e.checkedAt),...(e.affiliation?[Date.parse(e.affiliation.checkedAt)]:[])])];
  if(times.some(t=>!Number.isFinite(t)||t>now))fail();

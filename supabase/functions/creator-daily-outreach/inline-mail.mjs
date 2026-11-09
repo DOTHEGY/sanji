@@ -56,9 +56,8 @@ function bodyHtml(text){
  // markers. No rewritten wording, added claims, links, tracking or remote media.
  return escape(text).replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/\\\r?\n/g,'\n').split(/\r?\n/).map(line=>line==='---'?'<hr>':line).join('<br>');
 }
-export function composeInlineOutreach({copy,images,owner,requiredImageIds,from,to,senderName,messageId=randomUUID(),now=new Date()}){
- if(!copy||copy.sendingEnabled!==false||!emailIdentity(from)||!emailIdentity(to)||/[^\x21-\x7E]/.test(from+to)||!String(copy.subject||'').trim()||typeof copy.body!=='string'||copy.body.length>20000||!String(senderName||'').trim()||!/^[-A-Za-z0-9_]{1,100}$/.test(messageId)||Number.isNaN(new Date(now).getTime()))fail('MAIL_PREVIEW_INVALID','발신자·수신자·본문을 확인해야 합니다.');
- if(typeof copy.senderEmail!=='string'||from!==copy.senderEmail.trim().toLowerCase())fail('SENDER_SIGNATURE_MISMATCH','현재 발신 계정과 승인된 Gmail 서명이 일치하지 않습니다.');
+function inlineContent({copy,images,owner,requiredImageIds}){
+ if(!copy||copy.sendingEnabled!==false||typeof copy.body!=='string'||copy.body.length>20000)fail('MAIL_PREVIEW_INVALID','본문을 확인해야 합니다.');
  if(copy.attachments?.length)fail('UNEXPECTED_ATTACHMENTS','일반 첨부를 추가하지 않습니다.');
  const checked=validateInlineImages(images,{owner,requiredIds:requiredImageIds});
  if(!Array.isArray(copy.inlineImages)||copy.inlineImages.length!==2||checked.some((image,index)=>copy.inlineImages[index]?.id!==image.id||copy.inlineImages[index]?.sha256!==image.sha256))fail('INLINE_IMAGE_APPROVAL_MISMATCH','승인한 본문 사진과 실제 원본이 일치하지 않습니다.');
@@ -68,7 +67,27 @@ export function composeInlineOutreach({copy,images,owner,requiredImageIds,from,t
  if(occurrences===1)body=body.slice(0,-signature.text.length).replace(/\n\n$/,'');
  const imageHtml=checked.map(image=>'<div style="margin:20px 0"><img src="cid:'+image.cid+'" alt="'+escape(image.alt)+'" width="'+Math.min(image.width,640)+'" style="display:block;width:100%;max-width:640px;height:auto;border:0"></div>').join('');
  const html='<!doctype html><html><head><meta charset="utf-8"></head><body><div style="font-family:Arial,sans-serif;line-height:1.6">'+bodyHtml(body)+'</div>'+imageHtml+'<div>'+signature.html+'</div></body></html>';
- const text=body+'\n\n'+signature.text;const boundary='sanji_alt_'+messageId,related='sanji_related_'+messageId;
+ const text=body+'\n\n'+signature.text;
+ return {checked,html,text};
+}
+// Private, read-only rendering. No recipient placeholder, MIME, draft, network,
+// delivery token or message ID is created for a browser preview.
+export function renderPrivateInlinePreview(options){
+ const {checked,html,text}=inlineContent(options);let embedded=html;
+ const remoteSignatureImagesHidden=/<img\b[^>]*\bsrc="https?:/i.test(embedded);
+ // Preserve the actual send signature unchanged; preview must not beacon to a third party.
+ embedded=embedded.replace(/<img\b[^>]*\bsrc="https?:[^>]*>/gi,'');
+ for(const image of checked)embedded=embedded.replace('src="cid:'+image.cid+'"','src="data:image/png;base64,'+image.bytes.toString('base64')+'"');
+ const csp="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; object-src 'none'";
+ embedded=embedded.replace('<head>','<head><meta http-equiv="Content-Security-Policy" content="'+csp+'">');
+ return {html:embedded,text,imageCount:checked.length,remoteSignatureImagesHidden,previewOnly:true,sendingEnabled:false};
+}
+export function composeInlineOutreach({copy,images,owner,requiredImageIds,from,to,senderName,messageId=randomUUID(),now=new Date()}){
+ if(!copy||copy.sendingEnabled!==false||!emailIdentity(from)||!emailIdentity(to)||/[^\x21-\x7E]/.test(from+to)||!String(copy.subject||'').trim()||typeof copy.body!=='string'||copy.body.length>20000||!String(senderName||'').trim()||!/^[-A-Za-z0-9_]{1,100}$/.test(messageId)||Number.isNaN(new Date(now).getTime()))fail('MAIL_PREVIEW_INVALID','발신자·수신자·본문을 확인해야 합니다.');
+ if(typeof copy.senderEmail!=='string'||from!==copy.senderEmail.trim().toLowerCase())fail('SENDER_SIGNATURE_MISMATCH','현재 발신 계정과 승인된 Gmail 서명이 일치하지 않습니다.');
+ if(copy.attachments?.length)fail('UNEXPECTED_ATTACHMENTS','일반 첨부를 추가하지 않습니다.');
+ const {checked,html,text}=inlineContent({copy,images,owner,requiredImageIds});
+ const boundary='sanji_alt_'+messageId,related='sanji_related_'+messageId;
  const lines=[`From: ${encodedHeader(senderName)} <${from}>`,`To: ${to}`,`Subject: ${encodedHeader(copy.subject)}`,`Date: ${new Date(now).toUTCString()}`,`Message-ID: <${messageId}@sanji.local>`,'MIME-Version: 1.0',`Content-Type: multipart/alternative; boundary="${boundary}"`,'',`--${boundary}`,'Content-Type: text/plain; charset=UTF-8','Content-Transfer-Encoding: base64','',encoded(text),`--${boundary}`,`Content-Type: multipart/related; boundary="${related}"; type="text/html"`,'',`--${related}`,'Content-Type: text/html; charset=UTF-8','Content-Transfer-Encoding: base64','',encoded(html)];
  for(const image of checked)lines.push(`--${related}`,'Content-Type: image/png',`Content-ID: <${image.cid}>`,`Content-Disposition: inline; filename="${image.name}"`,'Content-Transfer-Encoding: base64','',encoded(image.bytes));
  lines.push(`--${related}--`,`--${boundary}--`,'');const mime=lines.join('\r\n');if(Buffer.byteLength(mime)>20*1024*1024)fail('MAIL_TOO_LARGE','메일 본문 크기를 확인해야 합니다.');

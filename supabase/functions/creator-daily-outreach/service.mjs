@@ -1,10 +1,10 @@
-import {DAILY_OUTREACH,OutreachError,buildDailyOutreachBatch,outreachDay} from './domain.mjs';
+import {DAILY_OUTREACH,hasCurrentRecipientGoal,OutreachError,buildDailyOutreachBatch,outreachDay} from './domain.mjs';
 // The service has no email transport or credentials and cannot enqueue a send.
 // Sources must be complete server-side repository reads, never client DTOs.
 export function dailyOutreachService({repository,now=()=>Date.now()}){
  async function status(owner){const latest=await repository.latest(owner);return {...DAILY_OUTREACH,state:'preparation_only',copyStatus:'private_template_required',latest,blockers:['production_activation_required','approved_recipient_basis_required','verified_inline_product_images_required','daily_discovery_adapter_required','dispatch_not_implemented','existing_gmail_signature_required','private_template_required','live_gmail_preflight_required'],sendingEnabled:false,schedulerEnabled:false};}
  async function prepare(owner){
-  const day=outreachDay(now());const existing=await repository.findRun(owner,day);if(existing&&(!existing.counts||existing.counts.youtube>=50&&existing.counts.instagram>=10))return {...existing,duplicate:true};
+  const day=outreachDay(now());const existing=await repository.findRun(owner,day);if(existing&&(!existing.counts||hasCurrentRecipientGoal(existing)&&existing.counts.youtube>=50&&existing.counts.instagram>=10))return {...existing,duplicate:true};
   const [sources,history]=await Promise.all([repository.candidates(owner),repository.history(owner)]);
   if(!sources||sources.complete!==true||!Array.isArray(sources.candidates))throw new OutreachError('SOURCES_INCOMPLETE','후보 원본을 모두 확인하지 못했습니다.',503);
   const plan=buildDailyOutreachBatch({candidates:sources.candidates,history,now:now()});

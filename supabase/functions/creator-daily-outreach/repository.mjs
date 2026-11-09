@@ -1,4 +1,5 @@
 import {OutreachError,creatorIdentity,emailIdentity} from './domain.mjs';
+import {readReviewPage} from './review-pages.mjs';
 const fail=code=>{throw new OutreachError(code,'원본·중복 이력을 완전하게 확인하지 못했습니다.',503);};
 const iso=v=>typeof v==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(v)?v+'T00:00:00.000Z':v;
 export function adaptYoutubeRecord(record){
@@ -66,6 +67,13 @@ export function createOutreachRepository(sb){
   const candidates=[...saved.filter(r=>r.data?.channels==='YouTube').map(adaptYoutubeRecord).filter(Boolean),...instagram.map(r=>adaptInstagramRecord(r,evidence))];
   if(candidates.length>5000)fail('SOURCES_INCOMPLETE');return {complete:true,candidates};
  }
+ async function reviewCandidates(owner,{cursor=null}={}){
+  const page=await readReviewPage(sb,{table:'sanji_creator_recovery',owner,columns:'owner,id,handle,nickname,profile_url,updated,followers,followers_source,followers_checked,status,assessment,entity_type,link_status',scope:'existing_instagram_database',cursor});
+  const ids=page.rows.map(row=>row.id);
+  const evidence=ids.length?await compositeScan('sanji_creator_evidence',owner,{columns:'owner,creator_id,source_kind,source_url,source_ref,observation_key,detail,seen_at',keys:['creator_id','source_kind','source_url','source_ref','observation_key'],filter:q=>q.eq('source_kind','daily_outreach_review').in('creator_id',ids)}):[];
+  if(evidence.some(row=>!ids.includes(row.creator_id)||row.source_kind!=='daily_outreach_review'))fail('REVIEW_PAGE_INCOMPLETE');
+  return {pageComplete:true,candidates:page.rows.map(row=>adaptInstagramRecord(row,evidence)),pagination:page.pagination};
+ }
  async function history(owner){
   const [outbox,records,suppression,reserved,reviews,drafts,jobs,inbound,notes,manual,queue,instagramInbound,instagramReplies,recovery]=await Promise.all([
    scan('sanji_outbox',owner),scan('sanji_records',owner),scan('sanji_suppression',owner,{key:'identity'}),scan('sanji_daily_outreach_candidates',owner,{key:'creator_key'}),scan('sanji_creator_contact_review',owner,{key:'creator_id'}),
@@ -79,5 +87,5 @@ export function createOutreachRepository(sb){
   return {...historicalIdentities([...outbox,...records.filter(r=>r.kind==='thread'),...suppression,...reserved,...reviews,...jobs,...jobs.map(r=>draftById.get(r.draft_id)),...inbound,...notes,...manual,...queue,...instagramInbound,...instagramReplies],directory),scope:'saved_sanji_history',gmailProviderHistoryChecked:false};
  }
  const findRun=async(owner,day)=>{const row=await query(sb.from('sanji_daily_outreach_runs').select('summary').eq('owner',owner).eq('day',day).maybeSingle());return row?.summary||null;};
- return {candidates,history,findRun,async latest(owner){const rows=await query(sb.from('sanji_daily_outreach_runs').select('summary').eq('owner',owner).order('day',{ascending:false}).limit(1));return rows?.[0]?.summary||null;},async save(owner,plan){return query(sb.rpc('sanji_daily_outreach_prepare',{p_owner:owner,p_day:plan.day,p_plan:plan}));}};
+ return {candidates,reviewCandidates,history,findRun,async latest(owner){const rows=await query(sb.from('sanji_daily_outreach_runs').select('summary').eq('owner',owner).order('day',{ascending:false}).limit(1));return rows?.[0]?.summary||null;},async save(owner,plan){return query(sb.rpc('sanji_daily_outreach_prepare',{p_owner:owner,p_day:plan.day,p_plan:plan}));}};
 }
