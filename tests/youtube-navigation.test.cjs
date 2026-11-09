@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const http = require('node:http');
+const YOUTUBE_TARGET_HEADING = '먹방 크리에이터 50개를 찾아보세요';
 const source = fs.readFileSync('private/ui/app.js', 'utf8');
 const declarations = source.slice(source.indexOf('const routes ='), source.indexOf('const statuses ='));
 const renderSource = source.slice(source.indexOf('function render() {'), source.indexOf('function dashboardExistingSummary('));
@@ -76,6 +77,22 @@ test('navigation fixture declares UTF-8 before styles and Korean accessible name
   assert.match(html, /aria-label="유튜브 크리에이터 검색 \(새 탭\)"/);
 });
 
+function popupFixture() {
+  return fs.readFileSync('public/workspace/youtube/index.html', 'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, '');
+}
+
+test('popup fixture uses the current published heading and retains navigation contracts', () => {
+  for (const html of [popupFixture(), fs.readFileSync('private/youtube-discovery/index.html', 'utf8')]) {
+    const headings = [...html.matchAll(/<h1\b[^>]*>([\s\S]*?)<\/h1>/g)].map(match => match[1].trim());
+    assert.deepEqual(headings, [YOUTUBE_TARGET_HEADING]);
+  }
+  assert.doesNotMatch(popupFixture(), /<script\b/i);
+  const main = navigationFixture('');
+  assert.match(main, /href="\.\/youtube\/" target="_blank" rel="noopener"/);
+  assert.match(main, /href="#matching"[^>]*><span aria-hidden="true">[^<]*<\/span>상품 매칭<\/a>/);
+  assert.match(main, /<textarea id="draft">저장 전 초안<\/textarea>/);
+});
+
 test('desktop and mobile open the search page in a separate tab without losing the working draft', async () => {
   const { chromium } = require('@playwright/test');
   const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium', args: ['--no-sandbox'] });
@@ -83,7 +100,7 @@ test('desktop and mobile open the search page in a separate tab without losing t
   try {
     const css = fs.readFileSync('private/ui/style.css', 'utf8');
     // Exercise the real rendered navigation and published target HTML without a live account or API.
-    const target = fs.readFileSync('public/workspace/youtube/index.html', 'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, '');
+    const target = popupFixture();
     const main = navigationFixture(css);
     server = http.createServer((req, res) => {
       const isTarget = req.url.split('?')[0] === '/sanji/workspace/youtube/';
@@ -109,7 +126,7 @@ test('desktop and mobile open the search page in a separate tab without losing t
           const popup = await popupPromise;
           await popup.waitForLoadState();
           assert.equal(popup.url(), base + '/sanji/workspace/youtube/');
-          assert.equal(await popup.getByRole('heading', { name: '함께할 크리에이터를 찾아보세요' }).count(), 1);
+          assert.equal(await popup.getByRole('heading', { name: YOUTUBE_TARGET_HEADING, level: 1, exact: true }).count(), 1);
           assert.equal(await popup.evaluate(() => window.opener), null);
           assert.equal(page.url(), base + '/sanji/workspace/#creators');
           assert.equal(await page.locator('#draft').inputValue(), '저장 전 초안');
