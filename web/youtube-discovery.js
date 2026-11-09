@@ -1,3 +1,5 @@
+import { mountYoutubeCampaign } from './youtube-campaign.mjs';
+import { mountYoutubeSaved } from './youtube-saved.mjs';
 import { createClient } from '@supabase/supabase-js';
 import { reviewReasons, orderCandidates } from '../supabase/functions/youtube-discovery/review-filters.mjs';
 import { buildBriefReview } from '../supabase/functions/youtube-discovery/relevance.mjs';
@@ -11,6 +13,8 @@ const pending = new Set();
 let resultCards = [];
 let queryOrigin = 'empty';
 let submittedBrief = null;
+const saved = mountYoutubeSaved({container:$('saved-youtube'),client,getOwner:()=>owner,isCurrent:candidateOwner=>!disposed&&owner===candidateOwner,onChange:()=>updateFolds()});
+const campaign = mountYoutubeCampaign({container:$('daily-outreach'),client,functionUrl:supabaseUrl+'/functions/v1/creator-daily-outreach',apiKey:supabaseKey,getOwner:()=>owner,isCurrent:candidateOwner=>!disposed&&owner===candidateOwner});
 function el(tag, text, className) {
   const node = document.createElement(tag);
   if (text !== undefined) node.textContent = String(text);
@@ -33,16 +37,17 @@ function clearDraft() {
   $('mail-status').textContent = '발송된 메일은 없습니다. 이 화면은 자동 발송하지 않습니다.';
 }
 function clearPrivate() {
+  saved.clear(); campaign.clear();
   epoch++; for (const controller of pending) controller.abort(); pending.clear();
   $('results').replaceChildren(); $('kept-results').replaceChildren(); $('excluded-results').replaceChildren(); $('status').textContent = ''; $('brief').value = ''; $('queries').value = ''; queryOrigin = 'empty'; $('query-origin').textContent = '';
   $('minimum-subscribers').value='0';$('minimum-views').value='0';$('result-order').value='source';
   submittedBrief = null; $('results-purpose').replaceChildren(); $('previous-results-note').textContent = '';
-  resultCards = []; $('brief-plan').replaceChildren(); $('result-criteria').replaceChildren(); $('fold-news').checked = true; $('fold-business').checked = false; updateFolds();
+  resultCards = []; $('brief-plan').replaceChildren(); $('result-criteria').replaceChildren(); $('fold-mukbang').checked = true; $('fold-news').checked = true; $('fold-business').checked = false; updateFolds();
   clearDraft(); searchBusy = false; $('search').disabled = false;
 }
 function sessionChanged(session) {
   const next = session?.user?.id || null;
-  if (next !== owner) { clearPrivate(); owner = next; }
+  if (next !== owner) { clearPrivate(); owner = next; if(owner&&!disposed){saved.load();campaign.load();} }
   $('workspace').hidden = !owner || disposed;
   const login = el('a', '기존 워크스페이스에서 로그인하세요'); login.href = '../';
   $('auth-state').replaceChildren(owner ? el('span', '워크스페이스 계정 연결됨') : login);
@@ -80,7 +85,7 @@ function warnings(container, values) {
 function showCriteria(container, criteria) {
   container.replaceChildren(); if (!criteria) return;
   container.append(el('h3', '검색 조건과 확인이 필요한 항목'));
-  container.append(el('p','공식 API 요청: 검색 최대 2회, 공개 통계·최근 업로드 조회 최대 23회. 검색은 별도 검색 한도, 조회는 일반 할당량을 사용합니다. 호출 횟수는 금전 비용이나 프로젝트 잔여량이 아닙니다. 자동 재시도하지 않습니다.','muted'));
+  container.append(el('p','공식 API 요청: 검색 최대 4회(페이지당 50개 영상), 중복 제거 후 최대 100개 채널·최근 업로드 조회 최대 112회. 검색은 별도 검색 한도, 조회는 일반 할당량을 사용합니다. 호출 횟수는 금전 비용이나 프로젝트 잔여량이 아닙니다. 자동 재시도하지 않습니다.','muted'));
   if(criteria.discoveryIntent){const intent=criteria.discoveryIntent;container.append(el('p', `우선 탐색 분야: ${intent.primaryCategory} · ${intent.secondaryCategories.join(' · ')} / 상품: ${intent.productTerms.join(' · ') || '요청 참조'} / 부가 특성: ${intent.modifiers.join(' · ') || '없음'}`),el('p',intent.explanation));}
   container.append(el('p', `검색 주제: ${(criteria.topicTerms || []).map(term => term.label).join(' · ') || '자동 분류하지 못함'}`));
   container.append(el('p', `검색어: ${(criteria.queries || []).join(' / ') || '직접 입력해 주세요'}`));
@@ -90,8 +95,10 @@ function showCriteria(container, criteria) {
 }
 function updateFolds() {
   const folded = [];
-  for (const { card, channel } of resultCards) {
+  for (const { card, channel, savedNotice } of resultCards) {
+    if(savedNotice)savedNotice.textContent=saved.hasChannelId(channel.channelId)?'이미 산지에 저장됨 · 기존 기록을 덮어쓰지 않습니다.':'';
     const reasons = (channel.contentFlags || []).filter(flag => (flag.kind === 'news_language' && $('fold-news').checked) || (flag.kind === 'business_language' && $('fold-business').checked));
+    if($('fold-mukbang').checked&&channel.mukbangReview) { for(const label of channel.mukbangReview.reasons)reasons.push({label}); if(!channel.discoveryTarget&&!channel.mukbangReview.reasons.length)reasons.push({label:'50개 목표 외 추가 검토 후보'}); }
     const thresholdReasons = reviewReasons(channel,{minimumSubscribers:Number($('minimum-subscribers').value)||0,minimumViews:Number($('minimum-views').value)||0});
     for(const label of thresholdReasons)reasons.push({label});
     card.hidden = reasons.length > 0;
@@ -127,8 +134,8 @@ $('preview-queries').addEventListener('click', () => {
 $('brief').addEventListener('input', briefChanged);
 $('queries').addEventListener('input', () => { queryOrigin = $('queries').value.trim() ? 'manual' : 'empty'; $('brief-plan').replaceChildren(); updateQueryNotice(); });
 $('use-30k').addEventListener('click',()=>{$('minimum-subscribers').value='30000';updateFolds();});
-for (const id of ['minimum-subscribers','minimum-views','result-order','fold-news', 'fold-business']) $(id).addEventListener('change', updateFolds);
-$('show-all').addEventListener('click', () => { $('minimum-subscribers').value='0';$('minimum-views').value='0'; $('fold-news').checked = false; $('fold-business').checked = false; updateFolds(); });
+for (const id of ['minimum-subscribers','minimum-views','result-order','fold-news', 'fold-business', 'fold-mukbang']) $(id).addEventListener('change', updateFolds);
+$('show-all').addEventListener('click', () => { $('minimum-subscribers').value='0';$('minimum-views').value='0'; $('fold-mukbang').checked = false; $('fold-news').checked = false; $('fold-business').checked = false; updateFolds(); });
 function selectedCandidateExcluded(){return resultCards.some(row=>row.channel.channelId===selectedChannelId&&row.reviewState==='excluded');}
 function selectContact(contact, channel, brief) {
   if(resultCards.some(row=>row.channel.channelId===channel.channelId&&row.reviewState==='excluded'))return;
@@ -144,12 +151,14 @@ function selectContact(contact, channel, brief) {
 function renderChannel(channel, ticket) {
   const card = el('article', undefined, 'card');
   const title = el('h2'); title.append(link(channel.title, channel.url)); card.append(title);
-  const reviewRow={card,channel,reviewState:'pending'};
+  const savedNotice=el('p',saved.hasChannelId(channel.channelId)?'이미 산지에 저장됨 · 기존 기록을 덮어쓰지 않습니다.':'','notice');card.append(savedNotice);
+  const reviewRow={card,channel,savedNotice,reviewState:'pending'};
   const reviewSelect=el('select');reviewSelect.setAttribute('aria-label',`내 검토 상태: ${channel.title}`);
   for(const [value,label] of [['pending','영상 확인 전'],['kept','사람 중심 영상 직접 확인 · 후보로 남김'],['excluded','직접 검토 제외']]){const option=el('option',label);option.value=value;reviewSelect.append(option);}
   reviewSelect.addEventListener('change',()=>{if(!active(ticket))return;reviewRow.reviewState=reviewSelect.value;choose.disabled=!valid();if(selectedChannelId===channel.channelId){invalidateConfirmation();$('mail-status').textContent=reviewRow.reviewState==='excluded'?'직접 제외한 후보입니다. 초안 내용은 보존했지만 메일 앱 열기는 차단했습니다. 후보 상태를 복원한 뒤 수신자를 다시 확인하세요.':'후보 상태가 변경되었습니다. 수신자와 초안을 다시 확인하세요.';}updateFolds();});
   card.append(el('p','내 검토 상태 (사용자 입력, YouTube 데이터·자동 판정 아님)'),reviewSelect);
   card.append(el('p', `이 결과의 협업 목적: ${ticket.brief}`, 'result-purpose'));
+  if(channel.mukbangReview){card.append(el('p',channel.discoveryTarget?'50개 목표 · 공개 수치·먹방 표현 확인 (영상 직접 검토 전)':'목표 외 · 추가 확인 필요','notice'));warnings(card,channel.mukbangReview.reasons);card.append(el('p',channel.mukbangReview.note));}
   const focus=channel.fieldEvidence;
   if(focus?.fields?.length){
     const section=el('section',undefined,'field-evidence');section.append(el('h3',`최근 제목에서 탐색 표현 찾기: ${focus.fields.join(' · ')}`),el('p',focus.note));
@@ -260,6 +269,7 @@ $('search-form').addEventListener('submit', async (event) => {
     if (!queries.length && (plan.requiresQueryReview || !plan.queries?.length)) { showCriteria($('brief-plan'), plan); throw new Error('검색어를 직접 확인·입력한 뒤 다시 검색해 주세요.'); }
     const result = await api('/search', { brief, ...(queries.length ? { queries } : {}) }, ticket); if (!active(ticket)) return;
     $('status').textContent = result.channels?.length ? `${result.channels.length}개 채널 · 검색어: ${(result.queries || []).join(' / ')} · API 호출: 검색 ${result.quota?.searchCalls ?? '?'} / 조회 ${result.quota?.readCalls ?? '?'}` : '이번 검색에서 표시할 채널이 없습니다. 검색어를 바꿔 다시 확인해 보세요.';
+    if(result.summary)$('status').textContent=`먹방 목표 ${result.summary.target}개 중 ${result.summary.targetCandidates}개 · 추가 검토 ${result.summary.reviewCandidates}개 · API 호출: 검색 ${result.quota?.searchCalls ?? '?'} / 조회 ${result.quota?.readCalls ?? '?'}`;
     submittedBrief = ticket.brief; $('results-purpose').textContent = `이 결과의 협업 목적: ${submittedBrief}`; updatePreviousResultsNotice();
     showCriteria($('result-criteria'), result.criteria);
     $('result-criteria').append(el('p',`공개 지표 조회 시각: ${result.observedAt || '미확인'}`));

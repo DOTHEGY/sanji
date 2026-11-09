@@ -24,6 +24,8 @@ const $ = (s) => document.querySelector(s),
   tag = (t, c = "") => `<span class="tag ${c}">${esc(t)}</span>`,
   money = (n) => (n == null ? "미협의" : Number(n).toLocaleString() + "원");
 const TRANSIENT_INBOX_AVAILABLE = false;
+// The separate YouTube page is published by the Supabase workspace build only.
+const YOUTUBE_DISCOVERY_AVAILABLE = false;
 let transientInboxView=null;
 function transientDispose(){const current=transientInboxView;transientInboxView=null;if(current)current.destroy();}
 let instagramHandoff=null;
@@ -199,7 +201,7 @@ function render() {
   const rawKey = location.hash.slice(1) || "dashboard";
   const key = rawKey === "discovery" ? "brands" : rawKey;
   if(key!=="inbox"){inboxLifecycle="active";inboxNotesDispose();}
-  $("#nav").innerHTML = navGroups.map(g => `<div class="nav-group${g.bottom?" nav-management":""}"${g.label?` role="group" aria-label="${g.label}"`:""}>${g.label?`<p class="nav-group-label">${g.label}</p>`:""}${g.keys.map(k=>`<a href="#${k}" class="${key===k?"active":""}"${key===k?' aria-current="page"':""}><span aria-hidden="true">${routes[k][0]}</span>${routes[k][1]}</a>`).join("")}</div>`).join("");
+  $("#nav").innerHTML = navGroups.map(g => `<div class="nav-group${g.bottom?" nav-management":""}"${g.label?` role="group" aria-label="${g.label}"`:""}>${g.label?`<p class="nav-group-label">${g.label}</p>`:""}${g.keys.map(k=>`<a href="#${k}" class="${key===k?"active":""}"${key===k?' aria-current="page"':""}><span aria-hidden="true">${routes[k][0]}</span>${routes[k][1]}</a>`).join("")}${typeof YOUTUBE_DISCOVERY_AVAILABLE !== "undefined" && YOUTUBE_DISCOVERY_AVAILABLE && g.keys.includes("creators") ? '<a href="./youtube/" target="_blank" rel="noopener" aria-label="유튜브 크리에이터 검색 (새 탭)"><span aria-hidden="true">▶</span>유튜브 크리에이터 검색 ↗</a>' : ""}</div>`).join("");
   $("#breadcrumb").textContent =
     "워크스페이스 / " + (routes[key]?.[1] || "대시보드");
   (pages[key] || dashboard)();

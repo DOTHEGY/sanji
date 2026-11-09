@@ -2,6 +2,8 @@ const fs = require("node:fs"),
   esbuild = require("esbuild");
 fs.mkdirSync("public/workspace", { recursive: true });
 let source = fs.readFileSync("private/ui/app.js", "utf8");
+if (!source.includes("const YOUTUBE_DISCOVERY_AVAILABLE = false;")) throw new Error("YouTube navigation capability marker missing");
+source = source.replace("const YOUTUBE_DISCOVERY_AVAILABLE = false;", "const YOUTUBE_DISCOVERY_AVAILABLE = true;");
 if (!source.includes("const MANUAL_INBOX_AVAILABLE = false;")) throw new Error("Manual inbox capability marker missing");
 source = source.replace("const MANUAL_INBOX_AVAILABLE = false;", "const MANUAL_INBOX_AVAILABLE = true;");
 const start = source.indexOf("async function api("),

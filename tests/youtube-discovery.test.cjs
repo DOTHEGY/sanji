@@ -28,3 +28,37 @@ test('provider failures are not exposed and never leak tokens',async()=>{const {
 test('query planning preserves user topic modifiers',async()=>{const {searchPlan}=await load();assert.deepEqual(searchPlan({brief:'편의점 커피 크리에이터'}).queries,['편의점 커피']);assert.deepEqual(searchPlan({brief:'비건 먹방 크리에이터'}).queries,['비건 먹방']);});
 test('null provider payloads fail safely and null items are ignored',async()=>{const {discover}=await load();await assert.rejects(discover({brief:'먹방'},{apiKey:'key',fetchImpl:async()=>Response.json(null)}),e=>e.code==='YOUTUBE_INVALID_RESPONSE');assert.deepEqual((await discover({brief:'먹방'},{apiKey:'key',fetchImpl:async()=>Response.json({items:[null]})})).channels,[]);});
 test('chunked and multibyte bodies limited by bytes before full buffering',async()=>{const {youtubeDiscoveryHandler}=await loadHandler();const h=youtubeDiscoveryHandler({sb:sb(),env,fetchImpl:()=>assert.fail()});let cancelled=false;const stream=new ReadableStream({start(c){c.enqueue(new Uint8Array(4097));},cancel(){cancelled=true;}});const r=await h(new Request('https://example.com/functions/v1/youtube-discovery/search',{method:'POST',headers:{Authorization:'Bearer test-user'},body:stream,duplex:'half'}));assert.equal(r.status,413);assert.equal(cancelled,true);assert.equal((await h(request('/search','가'.repeat(2000)))).status,413);});
+
+test('paged search reaches fifty deduplicated qualified candidates with bounded official reads',async()=>{
+ const {discover}=await load();const calls=[];let page=0;const now=Date.parse('2026-11-09T00:00:00Z');
+ const channel=n=>'UC'+String(n).padStart(22,'0'),video=n=>String(n).padStart(11,'0');
+ const r=await discover({brief:'먹방',queries:['먹방']},{apiKey:'key',now:()=>now,fetchImpl:async input=>{
+  const u=new URL(input),resource=u.pathname.split('/').pop();calls.push(u);
+  if(resource==='search'){const start=page++===0?0:25;return Response.json({nextPageToken:page<3?'page'+page:undefined,items:Array.from({length:50},(_,i)=>({id:{videoId:video(start+i)},snippet:{channelId:channel(start+i),title:'먹방',publishedAt:'2026-11-08'}}))});}
+  if(resource==='channels')return Response.json({items:u.searchParams.get('id').split(',').map(id=>({id,snippet:{title:id,description:'개인 먹방 크리에이터 MCN 소속'},statistics:{subscriberCount:'30000'},contentDetails:{relatedPlaylists:{uploads:'UU'+id.slice(2)}}}))});
+  if(resource==='playlistItems')return Response.json({items:[{contentDetails:{videoId:video(Number(u.searchParams.get('playlistId').slice(2)))}}]});
+  return Response.json({items:u.searchParams.get('id').split(',').map(id=>({id,snippet:{channelId:channel(Number(id)),title:'김치 먹방',publishedAt:'2026-11-08'},statistics:{viewCount:'100'},contentDetails:{duration:'PT10M'}}))});
+ }});
+ assert.equal(r.summary.targetCandidates,50);assert.equal(r.channels.filter(c=>c.discoveryTarget).length,50);assert.equal(new Set(r.channels.map(c=>c.channelId)).size,r.channels.length);assert.equal(r.channels.length,75);assert.equal(r.quota.searchCalls,3);assert.ok(r.quota.readCalls<=112);
+ assert.ok(calls.filter(u=>u.pathname.endsWith('channels')).every(u=>u.searchParams.get('id').split(',').length<=50));assert.ok(calls.some(u=>u.searchParams.has('pageToken')));assert.ok(calls.filter(u=>u.pathname.endsWith('search')).every(u=>u.searchParams.has('publishedAfter')&&u.searchParams.get('maxResults')==='50'));
+});
+test('repeated page tokens and duplicate channels are bounded and shortages are explicit',async()=>{
+ const {discover}=await load();let searches=0;const r=await discover({brief:'먹방',queries:['먹방']},{apiKey:'key',fetchImpl:async u=>{if(new URL(u).pathname.endsWith('search')){searches++;return Response.json({nextPageToken:'same',items:[{id:{videoId:vid},snippet:{channelId:cid,title:'먹방'}}]});}return Response.json({items:[{id:cid,statistics:{hiddenSubscriberCount:true},snippet:{title:'미확인'}}]});}});
+ assert.equal(searches,2);assert.equal(r.channels.length,1);assert.equal(r.summary.targetCandidates,0);assert.match(r.warnings.join(' '),/목표 50개/);assert.ok(r.channels[0].mukbangReview.reasons.some(s=>s.includes('미확인')));
+});
+test('mukbang target uses recent evidence; gaming news corporate MCN fold but personal affiliation stays',async()=>{
+ const {mukbangReview}=await import('../supabase/functions/youtube-discovery/review-filters.mjs');const {annotateCandidate,buildBriefReview}=await import('../supabase/functions/youtube-discovery/relevance.mjs');const now=Date.parse('2026-11-09');
+ const base={channelId:cid,url:'https://www.youtube.com/channel/'+cid,subscriberCount:30000,title:'개인',recentVideos:[{title:'라면 먹방',publishedAt:'2026-11-08',url:'https://www.youtube.com/watch?v='+vid}]};
+ const check=c=>mukbangReview(annotateCandidate(c,buildBriefReview('먹방')),now);
+ assert.deepEqual(check({...base,description:'MCN 소속 개인 먹방 크리에이터'}).reasons,[]);
+ assert.ok(check({...base,description:'MCN 회사의 공식 채널입니다.'}).reasons.some(s=>s.includes('MCN')));
+ for(const title of ['게임 먹방','먹방 뉴스','게임 방송'])assert.ok(check({...base,recentVideos:[{title,publishedAt:'2026-11-08'}]}).reasons.length);
+ assert.ok(check({...base,recentVideos:[{title:'먹방',publishedAt:'2024-01-01'}]}).reasons.length);
+ assert.ok(check({...base,subscriberCount:29999}).reasons.length);
+});
+test('fresh pagination tokens cannot exceed four search calls',async()=>{
+ const {discover}=await load();let searches=0;const r=await discover({brief:'먹방',queries:['먹방']},{apiKey:'key',fetchImpl:async()=>Response.json({items:[],nextPageToken:'next'+(++searches)})});assert.equal(searches,4);assert.equal(r.summary.targetCandidates,0);
+});
+test('late recent metadata timeout retains channel facts with explicit incomplete warning',async()=>{
+ const {discover}=await load();let clock=0;const r=await discover({brief:'먹방',queries:['먹방']},{apiKey:'key',now:()=>clock,fetchImpl:async url=>{const path=new URL(url).pathname;if(path.endsWith('search'))return Response.json({items:[{id:{videoId:vid},snippet:{channelId:cid,title:'먹방'}}]});if(path.endsWith('channels'))return Response.json({items:[{id:cid,statistics:{subscriberCount:'30000'},contentDetails:{relatedPlaylists:{uploads:'UU'+'a'.repeat(22)}}}]});clock=19000;throw Error('timeout');}});assert.equal(r.channels.length,1);assert.equal(r.channels[0].recentStatus,'unavailable');assert.equal(r.summary.targetCandidates,0);assert.match(r.warnings.join(' '),/시간 제한/);
+});
