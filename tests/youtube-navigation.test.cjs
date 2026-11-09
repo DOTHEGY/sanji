@@ -62,6 +62,20 @@ test('Supabase build opts in explicitly and publishes the existing target page',
   assert.ok(fs.readFileSync('public/workspace/index.html', 'utf8').includes('app.js?v=' + hash));
 });
 
+function navigationFixture(css) {
+  // Match the real workspace's UTF-8/standards-mode document. Without an
+  // encoding declaration, Chromium can decode Korean accessible names as
+  // Windows-1252 and the exact link locator never resolves.
+  return '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>' + css + '</style><aside><nav id="nav">' + navigation(true).html + '</nav></aside><main><label>작성 중인 초안<textarea id="draft">저장 전 초안</textarea></label></main>';
+}
+
+test('navigation fixture declares UTF-8 before styles and Korean accessible names', () => {
+  const html = navigationFixture('/* synthetic styles */');
+  assert.match(html, /^<!doctype html><meta charset="utf-8">/);
+  assert.ok(html.indexOf('<meta charset="utf-8">') < html.indexOf('<style>'));
+  assert.match(html, /aria-label="유튜브 크리에이터 검색 \(새 탭\)"/);
+});
+
 test('desktop and mobile open the search page in a separate tab without losing the working draft', async () => {
   const { chromium } = require('@playwright/test');
   const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium', args: ['--no-sandbox'] });
@@ -70,10 +84,10 @@ test('desktop and mobile open the search page in a separate tab without losing t
     const css = fs.readFileSync('private/ui/style.css', 'utf8');
     // Exercise the real rendered navigation and published target HTML without a live account or API.
     const target = fs.readFileSync('public/workspace/youtube/index.html', 'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, '');
-    const main = '<meta name="viewport" content="width=device-width,initial-scale=1"><style>' + css + '</style><aside><nav id="nav">' + navigation(true).html + '</nav></aside><main><label>작성 중인 초안<textarea id="draft">저장 전 초안</textarea></label></main>';
+    const main = navigationFixture(css);
     server = http.createServer((req, res) => {
       const isTarget = req.url.split('?')[0] === '/sanji/workspace/youtube/';
-      res.setHeader('Content-Type', req.url.includes('.css') ? 'text/css' : 'text/html');
+      res.setHeader('Content-Type', req.url.includes('.css') ? 'text/css; charset=utf-8' : 'text/html; charset=utf-8');
       res.end(req.url.includes('.css') ? fs.readFileSync('public/workspace/youtube/style.css') : isTarget ? target : main);
     });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -83,6 +97,8 @@ test('desktop and mobile open the search page in a separate tab without losing t
       try {
         const page = await context.newPage();
         await page.goto(base + '/sanji/workspace/#creators');
+        assert.equal(await page.evaluate(() => document.characterSet), 'UTF-8');
+        assert.equal(await page.locator('#nav a[href="./youtube/"]').getAttribute('aria-label'), '유튜브 크리에이터 검색 (새 탭)');
         const link = page.getByRole('link', { name: '유튜브 크리에이터 검색 (새 탭)', exact: true });
         await link.scrollIntoViewIfNeeded();
         assert.ok(await link.isVisible());
