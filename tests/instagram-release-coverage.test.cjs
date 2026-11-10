@@ -41,8 +41,8 @@ test('compact inbox browser fixture defines capability globals before evaluating
  assert.equal(context.TRANSIENT_INBOX_AVAILABLE,false);
  assert.equal(typeof context.inboxNotesDispose,'function');
  assert.equal(typeof context.inboxNotesMount,'function');
- assert.match(app.innerHTML,/Instagram 대화 더 보기/);
- assert.match(app.innerHTML,/Instagram 이전 기록/);
+ assert.doesNotMatch(app.innerHTML,/Instagram 대화 더 보기|Instagram 이전 기록/);
+ assert.match(app.innerHTML,/이메일 상대 선택/);
 });
 
 test('deployed migration preserves reviewed schema and isolated function requires JWTs',()=>{
