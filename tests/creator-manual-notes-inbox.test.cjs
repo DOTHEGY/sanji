@@ -63,10 +63,8 @@ function appFixture(){
  const account={id:'synthetic-owner'},context={me:account,location:{hash:'#inbox'},globalThis:{SanjiManualNotes:{mountInboxReader:(h,opt)=>{assert.equal(h,host);state.options=opt;opt.subscribeSession(()=>state.disposed++);return {destroy:()=>state.disposed++,load:()=>state.loads++};}}},manualNotesApi:()=>{},manualClient:{auth:{onAuthStateChange:fn=>{state.callbacks.push(fn);return {data:{subscription:{unsubscribe(){}}}};}}},prototypeOpenHistoricalNote:()=>true,prototypeDisposeHistorical:()=>{state.productDisposed=(state.productDisposed||0)+1;},$:selector=>selector==='#app'?app:selector==='#inbox-historical-notes-root'?host:null,instagramInboxOwner:null,instagramInboxCursor:null,instagramInboxOffset:0,instagramInboxHasMore:false,instagramSyncStatus:null,inboxRequestGeneration:0,inboxEdited:false,creatorInboxThreads:[],api:async path=>{calls.push(path);return {items:[],hasMore:false};},toast:()=>{},head:()=>'',button:()=>'',esc:x=>String(x??''),MANUAL_INBOX_AVAILABLE:false,TRANSIENT_INBOX_AVAILABLE:false,inboxFolder:'',inboxLifecycle:'active',inboxDateRange:'7d',conversationStatuses:[],filterThreads:()=>{}};
  vm.createContext(context);vm.runInContext(block,context);return {context,host,app,state,calls};
 }
-test('App mounts separate historical reader in Inbox without adding notes to provider threads or querying a provider',async()=>{
- const f=appFixture();await f.context.inboxPage();assert.match(f.app.innerHTML,/id="inbox-historical-notes-root"/);assert.match(f.app.innerHTML,/과거 메모와 수량을 합산하지 않습니다/);assert.equal(f.state.loads,1);assert.equal(f.state.options.getOwner(),'synthetic-owner');assert.equal(f.state.options.isActive(),true);assert.equal(f.context.creatorInboxThreads.length,0);
- assert.deepEqual(f.calls,['/creator-inbox','/creator-instagram/inbox?offset=0','/creator-conversation-status']);assert.equal(f.state.options.request,f.context.manualNotesApi);
- f.state.callbacks[0]('SIGNED_OUT',null);assert.equal(f.state.options.getOwner(),null);assert.match(f.host.innerHTML,/로그인 계정이 변경/);assert.equal(f.state.disposed,1);assert.equal(f.state.productDisposed,1);
+test('email Inbox does not mount historical Instagram notes or query Instagram',async()=>{
+ const f=appFixture();await f.context.inboxPage();assert.doesNotMatch(f.app.innerHTML,/inbox-historical-notes-root|Instagram|태그바이/);assert.equal(f.state.loads,0);assert.equal(f.context.creatorInboxThreads.length,0);assert.deepEqual(f.calls,['/creator-inbox','/creator-conversation-status']);
 });
 test('App late Inbox and dirty form guards never replace a live reader or its saved view',async()=>{
  const f=appFixture();f.context.inboxEdited=true;await f.context.inboxPage();assert.equal(f.state.loads,0);assert.equal(f.app.innerHTML,'');
@@ -91,7 +89,7 @@ test('Inbox synchronous session loss unsubscribes and never retains private cont
  const view=ui.mountInboxReader(host,{getOwner:()=>owner,subscribeSession:cb=>{owner='b';cb();return()=>unsubscribed++;},request:async()=>requests++});await view.load();assert.equal(host.innerHTML,'');assert.equal(Object.keys(events).length,0);assert.equal(unsubscribed,1);assert.equal(requests,0);view.destroy();assert.equal(unsubscribed,1);
 });
 test('App queued stale auth callback cannot clear a newer same-host reader or its product modal',async()=>{
- const f=appFixture();await f.context.inboxPage();f.context.inboxNotesMount();f.host.innerHTML='new reader';const current=f.state.options;f.state.callbacks[0]('SIGNED_OUT',null);assert.equal(f.host.innerHTML,'new reader');assert.equal(current.getOwner(),'synthetic-owner');assert.equal(f.state.productDisposed,undefined);f.state.callbacks[1]('SIGNED_OUT',null);assert.match(f.host.innerHTML,/로그인 계정이 변경/);assert.equal(f.state.productDisposed,1);
+ const f=appFixture();f.context.inboxNotesMount();f.context.inboxNotesMount();f.host.innerHTML='new reader';const current=f.state.options;f.state.callbacks[0]('SIGNED_OUT',null);assert.equal(f.host.innerHTML,'new reader');assert.equal(current.getOwner(),'synthetic-owner');assert.equal(f.state.productDisposed,undefined);f.state.callbacks[1]('SIGNED_OUT',null);assert.match(f.host.innerHTML,/로그인 계정이 변경/);assert.equal(f.state.productDisposed,1);
 });
 
 const correct=(n,parent,extra={})=>note(n,{creatorId:parent.creatorId,handle:parent.handle,supersedesId:parent.id,...extra});
