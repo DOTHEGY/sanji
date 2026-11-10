@@ -21,15 +21,37 @@ export function manualYoutubeRecord(input,now=new Date().toISOString()) {
   return {kind:'크리에이터',name,company:name,companyKey:'youtube:channel-id-hex:'+Array.from(profile.split('/').pop(),c=>c.charCodeAt(0).toString(16).padStart(2,'0')).join(''),profile,handle:'',channels:'YouTube',topics:[collection],category:'미확인',classification:collection+' 후보 · 공개 출처 수동 기록',followers:null,contact:{email:'',owner:'',source:'',checked:'',verified:false,purpose:'미확인'},evidence:[{url:source,description:reason,checked:now.slice(0,10)}],reason,status:'검토 중',next:'최근 영상·협업 조건·업무 연락처 확인',note:'수동 출처 기록입니다. 전체 영상 시청·협업 적합성·연락 동의 확인을 의미하지 않습니다.',youtubeResearch:{method:'operator_public_source_review',observedAt:now,source,collections:[collection]}};
 }
 export const isYoutubeRecord=row=>row?.kind==='candidate'&&row.data?.kind==='크리에이터'&&Boolean(youtubeProfile(row.data.profile));
+// The date is the recorded observation date, not the video's publication date.
+export function youtubeObservationDay(data){
+  const value=data?.youtubeResearch?.observedAt;
+  if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}(?:T|$)/.test(value)||!Number.isFinite(Date.parse(value)))return '';
+  if(/^\d{4}-\d{2}-\d{2}$/.test(value))return value;
+  return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value));
+}
+export function youtubeMatchesFilters(data,query,from,to){
+  const q=String(query||'').trim().toLocaleLowerCase('ko-KR');
+  const fields=[data?.name,data?.reason,data?.note,...(Array.isArray(data?.topics)?data.topics:[]),...recordCollections(data||{})];
+  if(q&&!fields.join(' ').toLocaleLowerCase('ko-KR').includes(q))return false;
+  if(!from&&!to)return true;
+  const day=youtubeObservationDay(data);return Boolean(day&&(!from||day>=from)&&(!to||day<=to));
+}
 function node(tag,text){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;return e;}
 function sourceLink(text,value){const url=https(value);if(!url)return node('span',text);const a=node('a',text);a.href=url;a.target='_blank';a.rel='noopener noreferrer';return a;}
 export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=()=>{},onPreview=()=>{}}) {
-  let revision=0,busy=false,records=[],saveOperation=0,selected=DEFAULT_YOUTUBE_COLLECTION,drafts=[],loaded=false,uncertain=false;
+  let revision=0,busy=false,records=[],saveOperation=0,selected=DEFAULT_YOUTUBE_COLLECTION,drafts=[],loaded=false,uncertain=false,selectedRecipients=new Set();
   const heading=node('h2','YouTube 크리에이터');
   const status=node('p','로그인 후 저장한 후보를 불러옵니다.');status.setAttribute('role','status');
   const refresh=node('button','저장한 후보 새로고침');refresh.type='button';
   const list=node('div');list.className='saved-youtube-list';
-  const search=node('input');search.type='search';search.placeholder='저장한 채널명·메모 검색';search.setAttribute('aria-label','저장한 YouTube 후보 검색');
+  const search=node('input');search.type='search';search.placeholder='채널명·주제·키워드 검색';search.setAttribute('aria-label','저장한 YouTube 후보 검색');
+  const dateControls=node('div');dateControls.className='youtube-date-filters';
+  const fromLabel=node('label','조사 확인일 시작 '),from=node('input');from.type='date';from.setAttribute('aria-label','조사 확인일 시작');fromLabel.append(from);
+  const toLabel=node('label','조사 확인일 끝 '),to=node('input');to.type='date';to.setAttribute('aria-label','조사 확인일 끝');toLabel.append(to);
+  const resetFilters=node('button','검색 조건 지우기');resetFilters.type='button';dateControls.append(fromLabel,toLabel,resetFilters);
+  const dateNote=node('p','조사 확인일 기준입니다. 기간을 선택하면 확인일이 없는 후보는 제외됩니다.');
+  const selectionStatus=node('p','선택 0명');selectionStatus.setAttribute('role','status');
+  const reviewSelection=node('button','선택한 대상 검토');reviewSelection.type='button';
+  const selectionReview=node('div');selectionReview.setAttribute('aria-label','선택 대상 검토');
   const explain=node('p','주제별로 계속 모아두는 후보 목록입니다. 같은 채널은 여러 모음에 넣어도 CRM 기록은 하나만 유지합니다. 공개 출처의 수치·연락처는 협업 적합성이나 이메일 발송 승인이 아닙니다.');
   const collectionBox=node('div');collectionBox.className='youtube-collection-boxes';collectionBox.setAttribute('aria-label','크리에이터 모음 선택');
   const collectionInfo=node('p');collectionInfo.className='notice';collectionInfo.setAttribute('role','status');
@@ -41,7 +63,7 @@ export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=
   const existingLabel=node('label','이 모음에 기존 후보 추가'),existing=node('select');existing.setAttribute('aria-label','이 모음에 추가할 기존 후보');existingLabel.append(existing);
   const addExisting=node('button','선택한 후보를 이 모음에 추가');addExisting.type='button';existingWrap.append(existingLabel,addExisting);
   const manage=node('details');manage.className='saved-management';manage.append(node('summary','모음 관리 · 후보 추가'),explain,createForm,collectionStatus,existingWrap);
-  container.replaceChildren(heading,collectionBox,search,status,list,refresh,manage);
+  container.replaceChildren(heading,collectionBox,search,dateControls,dateNote,status,selectionStatus,reviewSelection,selectionReview,list,refresh,manage);
   manage.append(collectionInfo);
   function controls(){refresh.disabled=busy;save.disabled=busy||!loaded||uncertain;create.disabled=busy||!loaded;addExisting.disabled=busy||!loaded||uncertain||!existing.value;for(const b of collectionBox.children)b.disabled=busy;}
   function drawCollections(){
@@ -55,7 +77,9 @@ export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=
     form.hidden=!selected;controls();
   }
   function draw(){
-    drawCollections();const q=search.value.trim().toLowerCase();const rows=collectionStats(records,selected).rows.filter(r=>[r.data.name,r.data.reason,r.data.note].join(' ').toLowerCase().includes(q));
+    drawCollections();const rows=collectionStats(records,selected).rows.filter(r=>youtubeMatchesFilters(r.data,search.value,from.value,to.value));
+    selectionStatus.textContent=`선택 ${selectedRecipients.size}명 · 다른 조건에서 선택한 대상도 유지됩니다.`;
+    if(from.value&&to.value&&from.value>to.value){status.textContent='시작일이 종료일보다 늦습니다. 날짜를 확인하세요.';list.replaceChildren();return;}
     const hasAddress=row=>inAudienceRange(row.data.followers)&&savedEmailDisplay(row.data).email!==null;const current=rows.filter(hasAddress),history=rows.filter(r=>!hasAddress(r));
     list.replaceChildren();status.textContent=`산지 저장 ${records.length}명 · 표시 ${rows.length}명 · 3만–20만 규모·공개 주소 후보 ${current.length}명 (검증 주소 수가 아닙니다)`;
     function table(records,label){const wrap=node('div');wrap.className='creator-table-wrap';const table=node('table');table.className='creator-table';table.setAttribute('aria-label',label);const head=node('thead'),hr=node('tr');for(const title of ['채널명','이메일주소','구독자수']){const th=node('th',title);th.setAttribute('scope','col');hr.append(th);}head.append(hr);const body=node('tbody');table.append(head,body);wrap.append(table);return {wrap,body};}
@@ -65,7 +89,8 @@ export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=
     const oldTable=table(history,'기존 YouTube 조사 기록');historyBox.append(oldTable.wrap);list.append(historyBox);
     for(const r of rows){const d=r.data,card=node('details');card.className='creator-detail';const summary=node('summary','상세 근거');card.append(summary,sourceLink('YouTube 채널 원문',d.profile));
       const tr=node('tr'),name=node('td'),email=node('td'),audience=node('td'),contact=savedEmailDisplay(d);
-      name.append(sourceLink(d.name,d.profile));const key=youtubeProfile(d.profile)?.match(/\/channel\/(UC[A-Za-z0-9_-]{22})$/)?.[1];
+      const choose=node('input');choose.type='checkbox';choose.checked=selectedRecipients.has(r.id);choose.disabled=!contact.email;choose.setAttribute('aria-label',`${d.name} 검토 대상으로 선택`);choose.addEventListener('change',()=>{if(choose.checked)selectedRecipients.add(r.id);else selectedRecipients=new Set([...selectedRecipients].filter(id=>id!==r.id));selectionReview.replaceChildren();selectionStatus.textContent=`선택 ${selectedRecipients.size}명 · 다른 조건에서 선택한 대상도 유지됩니다.`;});
+      name.append(choose,sourceLink(d.name,d.profile));const key=youtubeProfile(d.profile)?.match(/\/channel\/(UC[A-Za-z0-9_-]{22})$/)?.[1];
       const preview=node('button','카피 보기');preview.type='button';preview.className='compact secondary';preview.disabled=!key;preview.setAttribute('aria-label',`${d.name} 개별 카피 보기`);const owner=getOwner(),ticket=revision;preview.addEventListener('click',()=>{if(!loaded||busy||ticket!==revision||!isCurrent(owner)||getOwner()!==owner||!key)return;onPreview('youtube:'+key);});name.append(preview,card);
       email.append(node('span',contact.email||'미확인'));const hint=node('small',contact.label);hint.className='muted';email.append(hint);if(contact.otherCount)card.append(node('p',`추가 주소 근거 ${contact.otherCount}개는 아래에 보존합니다. 수신자는 크리에이터당 최대 1개 주소만 선택하며 플랫폼 간 공유 수신함도 중복 제외합니다.`));
       audience.textContent=Number.isSafeInteger(d.followers)&&d.followers>=0?d.followers.toLocaleString('ko-KR'):'미확인';tr.append(name,email,audience);(hasAddress(r)?activeTable.body:oldTable.body).append(tr);
@@ -84,7 +109,7 @@ export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=
   }
   async function load(afterSave=false){
     if(busy&&afterSave!==true)return;
-    const owner=getOwner(),ticket=++revision;records=[];loaded=false;list.replaceChildren();drawCollections();onChange();
+    const owner=getOwner(),ticket=++revision;records=[];selectedRecipients.clear();selectionReview.replaceChildren();loaded=false;list.replaceChildren();drawCollections();onChange();
     if(!owner){status.textContent='로그인 후 저장한 후보를 불러옵니다.';return;}
     status.textContent='저장한 후보 확인 중…';refresh.disabled=true;
     try{const session=await checkedSession(owner,ticket),token=session.access_token;
@@ -97,6 +122,10 @@ export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=
     finally{if(ticket===revision)controls();}
   }
   refresh.addEventListener('click',()=>load());search.addEventListener('input',()=>{if(loaded)draw();});existing.addEventListener('change',controls);
+  for(const input of [from,to])input.addEventListener('change',()=>{if(loaded)draw();});
+  resetFilters.addEventListener('click',()=>{search.value='';from.value='';to.value='';if(loaded)draw();});
+  function drawSelectionReview(){selectionReview.replaceChildren();const chosen=records.filter(r=>selectedRecipients.has(r.id));if(!chosen.length){selectionReview.append(node('p','먼저 이메일 주소가 있는 대상을 선택하세요.'));return;}selectionReview.append(node('p',`선택한 ${chosen.length}명 · 아직 이메일을 보내지 않았습니다. 발송 기능은 연결 검토 중입니다.`));const items=node('ul');for(const row of chosen){const item=node('li',`${row.data.name} · ${savedEmailDisplay(row.data).email||'주소 미확인'} `),remove=node('button','선택에서 제외');remove.type='button';remove.setAttribute('aria-label',`${row.data.name} 선택에서 제외`);remove.addEventListener('click',()=>{selectedRecipients=new Set([...selectedRecipients].filter(id=>id!==row.id));draw();drawSelectionReview();});item.append(remove);items.append(item);}selectionReview.append(items);}
+  reviewSelection.addEventListener('click',drawSelectionReview);
   createForm.addEventListener('submit',event=>{event.preventDefault();if(busy||!loaded)return;try{const name=collectionName(collectionInput.value),names=collectionNames(records,drafts);if(!names.includes(name)){if(names.length>=100)throw Error('모음은 최대 100개까지 만들 수 있습니다.');drafts.push(name);}selected=name;collectionInput.value='';collectionStatus.textContent='모음을 선택했습니다. 첫 후보를 저장하면 다른 기기에서도 이 모음을 볼 수 있습니다.';draw();}catch(e){collectionStatus.textContent=e.message;}});
   async function addMembership(row,name,owner,ticket){
     if(!row||row.owner!==owner||!Number.isInteger(row.version)||row.version<1)throw Error('현재 후보를 다시 불러오세요.');
@@ -138,5 +167,5 @@ export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=
   });
   const getSavedIds=()=>new Set(records.map(r=>youtubeProfile(r.data.profile)?.match(/\/channel\/(UC[A-Za-z0-9_-]{22})$/)?.[1]).filter(Boolean));
   drawCollections();
-  return {load,getSavedIds,hasChannelId:id=>typeof id==='string'&&getSavedIds().has(id),clear(){revision++;saveOperation++;records=[];busy=false;loaded=false;uncertain=false;selected=DEFAULT_YOUTUBE_COLLECTION;drafts=[];list.replaceChildren();form.reset();search.value='';collectionInput.value='';collectionStatus.textContent='';saveStatus.textContent='';status.textContent='로그인 후 저장한 후보를 불러옵니다.';drawCollections();onChange();}};
+  return {load,getSavedIds,hasChannelId:id=>typeof id==='string'&&getSavedIds().has(id),clear(){revision++;saveOperation++;records=[];selectedRecipients.clear();selectionReview.replaceChildren();selectionStatus.textContent='선택 0명';busy=false;loaded=false;uncertain=false;selected=DEFAULT_YOUTUBE_COLLECTION;drafts=[];list.replaceChildren();form.reset();search.value='';from.value='';to.value='';collectionInput.value='';collectionStatus.textContent='';saveStatus.textContent='';status.textContent='로그인 후 저장한 후보를 불러옵니다.';drawCollections();onChange();}};
 }
