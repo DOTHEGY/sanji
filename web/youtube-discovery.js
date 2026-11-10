@@ -1,4 +1,5 @@
-import { mountYoutubeCampaign } from './youtube-campaign.mjs';
+import { fullConfiguration } from './youtube-campaign-full.mjs';
+import { previewEnvelope, privatePreviewDocument, previewWarning } from './youtube-email-view.mjs';
 import { mountYoutubeSaved } from './youtube-saved.mjs';
 import { createClient } from '@supabase/supabase-js';
 import { reviewReasons, orderCandidates } from '../supabase/functions/youtube-discovery/review-filters.mjs';
@@ -14,7 +15,15 @@ let resultCards = [];
 let queryOrigin = 'empty';
 let submittedBrief = null;
 const saved = mountYoutubeSaved({container:$('saved-youtube'),client,getOwner:()=>owner,isCurrent:candidateOwner=>!disposed&&owner===candidateOwner,onChange:()=>updateFolds(),onPreview:key=>campaign.previewRecipient(key)});
-const campaign = mountYoutubeCampaign({container:$('daily-outreach'),client,functionUrl:supabaseUrl+'/functions/v1/creator-daily-outreach',apiKey:supabaseKey,getOwner:()=>owner,isCurrent:candidateOwner=>!disposed&&owner===candidateOwner});
+let previewEpoch=0,previewController=null;
+const campaign={load(){},clear(){previewEpoch++;previewController?.abort();previewController=null;$('daily-outreach').textContent='수신자 선택 후 일괄 발송은 아직 연결되지 않았습니다.';},async previewRecipient(creatorKey){
+ if(!/^youtube:UC[A-Za-z0-9_-]{22}$/.test(creatorKey)||!owner||disposed)return;
+ previewController?.abort();const controller=new AbortController(),ticket=++previewEpoch,account=owner,host=$('daily-outreach');previewController=controller;host.replaceChildren(el('p','개별 이메일 카피 확인 중…'));host.scrollIntoView?.({behavior:'smooth',block:'start'});
+ const current=()=>!disposed&&owner===account&&ticket===previewEpoch;
+ try{const session=await client.auth.getSession();if(!current()||session?.data?.session?.user?.id!==account||!session.data.session.access_token)throw Error('session');const headers={Authorization:'Bearer '+session.data.session.access_token,apikey:supabaseKey,'Content-Type':'application/json'};const call=async(path,body)=>{const response=await fetch(supabaseUrl+'/functions/v1/creator-daily-outreach'+path,{method:body?'POST':'GET',headers,cache:'no-store',signal:controller.signal,...(body?{body:JSON.stringify(body)}:{})});if(!response.ok)throw Error('request');return response.json()};const config=fullConfiguration(await call('/configuration'));if(!current())return;if(!config.snapshotId)throw Error('config');const raw=await call('/preview',{creatorKey,expectedRevision:config.revision});if(!current())return;const result=previewEnvelope(raw,{creatorKey,snapshotId:config.snapshotId,policyRevision:config.revision});const heading=el('h3',result.channelName+' 이메일 카피'),meta=el('p','수신 주소: '+(result.recipient||'미확인')+' · 미리보기 전용'),frame=el('iframe');frame.title=result.channelName+' 이메일 카피';frame.setAttribute('sandbox','');frame.setAttribute('referrerpolicy','no-referrer');frame.srcdoc=privatePreviewDocument(result.html);host.replaceChildren(heading,meta,el('h4',result.subject),frame,...[...new Set([...result.warnings,'preview_is_not_send_authorization'])].map(w=>el('p',previewWarning(w))));
+ }catch{if(current())host.replaceChildren(el('p','개별 카피를 확인하지 못했습니다. 설정과 로그인 상태를 확인하세요. 이메일은 발송하지 않았습니다.'));}finally{if(previewController===controller)previewController=null;}
+}};
+
 function el(tag, text, className) {
   const node = document.createElement(tag);
   if (text !== undefined) node.textContent = String(text);
