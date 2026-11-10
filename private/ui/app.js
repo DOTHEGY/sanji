@@ -185,6 +185,7 @@ async function authPage() {
   if(typeof manualDispose==='function'&&$('#manual-inbox-root')){manualDispose();$('#modal')?.close();}
   me = null;
   csrf = "";
+  const youtubeHost=$("#youtube-email-host");if(youtubeHost){youtubeHost.replaceChildren();youtubeHost.hidden=true;youtubeHost.dataset.owner="";}
   $("#nav").innerHTML = "";
   $("#user").textContent = "관리자 로그인";
   const status = await api("/status");
@@ -200,6 +201,7 @@ function render() {
   if(!location.hash||rawKey==="dashboard"){history.replaceState(null,"",location.pathname+location.search+"#brands");}
   const key = rawKey === "discovery" || rawKey === "dashboard" ? "brands" : rawKey;
   if(key!=="inbox"){inboxLifecycle="active";inboxNotesDispose();}
+  syncYoutubeEmailHost(key);
   $("#nav").innerHTML = navGroups.map(g => `<div class="nav-group${g.bottom?" nav-management":""}"${g.label?` role="group" aria-label="${g.label}"`:""}>${g.label?`<p class="nav-group-label">${g.label}</p>`:""}${g.keys.map(k=>`<a href="#${k}" class="${key===k?"active":""}"${key===k?' aria-current="page"':""}><span aria-hidden="true">${routes[k][0]}</span>${routes[k][1]}</a>`).join("")}${typeof YOUTUBE_DISCOVERY_AVAILABLE !== "undefined" && YOUTUBE_DISCOVERY_AVAILABLE && g.keys.includes("creators") ? '<a href="./youtube/" target="_blank" rel="noopener" aria-label="유튜브 크리에이터 검색 (새 탭)"><span aria-hidden="true">▶</span>유튜브 크리에이터 검색 ↗</a>' : ""}</div>`).join("");
   $("#breadcrumb").textContent =
     "워크스페이스 / " + (routes[key]?.[1] || "대시보드");
@@ -1321,6 +1323,15 @@ function youtubeEmailPanel(){
  if(typeof YOUTUBE_DISCOVERY_AVAILABLE==='undefined'||!YOUTUBE_DISCOVERY_AVAILABLE)return '';
  return '<section class="panel email-youtube-panel"><h2>유튜브 크리에이터 이메일</h2><p class="fine">저장된 크리에이터를 검토하고 선택하세요. 메일 발송 가능 상태는 아래 화면에서 확인합니다.</p><details><summary>유튜브 크리에이터 열기</summary><iframe class="email-youtube-frame" src="./youtube/" title="유튜브 크리에이터 이메일" loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe><p><a href="./youtube/" target="_blank" rel="noopener noreferrer">별도 창으로 열기 ↗</a></p></details></section>';
 }
+function syncYoutubeEmailHost(key){
+ const host=$('#youtube-email-host');if(!host)return;
+ const owner=typeof me?.email==='string'?me.email:'';
+ if(!owner){host.hidden=true;return;}
+ if(host.dataset.owner!==owner){host.replaceChildren();host.dataset.owner=owner;}
+ const show=(key==='brands'||key==='discovery')&&typeof YOUTUBE_DISCOVERY_AVAILABLE!=='undefined'&&YOUTUBE_DISCOVERY_AVAILABLE;
+ if(show&&!host.firstElementChild)host.innerHTML=youtubeEmailPanel();
+ host.hidden=!show;
+}
 async function discoveryPage() {
   const discoveryRequestOwner=me,discoveryRequest=++discoveryRequestGeneration;
   clearTimeout(discoveryRefresh);
@@ -1333,7 +1344,6 @@ async function discoveryPage() {
     const yesterday=historyCount(r,1),today=historyCount(r,0);
     const pending=r.leads.filter(mailPending),ready=pending.filter(mailReady),review=pending.length-ready.length,emails=new Set(r.leads.flatMap(l=>(l.data.contacts||[]).map(c=>c.email.toLowerCase())));
     $("#app").innerHTML=head("브랜드 이메일","업체별 제안 확인부터 발송 승인까지 한곳에서 진행하세요.",'<div class="actions">'+button('문자·전화 회신 기록','manual-reply')+'<a class="text-link" href="#templates">공통 템플릿 설정 ↗</a></div>')+
-    youtubeEmailPanel()+
     '<div class="mail-overview"><div><span>발송 준비 초안</span><strong><span id="mail-pending-count">'+ready.length+'</span><small>업체</small></strong><small>검토 필요 <span id="mail-review-count">'+review+'</span>업체</small></div><div><span>어제 이메일 확보 · '+esc(yesterday.day.slice(5))+'</span><strong><span id="mail-yesterday-companies">'+Number(yesterday.companies)+'</span><small>곳</small></strong></div><div><span>오늘 이메일 확보 업체 · '+esc(today.day.slice(5))+'</span><strong><span id="mail-today-companies">'+Number(today.companies)+'</span><small>곳 · 전체 경로</small></strong></div><div><span>오늘 자동 발굴 이메일</span><strong><span id="mail-today-addresses">'+Number(r.usage?.emails||0)+'</span><small>주소 · 신규 발굴</small></strong></div><div><span>보낸 메일</span><strong><span id="mail-sent-count">'+sentMailRows().length+'</span><small>통</small></strong></div></div><div class="daily-discovery-line"><span class="status-dot"></span> 매일 00:00 KST · 검색 후보 자동 보충 · 상품·공식 연락처 검증 '+Number(r.usage?.qualified||0)+' / '+r.settings.target+'곳 목표 <span>전체 이메일 주소 '+emails.size+'개</span></div><div id="search-refill-status" class="fine">'+searchSummary(r)+'</div>'+
     '<p class="fine">오늘 확보 업체는 모든 수집 경로 기준입니다. 자동 발굴 주소 수는 아래 상세에서 확인하세요. 초안은 발송 직전에 다시 검증합니다.</p><details class="panel"><summary>자동 발굴 진행 상황·오류 보기</summary><div id="discovery-health">'+discoveryHealthPanel(r)+'</div><p id="discovery-live-status" class="fine">작업 상태 자동 확인 중 · 목록은 직접 새로고침</p>'+discoveryHistory(r)+'</details>'+'<div class="mail-workspace"><div class="mail-toolbar"><div class="mail-tabs" role="tablist">'+button("미예약 초안","brand-tab","pending",brandTab==="pending")+button("예약·처리 상태 ("+(data.jobs||[]).filter(j=>["queued","processing","outcome_unknown"].includes(j.status)).length+")","brand-tab","scheduled",brandTab==="scheduled")+button("보낸 메일","brand-tab","sent",brandTab==="sent")+button("열람 추정만","brand-tab","opened",brandTab==="opened")+button("회신 확인만","brand-tab","replied",brandTab==="replied")+'</div>'+(brandTab==="pending"?'<div class="actions mail-filter-actions"><div class="day-filters">'+button("전체","mail-day","all",mailDayFilter==="all")+button("어제","mail-day","yesterday",mailDayFilter==="yesterday")+button("오늘","mail-day","today",mailDayFilter==="today")+'</div><input id="mail-filter" class="search" placeholder="업체·이메일 검색" aria-label="업체·이메일 검색">'+button("현재 목록 전체 선택","mail-select-all")+button("선택 해제","mail-select-none")+button("선택한 메일 지금 보내기","mail-review-selected","",true)+'<details><summary>선택한 메일 예약하기</summary><label class="field">예약 날짜·시간 · 한국시간(KST)<input id="inline-run-at" type="datetime-local" value="'+nextMorningKst()+'"></label>'+button("선택한 메일 승인·예약","mail-schedule-selected","",true)+'<p class="fine">기본값은 다음 날 오전 9시입니다. 예약 저장 완료 후에는 화면을 닫아도 됩니다. 5분 간격 실행기가 지정 시각 이후 순서대로 처리합니다.</p></details>' +'</div>':"")+'</div>'+
     '<details class="panel"><summary>전체 예약 이력·취소 · 예약·처리 상태 탭에서 업체별 확인</summary><p id="schedule-live-status" class="fine">예약 상태는 예약·처리 상태 탭에서 자동 확인합니다.</p><div id="inline-schedule-jobs">'+jobTable()+'</div></details><div id="inline-mail-summary" class="notice" role="status" aria-live="polite">'+esc(inlineMailStatus())+'</div><div id="discovery-results">'+(brandMailResults(r))+'</div></div>'+
