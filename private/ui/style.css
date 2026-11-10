@@ -942,3 +942,13 @@ nav {
 .inbox-historical-notes { max-width: none; margin-bottom: 28px; }
 .inbox-historical-notes > h2 { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .inbox-historical-notes .manual-note-records article { min-width: 0; }
+
+/* Email workspace: keep the existing YouTube tool within the signed-in shell. */
+.email-youtube-panel summary{cursor:pointer;font-weight:650;padding:12px 0}
+.email-youtube-frame{display:block;width:100%;height:80vh;min-height:640px;border:1px solid #dbe2ec;border-radius:12px;background:#fff}
+@media(max-width:600px){.email-youtube-frame{height:75vh;min-height:520px}}
+.email-youtube-panel{border:1px solid #d8e8df;background:linear-gradient(135deg,#fff 55%,#f0f8f2);border-radius:18px;box-shadow:0 8px 28px rgba(30,76,53,.06)}
+.email-youtube-panel h2{margin:0 0 6px;letter-spacing:-.02em}
+.email-youtube-panel details{margin-top:14px;border-top:1px solid #e1ebe3}
+.email-youtube-panel summary{color:#176b51;list-style-position:inside}
+.email-youtube-panel details[open] summary{padding-bottom:16px}
