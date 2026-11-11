@@ -1,0 +1,3 @@
+create table public.synthetic_claim as select public.sanji_youtube_manual_claim_scheduled('11111111-1111-4111-8111-111111111111',(select id from public.sanji_youtube_manual_ledger),repeat('b',64),repeat('c',64),(select claim_token from public.sanji_youtube_manual_schedule)) token;
+insert into public.sanji_suppression values('11111111-1111-4111-8111-111111111111','email:synthetic@example.test');
+select (public.sanji_youtube_manual_recheck('11111111-1111-4111-8111-111111111111',(select id from public.sanji_youtube_manual_ledger),(select token from public.synthetic_claim))->>'allowed')::boolean as allowed_after_refusal;

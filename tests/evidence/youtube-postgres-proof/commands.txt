@@ -1,0 +1,13 @@
+Isolated Docker container: postgres:16-alpine; POSTGRES_HOST_AUTH_METHOD=trust; no host ports or production database.
+From /tmp/sanji-scheduled-review, with container sanji-youtube-postgres-proof:
+  docker exec sanji-youtube-postgres-proof psql -U postgres -Atc 'select version()'
+  docker exec -i sanji-youtube-postgres-proof psql -U postgres -v ON_ERROR_STOP=1 -q < /workspace/results/youtube-pg-proof/sanji-full-fixture.sql
+  docker exec -i sanji-youtube-postgres-proof psql -U postgres -v ON_ERROR_STOP=1 -q < supabase/proposals/youtube-manual-ledger.sql
+  docker exec -i sanji-youtube-postgres-proof psql -U postgres -v ON_ERROR_STOP=1 -q < supabase/proposals/youtube-manual-schedule.sql
+  docker exec -i sanji-youtube-postgres-proof psql -U postgres -v ON_ERROR_STOP=1 -q < /workspace/results/youtube-pg-proof/sanji-full-seed.sql
+Two independent psql sessions launched concurrently, each executing the following query with the same start timestamp 3 seconds ahead:
+  select pg_sleep(greatest(0,extract(epoch from ('START_TIMESTAMP'::timestamptz-clock_timestamp()))));
+  select coalesce((public.sanji_youtube_manual_claim_due()->>'batchId'),'no_claim');
+  docker exec -i sanji-youtube-postgres-proof psql -U postgres -v ON_ERROR_STOP=1 < /workspace/results/youtube-pg-proof/sanji-full-race.sql
+Session A returned a batch ID and session B returned no_claim. The subsequent refusal check returned false.
+The seeded run_at was moved into the past in the isolated fixture; this is not a real-time scheduling or Gmail test.

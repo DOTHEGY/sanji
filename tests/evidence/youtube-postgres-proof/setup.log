@@ -1,0 +1,17 @@
+Version:
+PostgreSQL 16.15 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+Applying synthetic fixture and candidate SQL in declared order:
+Applying /workspace/results/youtube-pg-proof/sanji-full-fixture.sql
+Applying supabase/proposals/youtube-manual-ledger.sql
+Applying supabase/proposals/youtube-manual-schedule.sql
+Applying /workspace/results/youtube-pg-proof/sanji-full-seed.sql
+ sanji_youtube_manual_confirm_batch 
+------------------------------------
+ t
+(1 row)
+
+                                                                                sanji_youtube_manual_schedule_batch                                                                                 
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ {"rows": [{"id": "433a7029-0626-4621-af94-826dce8933c2", "state": "reserved", "candidateId": "22222222-2222-4222-8222-222222222222"}], "runAt": "2026-11-12T01:00:00+00:00", "state": "scheduled"}
+(1 row)
+

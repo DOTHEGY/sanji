@@ -1,0 +1,5 @@
+88614a9c10fda163ccc9639ba010f83f655ba2b637d422eb56198edbd576049a  supabase/proposals/youtube-manual-ledger.sql
+713fd046ce6381c8059c6756f899c42db30b8709607ae170c9de17b2932115db  supabase/proposals/youtube-manual-schedule.sql
+9a852a4244868dd737acf5265b65219b40bca44a69cbf8fa68c5e488e83c3c08  /workspace/results/youtube-pg-proof/sanji-full-fixture.sql
+863e1e5340ce45d49cb821e133ec094255228fc81b89d631d776dc83c9a3972e  /workspace/results/youtube-pg-proof/sanji-full-race.sql
+bfde3dcc28eea6b5096126da3bed8cce1c961aa574f26d7b145956cffb9c40a4  /workspace/results/youtube-pg-proof/sanji-full-seed.sql

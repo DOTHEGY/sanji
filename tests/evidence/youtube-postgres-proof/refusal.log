@@ -1,0 +1,7 @@
+SELECT 1
+INSERT 0 1
+ allowed_after_refusal 
+-----------------------
+ f
+(1 row)
+
