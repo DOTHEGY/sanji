@@ -586,12 +586,50 @@ function createSharedInlinePreview({ images, owner, requiredImageIds }) {
   }
   return { sharedImages, render };
 }
+function sharedMimeChunk(text) {
+  const bytes = Buffer4.from(text), variants = [];
+  for (let offset = 0; offset < 3; offset++) variants.push(bytes.subarray(offset, offset + Math.floor((bytes.length - offset) / 3) * 3).toString("base64url"));
+  return { bytes, variants };
+}
+function hashMimeLines(lines) {
+  const hash = createHash4("sha256");
+  let tail = Buffer4.alloc(0), mimeBytes = 0;
+  function add(value) {
+    const shared = typeof value === "object", bytes = shared ? value.bytes : Buffer4.from(value);
+    mimeBytes += bytes.length;
+    if (mimeBytes > 20 * 1024 * 1024) fail3("MAIL_TOO_LARGE", "\uBA54\uC77C \uBCF8\uBB38 \uD06C\uAE30\uB97C \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4.");
+    let offset = 0;
+    if (tail.length) {
+      const needed = 3 - tail.length, take = Math.min(needed, bytes.length);
+      tail = Buffer4.concat([tail, bytes.subarray(0, take)]);
+      offset = take;
+      if (tail.length < 3) return;
+      hash.update(tail.toString("base64url"));
+      tail = Buffer4.alloc(0);
+    }
+    const full = Math.floor((bytes.length - offset) / 3) * 3;
+    if (full) hash.update(shared ? value.variants[offset] : bytes.subarray(offset, offset + full).toString("base64url"));
+    tail = bytes.subarray(offset + full);
+  }
+  for (let i = 0; i < lines.length; i++) {
+    if (i) add("\r\n");
+    add(lines[i]);
+  }
+  if (tail.length) hash.update(tail.toString("base64url"));
+  return { rawHash: hash.digest("hex"), mimeBytes };
+}
 function createSharedInlineComposer({ images, owner, requiredImageIds }) {
   const checked2 = validateInlineImages2(images, { owner, requiredIds: requiredImageIds });
   const encodedImages = checked2.map((image) => encoded(image.bytes));
-  return (options) => composeWithImages({ ...options, images, owner, requiredImageIds }, checked2, encodedImages);
+  let chunks;
+  const compose = (options) => composeWithImages({ ...options, images, owner, requiredImageIds }, checked2, encodedImages);
+  compose.hash = (options) => {
+    chunks ??= encodedImages.map(sharedMimeChunk);
+    return composeWithImages({ ...options, images, owner, requiredImageIds }, checked2, chunks, true);
+  };
+  return compose;
 }
-function composeWithImages({ copy, images, owner, requiredImageIds, from, to, senderName, messageId = randomUUID4(), now = /* @__PURE__ */ new Date() }, validatedImages, encodedImages) {
+function composeWithImages({ copy, images, owner, requiredImageIds, from, to, senderName, messageId = randomUUID4(), now = /* @__PURE__ */ new Date() }, validatedImages, encodedImages, hashOnly = false) {
   if (!copy || copy.sendingEnabled !== false || !emailIdentity(from) || !emailIdentity(to) || /[^\x21-\x7E]/.test(from + to) || !String(copy.subject || "").trim() || typeof copy.body !== "string" || copy.body.length > 2e4 || !String(senderName || "").trim() || !/^[-A-Za-z0-9_]{1,100}$/.test(messageId) || Number.isNaN(new Date(now).getTime())) fail3("MAIL_PREVIEW_INVALID", "\uBC1C\uC2E0\uC790\xB7\uC218\uC2E0\uC790\xB7\uBCF8\uBB38\uC744 \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4.");
   if (typeof copy.senderEmail !== "string" || from !== copy.senderEmail.trim().toLowerCase()) fail3("SENDER_SIGNATURE_MISMATCH", "\uD604\uC7AC \uBC1C\uC2E0 \uACC4\uC815\uACFC \uC2B9\uC778\uB41C Gmail \uC11C\uBA85\uC774 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
   if (copy.attachments?.length) fail3("UNEXPECTED_ATTACHMENTS", "\uC77C\uBC18 \uCCA8\uBD80\uB97C \uCD94\uAC00\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
@@ -600,6 +638,7 @@ function composeWithImages({ copy, images, owner, requiredImageIds, from, to, se
   const lines = [`From: ${encodedHeader(senderName)} <${from}>`, `To: ${to}`, `Subject: ${encodedHeader(copy.subject)}`, `Date: ${new Date(now).toUTCString()}`, `Message-ID: <${messageId}@sanji.local>`, "MIME-Version: 1.0", `Content-Type: multipart/alternative; boundary="${boundary}"`, "", `--${boundary}`, "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", encoded(text), `--${boundary}`, `Content-Type: multipart/related; boundary="${related}"; type="text/html"`, "", `--${related}`, "Content-Type: text/html; charset=UTF-8", "Content-Transfer-Encoding: base64", "", encoded(html)];
   for (const [index, image] of checked2.entries()) lines.push(`--${related}`, "Content-Type: image/png", `Content-ID: <${image.cid}>`, `Content-Disposition: inline; filename="${image.name}"`, "Content-Transfer-Encoding: base64", "", encodedImages?.[index] ?? encoded(image.bytes));
   lines.push(`--${related}--`, `--${boundary}--`, "");
+  if (hashOnly) return { ...hashMimeLines(lines), sendingEnabled: false };
   const mime = lines.join("\r\n");
   if (Buffer4.byteLength(mime) > 20 * 1024 * 1024) fail3("MAIL_TOO_LARGE", "\uBA54\uC77C \uBCF8\uBB38 \uD06C\uAE30\uB97C \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4.");
   return { raw: Buffer4.from(mime).toString("base64url"), html, text, imageCount: checked2.length, imageBytes: checked2.reduce((n, x) => n + x.bytes.length, 0), mimeBytes: Buffer4.byteLength(mime), sendingEnabled: false };
@@ -1035,7 +1074,7 @@ function youtubeManualPayloadBuilder({ repository, now = Date.now }) {
       return snapshot2;
     }
     const snapshot = await shared(), compose = createSharedInlineComposer({ images: snapshot.images, owner, requiredImageIds: snapshot.template.requiredInlineImageIds });
-    async function build2(candidateId) {
+    async function build2(candidateId, hashOnly = false) {
       if (Date.parse(batch.expiresAt) <= now()) fail11();
       const entries = saved.entries.filter((x) => x.id === candidateId);
       if (entries.length !== 1) fail11();
@@ -1047,10 +1086,10 @@ function youtubeManualPayloadBuilder({ repository, now = Date.now }) {
       const copy = renderYoutubeOutreachCopy({ template: snapshot.template, channelName: target.name, signature: snapshot.signature, inlineImages: snapshot.images });
       if (copy.subject !== entry.subject || copy.body !== entry.body) fail11();
       const messageId = createHash7("sha256").update(batch.id + "|" + entry.id).digest("hex");
-      const mime = compose({ copy, from: saved.sender, to: entry.email, senderName: snapshot.signature.senderName, messageId, now: batch.createdAt });
-      return { raw: mime.raw, rawHash: createHash7("sha256").update(mime.raw).digest("hex"), senderEmail: saved.sender, messageId };
+      const mime = (hashOnly ? compose.hash : compose)({ copy, from: saved.sender, to: entry.email, senderName: snapshot.signature.senderName, messageId, now: batch.createdAt });
+      return { ...hashOnly ? { rawHash: mime.rawHash } : { raw: mime.raw, rawHash: createHash7("sha256").update(mime.raw).digest("hex") }, senderEmail: saved.sender, messageId };
     }
-    return { build: build2, recheck: shared };
+    return { build: build2, hash: (candidateId) => build2(candidateId, true), recheck: shared };
   }
   const build = async (owner, batch, candidateId) => (await prepareBatch(owner, batch)).build(candidateId);
   build.prepareBatch = prepareBatch;
@@ -1222,7 +1261,7 @@ function youtubeManualSendFlow({ repository, payloadBuilder, providerFactory, en
     const prepared = typeof payloadBuilder.prepareBatch === "function" ? await payloadBuilder.prepareBatch(owner, batch) : null;
     for (const entry of batch.review.entries) {
       await checkedHistory(owner, batch, entry, history);
-      const payload = prepared ? await prepared.build(entry.id) : await payloadBuilder(owner, batch, entry.id);
+      const payload = prepared ? await prepared.hash(entry.id) : await payloadBuilder(owner, batch, entry.id);
       items.push({ id: entry.id, version: entry.version, email: entry.email, payloadHash: payload.rawHash, messageId: payload.messageId });
     }
     if (prepared) await prepared.recheck();
@@ -1449,4 +1488,3 @@ var env = (name) => Deno.env.get(name) || "";
 var sb = createClient(env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY"), { auth: { persistSession: false, autoRefreshToken: false } });
 var runtime = youtubeManualRuntime({ sb, env });
 Deno.serve(youtubeManualHandler({ sb, prepare: runtime.preview, confirm: runtime.confirm, schedule: runtime.schedule, status: runtime.status, recent: runtime.recent, cancel: runtime.cancel, gmailReviewPrepare: runtime.gmailReviewPrepare, gmailReviewConfirm: runtime.gmailReviewConfirm, origin: env("APP_ORIGIN") || "https://dothegy.github.io" }));
-

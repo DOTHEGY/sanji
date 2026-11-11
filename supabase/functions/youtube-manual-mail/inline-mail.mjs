@@ -92,13 +92,38 @@ export function createSharedInlinePreview({images,owner,requiredImageIds}){
 }
 // The validated bytes and encodings live only inside this per-operation closure.
 // Callers cannot provide unvalidated image metadata to the composer.
+function sharedMimeChunk(text){
+ const bytes=Buffer.from(text),variants=[];
+ for(let offset=0;offset<3;offset++)variants.push(bytes.subarray(offset,offset+Math.floor((bytes.length-offset)/3)*3).toString('base64url'));
+ return {bytes,variants};
+}
+// Hash exactly base64url(MIME), retaining only the 0-2 unencoded tail bytes.
+// The large image interiors are pre-encoded for every possible alignment.
+function hashMimeLines(lines){
+ const hash=createHash('sha256');let tail=Buffer.alloc(0),mimeBytes=0;
+ function add(value){
+  const shared=typeof value==='object',bytes=shared?value.bytes:Buffer.from(value);mimeBytes+=bytes.length;
+  if(mimeBytes>20*1024*1024)fail('MAIL_TOO_LARGE','메일 본문 크기를 확인해야 합니다.');
+  let offset=0;
+  if(tail.length){const needed=3-tail.length,take=Math.min(needed,bytes.length);tail=Buffer.concat([tail,bytes.subarray(0,take)]);offset=take;if(tail.length<3)return;hash.update(tail.toString('base64url'));tail=Buffer.alloc(0);}
+  const full=Math.floor((bytes.length-offset)/3)*3;
+  if(full)hash.update(shared?value.variants[offset]:bytes.subarray(offset,offset+full).toString('base64url'));
+  tail=bytes.subarray(offset+full);
+ }
+ for(let i=0;i<lines.length;i++){if(i)add('\r\n');add(lines[i]);}
+ if(tail.length)hash.update(tail.toString('base64url'));
+ return {rawHash:hash.digest('hex'),mimeBytes};
+}
 export function createSharedInlineComposer({images,owner,requiredImageIds}){
  const checked=validateInlineImages(images,{owner,requiredIds:requiredImageIds});
  const encodedImages=checked.map(image=>encoded(image.bytes));
- return options=>composeWithImages({...options,images,owner,requiredImageIds},checked,encodedImages);
+ let chunks;
+ const compose=options=>composeWithImages({...options,images,owner,requiredImageIds},checked,encodedImages);
+ compose.hash=options=>{chunks??=encodedImages.map(sharedMimeChunk);return composeWithImages({...options,images,owner,requiredImageIds},checked,chunks,true);};
+ return compose;
 }
 export function composeInlineOutreach(options){return composeWithImages(options);}
-function composeWithImages({copy,images,owner,requiredImageIds,from,to,senderName,messageId=randomUUID(),now=new Date()},validatedImages,encodedImages){
+function composeWithImages({copy,images,owner,requiredImageIds,from,to,senderName,messageId=randomUUID(),now=new Date()},validatedImages,encodedImages,hashOnly=false){
  if(!copy||copy.sendingEnabled!==false||!emailIdentity(from)||!emailIdentity(to)||/[^\x21-\x7E]/.test(from+to)||!String(copy.subject||'').trim()||typeof copy.body!=='string'||copy.body.length>20000||!String(senderName||'').trim()||!/^[-A-Za-z0-9_]{1,100}$/.test(messageId)||Number.isNaN(new Date(now).getTime()))fail('MAIL_PREVIEW_INVALID','발신자·수신자·본문을 확인해야 합니다.');
  if(typeof copy.senderEmail!=='string'||from!==copy.senderEmail.trim().toLowerCase())fail('SENDER_SIGNATURE_MISMATCH','현재 발신 계정과 승인된 Gmail 서명이 일치하지 않습니다.');
  if(copy.attachments?.length)fail('UNEXPECTED_ATTACHMENTS','일반 첨부를 추가하지 않습니다.');
@@ -106,6 +131,6 @@ function composeWithImages({copy,images,owner,requiredImageIds,from,to,senderNam
  const boundary='sanji_alt_'+messageId,related='sanji_related_'+messageId;
  const lines=[`From: ${encodedHeader(senderName)} <${from}>`,`To: ${to}`,`Subject: ${encodedHeader(copy.subject)}`,`Date: ${new Date(now).toUTCString()}`,`Message-ID: <${messageId}@sanji.local>`,'MIME-Version: 1.0',`Content-Type: multipart/alternative; boundary="${boundary}"`,'',`--${boundary}`,'Content-Type: text/plain; charset=UTF-8','Content-Transfer-Encoding: base64','',encoded(text),`--${boundary}`,`Content-Type: multipart/related; boundary="${related}"; type="text/html"`,'',`--${related}`,'Content-Type: text/html; charset=UTF-8','Content-Transfer-Encoding: base64','',encoded(html)];
  for(const [index,image] of checked.entries())lines.push(`--${related}`,'Content-Type: image/png',`Content-ID: <${image.cid}>`,`Content-Disposition: inline; filename="${image.name}"`,'Content-Transfer-Encoding: base64','',encodedImages?.[index]??encoded(image.bytes));
- lines.push(`--${related}--`,`--${boundary}--`,'');const mime=lines.join('\r\n');if(Buffer.byteLength(mime)>20*1024*1024)fail('MAIL_TOO_LARGE','메일 본문 크기를 확인해야 합니다.');
+ lines.push(`--${related}--`,`--${boundary}--`,'');if(hashOnly)return {...hashMimeLines(lines),sendingEnabled:false};const mime=lines.join('\r\n');if(Buffer.byteLength(mime)>20*1024*1024)fail('MAIL_TOO_LARGE','메일 본문 크기를 확인해야 합니다.');
  return {raw:Buffer.from(mime).toString('base64url'),html,text,imageCount:checked.length,imageBytes:checked.reduce((n,x)=>n+x.bytes.length,0),mimeBytes:Buffer.byteLength(mime),sendingEnabled:false};
 }

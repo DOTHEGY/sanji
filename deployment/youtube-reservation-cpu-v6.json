@@ -1,0 +1,27 @@
+{
+  "production_baseline_version": 5,
+  "production_baseline_ezbr_sha256": "6549034092e6478533e48c1ba0cddab1fca01ecf438bbd0394a189e61f17d020",
+  "production_candidate": "youtube-manual-mail.mjs",
+  "diagnostic_candidate": "youtube-reservation-benchmark.mjs",
+  "diagnostic_requires_verify_jwt": true,
+  "diagnostic_request": "POST {} with existing authenticated project JWT",
+  "diagnostic_expected": {
+    "status": 200,
+    "allHashesMatch": true,
+    "recipients": 54,
+    "databaseCalls": 0,
+    "providerCalls": 0
+  },
+  "diagnostic_inputs": "Fixed synthetic snapshot and 54 example.com recipients, with two deterministic PNGs (1444590 and1444567 bytes). No real data. Static fixture bytes are parsed at cold import. No runtime image generation.",
+  "validation": "Check HTTP200, allHashesMatch and actual EdgeCPU/termination logs; wallms is notCPU.",
+  "sources": [
+    "supabase/functions/youtube-manual-mail/inline-mail.mjs",
+    "supabase/functions/youtube-manual-mail/payload.mjs",
+    "supabase/functions/youtube-manual-mail/send-flow.mjs"
+  ],
+  "artifacts": {
+    "youtube-manual-mail.mjs": "c37776585b17858884c582d2ee709ef757246d16c514211797cac01053819c26",
+    "youtube-reservation-benchmark.mjs": "a39e48394b407333b014be4d2b7e1f95eb19041c3559b2803ead3b17515dd652",
+    "synthetic-fixture.json": "40d8b380938fca5c29904b461a23bd4dd4742ca0f31cb0782425b0563dd38f6e"
+  }
+}

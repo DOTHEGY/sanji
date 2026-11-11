@@ -24,17 +24,17 @@ export function youtubeManualPayloadBuilder({repository,now=Date.now}){
   return snapshot;
   }
   const snapshot=await shared(),compose=createSharedInlineComposer({images:snapshot.images,owner,requiredImageIds:snapshot.template.requiredInlineImageIds});
-  async function build(candidateId){
+  async function build(candidateId,hashOnly=false){
   if(Date.parse(batch.expiresAt)<=now())fail();
   const entries=saved.entries.filter(x=>x.id===candidateId);if(entries.length!==1)fail();const entry=entries[0];
   const current=await repository.currentRecipient(owner,entry.id);
   if(current?.owner!==owner||current.id!==entry.id||current.version!==entry.version||current.complete!==true)fail();
   const target=manualYoutubeTarget(current,owner,entry.email,now());if(target.creatorKey!=='youtube:'+entry.channel||target.name!==entry.name||target.profileUrl!==entry.profileUrl||target.sourceUrl!==entry.sourceUrl||target.sourceCheckedAt!==entry.sourceCheckedAt||stableJSON(target.sources)!==stableJSON(entry.sources)||target.sourceFingerprint!==entry.sourceFingerprint||target.reviewVersion!==entry.reviewVersion||target.audience!==entry.audience||target.metricsSource!==entry.metricsSource||target.metricsCheckedAt!==entry.metricsCheckedAt||target.activitySource!==entry.activitySource||target.activityCheckedAt!==entry.activityCheckedAt||target.mukbangReason!==entry.mukbangReason)fail();
   const copy=renderYoutubeOutreachCopy({template:snapshot.template,channelName:target.name,signature:snapshot.signature,inlineImages:snapshot.images});if(copy.subject!==entry.subject||copy.body!==entry.body)fail();
-  const messageId=createHash('sha256').update(batch.id+'|'+entry.id).digest('hex');const mime=compose({copy,from:saved.sender,to:entry.email,senderName:snapshot.signature.senderName,messageId,now:batch.createdAt});
-  return {raw:mime.raw,rawHash:createHash('sha256').update(mime.raw).digest('hex'),senderEmail:saved.sender,messageId};
+  const messageId=createHash('sha256').update(batch.id+'|'+entry.id).digest('hex');const mime=(hashOnly?compose.hash:compose)({copy,from:saved.sender,to:entry.email,senderName:snapshot.signature.senderName,messageId,now:batch.createdAt});
+  return {...(hashOnly?{rawHash:mime.rawHash}:{raw:mime.raw,rawHash:createHash('sha256').update(mime.raw).digest('hex')}),senderEmail:saved.sender,messageId};
   }
-  return {build,recheck:shared};
+  return {build,hash:candidateId=>build(candidateId,true),recheck:shared};
  }
  const build=async(owner,batch,candidateId)=>(await prepareBatch(owner,batch)).build(candidateId);
  build.prepareBatch=prepareBatch;
