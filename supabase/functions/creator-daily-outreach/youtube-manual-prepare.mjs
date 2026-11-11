@@ -1,6 +1,6 @@
 // Local-only preview candidate. The repository must be server-side and owner scoped.
 // No route, storage mutation, Gmail access, or permission to send is provided here.
-import {renderOutreachCopy} from './domain.mjs';
+import {renderYoutubeOutreachCopy} from './youtube-greeting.mjs';
 import {verifyPrivateSnapshot,settingsSignature,stableJSON} from './private-config.mjs';
 import {createSharedInlinePreview} from '../youtube-manual-mail/inline-mail.mjs';
 import {buildManualReview} from './youtube-manual-review.mjs';
@@ -29,7 +29,7 @@ export function createYoutubeManualPrepare({repository,now=Date.now}){
    const email=target.contact.address,key=target.contact.key;if(history.duplicateCreatorKeys.includes(creatorKey)||history.sharedEmailKeys.includes(key)){const error=Object.assign(new Error('IDENTITY_AMBIGUOUS'),{code:'IDENTITY_AMBIGUOUS',candidateId:resolved.id});throw error;}
    const assessment=classifyManualRecipient({owner,creatorKey,email,records:history.records,suppressed:history.suppressedKeys.includes(key),explicitRefusal:history.refusedKeys.includes(key),complete:true});
    if(!assessment.eligible){const code=assessment.reason==='history_origin_unverified'?'HISTORY_ORIGIN_UNVERIFIED':assessment.reason==='already_sent_or_pending'?'WORK_ALREADY_SENT_OR_PENDING':'RECIPIENT_BLOCKED';throw Object.assign(new Error(code),{code,candidateId:resolved.id});}
-   const copy=renderOutreachCopy({template:snapshot.template,channelName:target.name,signature:snapshot.signature,inlineImages:snapshot.images});
+   const copy=renderYoutubeOutreachCopy({template:snapshot.template,channelName:target.name,signature:snapshot.signature,inlineImages:snapshot.images});
    const rendered=shared.render(copy);
    rows.push({owner,id:resolved.id,version:resolved.version,channel:c.externalId,email,name:target.name,profileUrl:target.profileUrl,sourceUrl:target.sourceUrl,sourceCheckedAt:target.sourceCheckedAt,sources:target.sources,sourceFingerprint:target.sourceFingerprint,reviewVersion:target.reviewVersion,audience:target.audience,metricsSource:target.metricsSource,metricsCheckedAt:target.metricsCheckedAt,activitySource:target.activitySource,activityCheckedAt:target.activityCheckedAt,mukbangReason:target.mukbangReason,subject:copy.subject,body:copy.body});
    previews.push({id:resolved.id,channelName:target.name,profileUrl:target.profileUrl,sourceUrl:target.sourceUrl,sourceCheckedAt:target.sourceCheckedAt,sources:target.sources,audience:target.audience,metricsSource:target.metricsSource,metricsCheckedAt:target.metricsCheckedAt,activitySource:target.activitySource,activityCheckedAt:target.activityCheckedAt,mukbangReason:target.mukbangReason,recipient:email,subject:copy.subject,html:rendered.html});

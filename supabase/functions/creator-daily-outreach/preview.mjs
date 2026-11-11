@@ -1,3 +1,4 @@
+import {renderYoutubeOutreachCopy} from './youtube-greeting.mjs';
 import {OutreachError,creatorIdentity,qualifyOutreachCandidate,renderOutreachCopy} from './domain.mjs';
 import {verifyPrivateSnapshot,settingsSignature,stableJSON} from './private-config.mjs';
 import {renderPrivateInlinePreview} from './inline-mail.mjs';
@@ -17,7 +18,7 @@ export function createPrivatePreview({repository,resolveTarget,now=Date.now}){
   if(current?.complete!==true||!Array.isArray(current.candidates)||current.candidates.length!==1)fail('CURRENT_EVIDENCE_AMBIGUOUS');
   const target=current.candidates[0];if(creatorIdentity(target)!==input.creatorKey||typeof target.name!=='string'||!target.name.trim()||target.name.length>200)fail('PREVIEW_TARGET_CHANGED');
   const qualification=qualifyOutreachCandidate(target,now()),recipient=qualification.candidate?.contact?.address||null;
-  const copy=renderOutreachCopy({template:snapshot.template,channelName:target.name,signature:snapshot.signature,inlineImages:snapshot.images});
+  const copy=(input.creatorKey.startsWith('youtube:')?renderYoutubeOutreachCopy:renderOutreachCopy)({template:snapshot.template,channelName:target.name,signature:snapshot.signature,inlineImages:snapshot.images});
   const content=renderPrivateInlinePreview({copy,images:snapshot.images,owner,requiredImageIds:snapshot.template.requiredInlineImageIds});
   // A stale response must not resurrect a preview of a replaced template.
   const latest=await repository.policy(owner);if(latest?.owner!==owner||latest.revision!==policy.revision||latest.snapshot_id!==policy.snapshot_id)fail('CAMPAIGN_REVISION_CHANGED');

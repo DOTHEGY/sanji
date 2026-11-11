@@ -28,7 +28,7 @@
     "test:creator-daily-outreach": "node --test --test-concurrency=1 tests/creator-daily-*.test.cjs tests/creator-contact-enrichment*.test.cjs",
     "check:creator-daily-outreach": "node scripts/check-creator-daily-outreach.cjs",
     "build:youtube-manual-mail": "node scripts/bundle-youtube-manual-mail.cjs",
-    "test:youtube-manual-mail": "node --test --test-concurrency=1 tests/manual-email-cutoff.test.cjs tests/youtube-manual*.test.cjs tests/youtube-schedule-preview.test.cjs tests/youtube-scheduler-trigger.test.cjs"
+    "test:youtube-manual-mail": "node --test --test-concurrency=1 tests/manual-email-cutoff.test.cjs tests/youtube-manual*.test.cjs tests/youtube-schedule-preview.test.cjs tests/youtube-scheduler-trigger.test.cjs tests/youtube-greeting.test.cjs"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.10",

@@ -462,6 +462,19 @@ function dailyGmailProvider({ sb: sb2, env: env2 = () => "", request = fetch, no
   } };
 }
 
+// supabase/functions/creator-daily-outreach/youtube-greeting.mjs
+function youtubeGreetingName(value) {
+  if (typeof value !== "string" || !value.trim() || value.trim().length > 150 || /[\u0000-\u001f\u007f]/.test(value)) throw new OutreachError("CHANNEL_NAME_INVALID", "\uC2E4\uC81C \uCC44\uB110\uBA85\uC744 \uD655\uC778\uD558\uC138\uC694.");
+  const name = value.trim();
+  if (!/\p{Script=Hangul}/u.test(name)) return name;
+  return name.normalize("NFC").replace(/[^\p{Script=Hangul}\s&]/gu, " ").replace(/\s+/g, " ").replace(/^[\s&]+|[\s&]+$/g, "");
+}
+function renderYoutubeOutreachCopy({ template, channelName, signature, attachments = [], inlineImages = [] }) {
+  if (!template || typeof template.subject !== "string" || typeof template.body !== "string") return renderOutreachCopy({ template, channelName, signature, attachments, inlineImages });
+  const withHonorificSpace = (s) => s.replace(/\[채널명\][ \t]*님/gu, "[\uCC44\uB110\uBA85] \uB2D8");
+  return renderOutreachCopy({ template: { ...template, subject: withHonorificSpace(template.subject), body: withHonorificSpace(template.body) }, channelName: youtubeGreetingName(channelName), signature, attachments, inlineImages });
+}
+
 // supabase/functions/youtube-manual-mail/inline-mail.mjs
 import { Buffer as Buffer4 } from "node:buffer";
 import { createHash as createHash4, randomUUID as randomUUID4 } from "node:crypto";
@@ -747,7 +760,7 @@ function createYoutubeManualPrepare({ repository, now = Date.now }) {
         const code = assessment.reason === "history_origin_unverified" ? "HISTORY_ORIGIN_UNVERIFIED" : assessment.reason === "already_sent_or_pending" ? "WORK_ALREADY_SENT_OR_PENDING" : "RECIPIENT_BLOCKED";
         throw Object.assign(new Error(code), { code, candidateId: resolved.id });
       }
-      const copy = renderOutreachCopy({ template: snapshot.template, channelName: target.name, signature: snapshot.signature, inlineImages: snapshot.images });
+      const copy = renderYoutubeOutreachCopy({ template: snapshot.template, channelName: target.name, signature: snapshot.signature, inlineImages: snapshot.images });
       const rendered = shared.render(copy);
       rows.push({ owner, id: resolved.id, version: resolved.version, channel: c.externalId, email, name: target.name, profileUrl: target.profileUrl, sourceUrl: target.sourceUrl, sourceCheckedAt: target.sourceCheckedAt, sources: target.sources, sourceFingerprint: target.sourceFingerprint, reviewVersion: target.reviewVersion, audience: target.audience, metricsSource: target.metricsSource, metricsCheckedAt: target.metricsCheckedAt, activitySource: target.activitySource, activityCheckedAt: target.activityCheckedAt, mukbangReason: target.mukbangReason, subject: copy.subject, body: copy.body });
       previews.push({ id: resolved.id, channelName: target.name, profileUrl: target.profileUrl, sourceUrl: target.sourceUrl, sourceCheckedAt: target.sourceCheckedAt, sources: target.sources, audience: target.audience, metricsSource: target.metricsSource, metricsCheckedAt: target.metricsCheckedAt, activitySource: target.activitySource, activityCheckedAt: target.activityCheckedAt, mukbangReason: target.mukbangReason, recipient: email, subject: copy.subject, html: rendered.html });
@@ -1016,7 +1029,7 @@ function youtubeManualPayloadBuilder({ repository, now = Date.now }) {
     }
     const target = manualYoutubeTarget(current, owner, entry.email, now());
     if (target.creatorKey !== "youtube:" + entry.channel || target.name !== entry.name || target.profileUrl !== entry.profileUrl || target.sourceUrl !== entry.sourceUrl || target.sourceCheckedAt !== entry.sourceCheckedAt || stableJSON(target.sources) !== stableJSON(entry.sources) || target.sourceFingerprint !== entry.sourceFingerprint || target.reviewVersion !== entry.reviewVersion || target.audience !== entry.audience || target.metricsSource !== entry.metricsSource || target.metricsCheckedAt !== entry.metricsCheckedAt || target.activitySource !== entry.activitySource || target.activityCheckedAt !== entry.activityCheckedAt || target.mukbangReason !== entry.mukbangReason) fail11();
-    const copy = renderOutreachCopy({ template: snapshot.template, channelName: target.name, signature: snapshot.signature, inlineImages: snapshot.images });
+    const copy = renderYoutubeOutreachCopy({ template: snapshot.template, channelName: target.name, signature: snapshot.signature, inlineImages: snapshot.images });
     if (copy.subject !== entry.subject || copy.body !== entry.body) fail11();
     const messageId = createHash7("sha256").update(batch.id + "|" + entry.id).digest("hex");
     const mime = composeInlineOutreach2({ copy, images: snapshot.images, owner, requiredImageIds: snapshot.template.requiredInlineImageIds, from: saved.sender, to: entry.email, senderName: snapshot.signature.senderName, messageId, now: batch.createdAt });

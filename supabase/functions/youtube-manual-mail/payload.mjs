@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {renderOutreachCopy} from '../creator-daily-outreach/domain.mjs';
+import {renderYoutubeOutreachCopy} from '../creator-daily-outreach/youtube-greeting.mjs';
 import {verifyPrivateSnapshot,settingsSignature,stableJSON} from '../creator-daily-outreach/private-config.mjs';
 import {buildManualReview} from '../creator-daily-outreach/youtube-manual-review.mjs';
 import {manualMailPolicy} from './policy.mjs';
@@ -19,7 +19,7 @@ export function youtubeManualPayloadBuilder({repository,now=Date.now}){
   const snapshot=verifyPrivateSnapshot(stored,owner);if(stableJSON(settingsSignature(settings,connection))!==stableJSON(snapshot.signature)||snapshot.signature.senderEmail!==saved.sender)fail();
   if(snapshot.products.length){const products=await repository.currentProducts(owner,snapshot.products.map(p=>p.id));if(!Array.isArray(products)||stableJSON(products.map(({id,version,sha256})=>({id,version,sha256})).sort((a,b)=>a.id.localeCompare(b.id)))!==stableJSON([...snapshot.products].sort((a,b)=>a.id.localeCompare(b.id))))fail();}
   const target=manualYoutubeTarget(current,owner,entry.email,now());if(target.creatorKey!=='youtube:'+entry.channel||target.name!==entry.name||target.profileUrl!==entry.profileUrl||target.sourceUrl!==entry.sourceUrl||target.sourceCheckedAt!==entry.sourceCheckedAt||stableJSON(target.sources)!==stableJSON(entry.sources)||target.sourceFingerprint!==entry.sourceFingerprint||target.reviewVersion!==entry.reviewVersion||target.audience!==entry.audience||target.metricsSource!==entry.metricsSource||target.metricsCheckedAt!==entry.metricsCheckedAt||target.activitySource!==entry.activitySource||target.activityCheckedAt!==entry.activityCheckedAt||target.mukbangReason!==entry.mukbangReason)fail();
-  const copy=renderOutreachCopy({template:snapshot.template,channelName:target.name,signature:snapshot.signature,inlineImages:snapshot.images});if(copy.subject!==entry.subject||copy.body!==entry.body)fail();
+  const copy=renderYoutubeOutreachCopy({template:snapshot.template,channelName:target.name,signature:snapshot.signature,inlineImages:snapshot.images});if(copy.subject!==entry.subject||copy.body!==entry.body)fail();
   const messageId=createHash('sha256').update(batch.id+'|'+entry.id).digest('hex');const mime=composeInlineOutreach({copy,images:snapshot.images,owner,requiredImageIds:snapshot.template.requiredInlineImageIds,from:saved.sender,to:entry.email,senderName:snapshot.signature.senderName,messageId,now:batch.createdAt});
   return {raw:mime.raw,rawHash:createHash('sha256').update(mime.raw).digest('hex'),senderEmail:saved.sender,messageId};
  };
