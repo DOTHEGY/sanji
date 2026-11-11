@@ -610,7 +610,6 @@ function buildManualReview({ owner, sender, snapshotHash, settingsId, settingsVe
 }
 
 // supabase/functions/creator-daily-outreach/manual-email-cutoff.mjs
-var MANUAL_EMAIL_START = "2026-11-09T15:00:00.000Z";
 var normalizeEmail = (x) => emailIdentity(x) || "";
 var acceptedStatus = /* @__PURE__ */ new Set(["reserved", "queued", "processing", "accepted", "sent", "outcome_unknown"]);
 function classifyManualRecipient({ owner, creatorKey, email, records, suppressed, explicitRefusal, complete }) {
@@ -618,51 +617,9 @@ function classifyManualRecipient({ owner, creatorKey, email, records, suppressed
   if (suppressed || explicitRefusal) return { eligible: false, reason: "refusal_or_suppression" };
   for (const r of records) {
     if (!r || r.owner !== owner || r.scope !== "manual_creator_email" || typeof r.creatorKey !== "string" || !normalizeEmail(r.email) || !acceptedStatus.has(r.status) || !Number.isFinite(Date.parse(r.createdAt))) return { eligible: false, reason: "ledger_invalid" };
-    if (Date.parse(r.createdAt) < Date.parse(MANUAL_EMAIL_START)) continue;
     if (r.creatorKey === creatorKey || normalizeEmail(r.email) === normalizeEmail(email)) return { eligible: false, reason: r.attribution === "unverified_prior_work" ? "history_origin_unverified" : "already_sent_or_pending" };
   }
   return { eligible: true, reason: "ready_for_review" };
-}
-
-// supabase/functions/creator-daily-outreach/youtube-manual-history.mjs
-var fail5 = () => {
-  throw Object.assign(new Error("HISTORY_INCOMPLETE"), { code: "HISTORY_INCOMPLETE" });
-};
-function verifiedManualHistory({ owner, ledger, suppression, refusals, identities, gmailReview, now = Date.now() }) {
-  if (typeof owner !== "string" || !owner) fail5();
-  for (const source of [ledger, suppression, refusals, identities, gmailReview]) if (!source || source.owner !== owner || source.complete !== true || !Array.isArray(source.rows)) fail5();
-  const records = ledger.rows.map((r) => {
-    if (r.owner !== owner || r.scope !== "manual_creator_email" || typeof r.creatorKey !== "string" || !r.creatorKey || !emailIdentity(r.email) || !["reserved", "queued", "processing", "accepted", "sent", "outcome_unknown"].includes(r.status) || !Number.isFinite(Date.parse(r.createdAt))) fail5();
-    return { owner, scope: r.scope, creatorKey: r.creatorKey, email: r.email, status: r.status, createdAt: r.createdAt, ...r.attribution === "unverified_prior_work" ? { attribution: r.attribution } : {}, ...typeof r.id === "string" ? { id: r.id } : {}, ...typeof r.batchId === "string" ? { batchId: r.batchId } : {} };
-  });
-  const normalize = (rows) => [...new Set(rows.map((r) => {
-    if (!r || r.owner !== owner || !emailIdentity(r.email)) fail5();
-    return emailIdentity(r.email);
-  }))];
-  const suppressedKeys = normalize(suppression.rows), refusedKeys = normalize(refusals.rows), proof = /* @__PURE__ */ new Map();
-  for (const row of gmailReview.rows) {
-    const key = emailIdentity(row?.email);
-    const t = Date.parse(row?.checkedAt);
-    if (row?.owner !== owner || !key || !["no_refusal_confirmed", "refusal", "unknown"].includes(row.status) || !Number.isFinite(t) || t > now || now - t > 6e4 || !["provider_empty_history", "provider_existing_history", "provider_unavailable", "owner_reviewed"].includes(row.source) || row.status === "no_refusal_confirmed" && ["provider_existing_history", "provider_unavailable"].includes(row.source) || proof.has(key)) fail5();
-    proof.set(key, row.status);
-    if (row.status === "refusal") refusedKeys.push(key);
-  }
-  const creators = /* @__PURE__ */ new Map(), emails = /* @__PURE__ */ new Map();
-  for (const row of identities.rows) {
-    if (row?.owner !== owner || typeof row.creatorKey !== "string" || !/^youtube:UC[A-Za-z0-9_-]{22}$/.test(row.creatorKey) || !Array.isArray(row.emailKeys) || row.emailKeys.some((e) => emailIdentity(e) !== e)) fail5();
-    creators.set(row.creatorKey, (creators.get(row.creatorKey) || 0) + 1);
-    for (const e of new Set(row.emailKeys)) {
-      const keys2 = emails.get(e) || /* @__PURE__ */ new Set();
-      keys2.add(row.creatorKey);
-      emails.set(e, keys2);
-    }
-  }
-  const duplicateCreatorKeys = [...creators].filter(([, n]) => n > 1).map(([k]) => k), sharedEmailKeys = [...emails].filter(([, v]) => v.size > 1).map(([k]) => k);
-  return { duplicateCreatorKeys, sharedEmailKeys, owner, complete: true, scope: "manual_youtube_since_2026_11_10", refusalsComplete: true, records, suppressedKeys, refusedKeys: [...new Set(refusedKeys)], gmailReviewByKey: proof };
-}
-function gmailRefusalReviewed(history, email) {
-  const key = emailIdentity(email);
-  return Boolean(key && history?.gmailReviewByKey instanceof Map && history.gmailReviewByKey.get(key) === "no_refusal_confirmed");
 }
 
 // supabase/functions/youtube-manual-mail/policy.mjs
@@ -674,7 +631,7 @@ function manualMailPolicy(policy, owner, revision) {
 
 // supabase/functions/youtube-manual-mail/target.mjs
 import { createHash as createHash6 } from "node:crypto";
-var fail6 = (code = "RECIPIENT_REVIEW_REQUIRED") => {
+var fail5 = (code = "RECIPIENT_REVIEW_REQUIRED") => {
   throw Object.assign(new Error(code), { code });
 };
 var checked = (value, now) => {
@@ -691,18 +648,18 @@ var publicUrl = (value) => {
 };
 var fingerprint = (x) => createHash6("sha256").update(JSON.stringify(x)).digest("hex");
 function manualYoutubeTarget(resolved, owner, requestedEmail, now = Date.now()) {
-  if (resolved?.complete !== true || resolved.owner !== owner || !resolved.candidate || resolved.candidate.platform !== "youtube" || !emailIdentity(requestedEmail) || requestedEmail !== requestedEmail.trim().toLowerCase()) fail6();
+  if (resolved?.complete !== true || resolved.owner !== owner || !resolved.candidate || resolved.candidate.platform !== "youtube" || !emailIdentity(requestedEmail) || requestedEmail !== requestedEmail.trim().toLowerCase()) fail5();
   const native = resolved.native;
-  if (!native) fail6();
+  if (!native) fail5();
   const d = native.data || {}, c = resolved.candidate, key = "youtube:" + c.externalId, profile = sourceUrl(d.profile);
-  if (native.owner !== owner || native.id !== resolved.id || native.version !== resolved.version || native.kind !== "candidate" || d.kind !== "\uD06C\uB9AC\uC5D0\uC774\uD130" || d.channels !== "YouTube" || !/^UC[A-Za-z0-9_-]{22}$/.test(c.externalId || "") || !profile || !new RegExp("^https://(?:www\\.)?youtube\\.com/channel/" + c.externalId + "/?$").test(profile) || typeof d.name !== "string" || !d.name.trim() || d.name.length > 150 || /[\u0000-\u001f\u007f]/.test(d.name) || ["\uAC70\uC808", "\uC218\uC2E0 \uAC70\uBD80", "\uC81C\uC678", "\uC0C1\uB300\uBC29 \uAC70\uC808", "\uC6B0\uB9AC \uCE21 \uAC70\uC808"].includes(d.status) || c.excluded === true) fail6();
-  if (/(?:privacy|abuse|noreply|no-reply|support|careers|recruit|legal)@/i.test(requestedEmail)) fail6();
+  if (native.owner !== owner || native.id !== resolved.id || native.version !== resolved.version || native.kind !== "candidate" || d.kind !== "\uD06C\uB9AC\uC5D0\uC774\uD130" || d.channels !== "YouTube" || !/^UC[A-Za-z0-9_-]{22}$/.test(c.externalId || "") || !profile || !new RegExp("^https://(?:www\\.)?youtube\\.com/channel/" + c.externalId + "/?$").test(profile) || typeof d.name !== "string" || !d.name.trim() || d.name.length > 150 || /[\u0000-\u001f\u007f]/.test(d.name) || ["\uAC70\uC808", "\uC218\uC2E0 \uAC70\uBD80", "\uC81C\uC678", "\uC0C1\uB300\uBC29 \uAC70\uC808", "\uC6B0\uB9AC \uCE21 \uAC70\uC808"].includes(d.status) || c.excluded === true) fail5();
+  if (/(?:privacy|abuse|noreply|no-reply|support|careers|recruit|legal)@/i.test(requestedEmail)) fail5();
   const leads = [d.contact, ...Array.isArray(d.youtubeResearch?.businessContacts) ? d.youtubeResearch.businessContacts : []].filter(Boolean), matches = [];
   const sameMailboxSpellings = new Set(leads.map((x) => typeof x.email === "string" ? x.email.trim().toLowerCase() : "").filter((x) => x && emailIdentity(x) === emailIdentity(requestedEmail)));
-  if (sameMailboxSpellings.size !== 1) fail6("PUBLIC_EMAIL_SOURCE_REVIEW_REQUIRED");
+  if (sameMailboxSpellings.size !== 1) fail5("PUBLIC_EMAIL_SOURCE_REVIEW_REQUIRED");
   const denial = /(?:수신\s*거부|연락.{0,12}(?:중단|그만|하지\s*마)|(?:협업|광고|제휴).{0,24}(?:거절|금지|불가|받지|원하지)|unsubscribe|please\s+stop|not\s+(?:for\s+)?(?:business|collab)|no\s+(?:business|collab))/i;
   for (const lead of leads) {
-    if (emailIdentity(typeof lead.email === "string" ? lead.email.trim().toLowerCase() : "") === emailIdentity(requestedEmail) && denial.test([lead.context, lead.purpose, lead.note].filter((x) => typeof x === "string").join(" "))) fail6("RECIPIENT_BLOCKED");
+    if (emailIdentity(typeof lead.email === "string" ? lead.email.trim().toLowerCase() : "") === emailIdentity(requestedEmail) && denial.test([lead.context, lead.purpose, lead.note].filter((x) => typeof x === "string").join(" "))) fail5("RECIPIENT_BLOCKED");
   }
   for (const lead of leads) {
     if (typeof lead.email !== "string" || lead.email.trim().toLowerCase() !== requestedEmail) continue;
@@ -711,14 +668,14 @@ function manualYoutubeTarget(resolved, owner, requestedEmail, now = Date.now()) 
     matches.push({ url, checkedAt: date, email: requestedEmail, context: typeof lead.context === "string" ? lead.context.slice(0, 4e3) : "" });
   }
   const unique = [...new Map(matches.map((m) => [m.url + "|" + m.checkedAt + "|" + m.context, m])).values()].sort((a, b) => (a.url + "|" + a.checkedAt + "|" + a.context).localeCompare(b.url + "|" + b.checkedAt + "|" + b.context));
-  if (!unique.length || unique.length > 5 || unique.some((x) => /(?:not\s+(?:for\s+)?(?:business|collab)|no\s+(?:business|collab)|(?:협업|광고|제휴).{0,20}(?:거절|금지|불가|받지))/i.test(x.context))) fail6("PUBLIC_EMAIL_SOURCE_REVIEW_REQUIRED");
+  if (!unique.length || unique.length > 5 || unique.some((x) => /(?:not\s+(?:for\s+)?(?:business|collab)|no\s+(?:business|collab)|(?:협업|광고|제휴).{0,20}(?:거절|금지|불가|받지))/i.test(x.context))) fail5("PUBLIC_EMAIL_SOURCE_REVIEW_REQUIRED");
   const distinctEmails = new Set(leads.map((x) => emailIdentity(typeof x.email === "string" ? x.email.trim().toLowerCase() : "")).filter(Boolean));
-  if (distinctEmails.size !== 1) fail6("PUBLIC_EMAIL_SOURCE_REVIEW_REQUIRED");
+  if (distinctEmails.size !== 1) fail5("PUBLIC_EMAIL_SOURCE_REVIEW_REQUIRED");
   const audience = d.followers, metricsSource = publicUrl(d.metricsSource), metricsCheckedAt = checked(d.metricsChecked, now), reason = typeof d.reason === "string" ? d.reason.trim() : "";
   const activities = (Array.isArray(d.evidence) ? d.evidence : []).filter((e) => /최근|활동|activity|recent/i.test(String(e.description || ""))).map((e) => ({ url: publicUrl(e.url), date: checked(e.checked, now) })).filter((e) => e.url && e.date).sort((a, b) => Date.parse(b.date) - Date.parse(a.date) || a.url.localeCompare(b.url));
-  if (!Number.isSafeInteger(audience) || audience < 3e4 || audience > 2e5 || !metricsSource || !metricsCheckedAt) fail6("AUDIENCE_SOURCE_REVIEW_REQUIRED");
-  if (reason.length > 4e3) fail6("RECIPIENT_REVIEW_REQUIRED");
-  if (activities.length < 1) fail6("ACTIVITY_SOURCE_REVIEW_REQUIRED");
+  if (!Number.isSafeInteger(audience) || audience < 3e4 || audience > 2e5 || !metricsSource || !metricsCheckedAt) fail5("AUDIENCE_SOURCE_REVIEW_REQUIRED");
+  if (reason.length > 4e3) fail5("RECIPIENT_REVIEW_REQUIRED");
+  if (activities.length < 1) fail5("ACTIVITY_SOURCE_REVIEW_REQUIRED");
   return { creatorKey: key, platform: "youtube", externalId: c.externalId, name: d.name.trim(), profileUrl: profile, contact: { address: requestedEmail, key: emailIdentity(requestedEmail) }, sourceUrl: unique[0].url, sourceCheckedAt: unique[0].checkedAt, sources: unique.map(({ url, checkedAt }) => ({ url, checkedAt })), sourceFingerprint: fingerprint(unique), audience, metricsSource, metricsCheckedAt, activitySource: activities[0].url, activityCheckedAt: activities[0].date, mukbangReason: reason, reviewVersion: "manual_source_review_v1" };
 }
 
@@ -744,34 +701,34 @@ function belongsToProjectDay(data, scope) {
 }
 
 // supabase/functions/creator-daily-outreach/youtube-manual-prepare.mjs
-var fail7 = (code) => {
+var fail6 = (code) => {
   throw Object.assign(new Error(code), { code });
 };
 function createYoutubeManualPrepare({ repository, now = Date.now }) {
   return async function prepare(owner, input) {
-    if (typeof owner !== "string" || !owner || !input || Object.keys(input).some((k) => !["expectedRevision", "recipients", "scope"].includes(k)) || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1 || !Array.isArray(input.recipients) || !input.recipients.length || input.recipients.length > 100) fail7("INVALID_SELECTION");
+    if (typeof owner !== "string" || !owner || !input || Object.keys(input).some((k) => !["expectedRevision", "recipients", "scope"].includes(k)) || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1 || !Array.isArray(input.recipients) || !input.recipients.length || input.recipients.length > 100) fail6("INVALID_SELECTION");
     const scope = input.scope === void 0 ? void 0 : validateProjectScope(input.scope);
     const ids = /* @__PURE__ */ new Set();
     for (const r of input.recipients) {
-      if (!r || Object.keys(r).some((k) => !["id", "version", "email"].includes(k)) || typeof r.id !== "string" || !r.id || !Number.isSafeInteger(r.version) || r.version < 1 || typeof r.email !== "string" || ids.has(r.id)) fail7("INVALID_SELECTION");
+      if (!r || Object.keys(r).some((k) => !["id", "version", "email"].includes(k)) || typeof r.id !== "string" || !r.id || !Number.isSafeInteger(r.version) || r.version < 1 || typeof r.email !== "string" || ids.has(r.id)) fail6("INVALID_SELECTION");
       ids.add(r.id);
     }
     const policy = await repository.policy(owner);
-    if (policy?.owner !== owner || policy.revision !== input.expectedRevision || !policy.snapshot_id) fail7("SNAPSHOT_CHANGED");
+    if (policy?.owner !== owner || policy.revision !== input.expectedRevision || !policy.snapshot_id) fail6("SNAPSHOT_CHANGED");
     const mailPolicy = manualMailPolicy(policy, owner, input.expectedRevision);
     const [stored, settings, connection, history] = await Promise.all([repository.snapshot(owner, policy.snapshot_id), repository.currentSettings(owner), repository.currentConnection(owner), repository.manualHistory(owner, input.recipients.map((r) => r.email.trim().toLowerCase()))]);
     const snapshot = verifyPrivateSnapshot(stored, owner);
     if (snapshot.products.length) {
       const products = await repository.currentProducts(owner, snapshot.products.map((p) => p.id));
-      if (!Array.isArray(products) || stableJSON(products.map(({ id, version, sha256 }) => ({ id, version, sha256 })).sort((a, b) => a.id.localeCompare(b.id))) !== stableJSON([...snapshot.products].sort((a, b) => a.id.localeCompare(b.id)))) fail7("PRODUCT_SCOPE_CHANGED");
+      if (!Array.isArray(products) || stableJSON(products.map(({ id, version, sha256 }) => ({ id, version, sha256 })).sort((a, b) => a.id.localeCompare(b.id))) !== stableJSON([...snapshot.products].sort((a, b) => a.id.localeCompare(b.id)))) fail6("PRODUCT_SCOPE_CHANGED");
     }
-    if (stableJSON(settingsSignature(settings, connection)) !== stableJSON(snapshot.signature)) fail7("SENDER_CHANGED");
-    if (!history || history.owner !== owner || history.complete !== true || history.scope !== "manual_youtube_since_2026_11_10" || history.refusalsComplete !== true || !Array.isArray(history.records) || !Array.isArray(history.suppressedKeys) || !Array.isArray(history.refusedKeys) || !Array.isArray(history.duplicateCreatorKeys) || !Array.isArray(history.sharedEmailKeys)) fail7("HISTORY_INCOMPLETE");
+    if (stableJSON(settingsSignature(settings, connection)) !== stableJSON(snapshot.signature)) fail6("SENDER_CHANGED");
+    if (!history || history.owner !== owner || history.complete !== true || history.scope !== "manual_youtube_task" || history.refusalsComplete !== true || !Array.isArray(history.records) || !Array.isArray(history.suppressedKeys) || !Array.isArray(history.refusedKeys) || !Array.isArray(history.duplicateCreatorKeys) || !Array.isArray(history.sharedEmailKeys)) fail6("HISTORY_INCOMPLETE");
     const rows = [], previews = [], shared = createSharedInlinePreview({ images: snapshot.images, owner, requiredImageIds: snapshot.template.requiredInlineImageIds });
     for (const choice of input.recipients) {
       const resolved = await repository.currentRecipient(owner, choice.id);
-      if (resolved?.complete !== true || resolved.owner !== owner || resolved.id !== choice.id || resolved.version !== choice.version || resolved.candidate?.platform !== "youtube") fail7("RECIPIENT_CHANGED");
-      if (scope && !belongsToProjectDay(resolved.native?.data, scope)) fail7("PROJECT_SCOPE_CHANGED");
+      if (resolved?.complete !== true || resolved.owner !== owner || resolved.id !== choice.id || resolved.version !== choice.version || resolved.candidate?.platform !== "youtube") fail6("RECIPIENT_CHANGED");
+      if (scope && !belongsToProjectDay(resolved.native?.data, scope)) fail6("PROJECT_SCOPE_CHANGED");
       let target;
       try {
         target = manualYoutubeTarget(resolved, owner, choice.email.trim().toLowerCase(), now());
@@ -785,10 +742,6 @@ function createYoutubeManualPrepare({ repository, now = Date.now }) {
         const error2 = Object.assign(new Error("IDENTITY_AMBIGUOUS"), { code: "IDENTITY_AMBIGUOUS", candidateId: resolved.id });
         throw error2;
       }
-      if (!gmailRefusalReviewed(history, email)) {
-        const error2 = Object.assign(new Error("GMAIL_REFUSAL_REVIEW_REQUIRED"), { code: "GMAIL_REFUSAL_REVIEW_REQUIRED", candidateId: resolved.id });
-        throw error2;
-      }
       const assessment = classifyManualRecipient({ owner, creatorKey, email, records: history.records, suppressed: history.suppressedKeys.includes(key), explicitRefusal: history.refusedKeys.includes(key), complete: true });
       if (!assessment.eligible) {
         const code = assessment.reason === "history_origin_unverified" ? "HISTORY_ORIGIN_UNVERIFIED" : assessment.reason === "already_sent_or_pending" ? "WORK_ALREADY_SENT_OR_PENDING" : "RECIPIENT_BLOCKED";
@@ -800,10 +753,40 @@ function createYoutubeManualPrepare({ repository, now = Date.now }) {
       previews.push({ id: resolved.id, channelName: target.name, profileUrl: target.profileUrl, sourceUrl: target.sourceUrl, sourceCheckedAt: target.sourceCheckedAt, sources: target.sources, audience: target.audience, metricsSource: target.metricsSource, metricsCheckedAt: target.metricsCheckedAt, activitySource: target.activitySource, activityCheckedAt: target.activityCheckedAt, mukbangReason: target.mukbangReason, recipient: email, subject: copy.subject, html: rendered.html });
     }
     const current = await repository.policy(owner);
-    if (current?.owner !== owner || current.revision !== policy.revision || current.snapshot_id !== policy.snapshot_id) fail7("SNAPSHOT_CHANGED");
+    if (current?.owner !== owner || current.revision !== policy.revision || current.snapshot_id !== policy.snapshot_id) fail6("SNAPSHOT_CHANGED");
     const { review, approvalHash } = buildManualReview({ owner, sender: snapshot.signature.senderEmail, snapshotHash: stored.sha256, settingsId: settings.id, settingsVersion: settings.version, mailPolicy, rows, scope });
     return { previewOnly: true, sendingEnabled: false, policyRevision: policy.revision, snapshotId: stored.id, approvalHash, review, previews, sharedImages: shared.sharedImages, warning: "\uC218\uC2E0 \uAC70\uBD80 \uC7AC\uD655\uC778 \uD6C4 Gmail \uC694\uCCAD \uC804 \uBC1C\uC0DD\uD55C \uBCC0\uACBD\uC740 \uBC18\uC601\uB418\uC9C0 \uC54A\uC744 \uC218 \uC788\uC2B5\uB2C8\uB2E4." };
   };
+}
+
+// supabase/functions/creator-daily-outreach/youtube-manual-history.mjs
+var fail7 = () => {
+  throw Object.assign(new Error("HISTORY_INCOMPLETE"), { code: "HISTORY_INCOMPLETE" });
+};
+function verifiedManualHistory({ owner, ledger, suppression, refusals, identities }) {
+  if (typeof owner !== "string" || !owner) fail7();
+  for (const source of [ledger, suppression, refusals, identities]) if (!source || source.owner !== owner || source.complete !== true || !Array.isArray(source.rows)) fail7();
+  const records = ledger.rows.map((r) => {
+    if (r.owner !== owner || r.scope !== "manual_creator_email" || typeof r.creatorKey !== "string" || !r.creatorKey || !emailIdentity(r.email) || !["reserved", "queued", "processing", "accepted", "sent", "outcome_unknown"].includes(r.status) || !Number.isFinite(Date.parse(r.createdAt))) fail7();
+    return { owner, scope: r.scope, creatorKey: r.creatorKey, email: r.email, status: r.status, createdAt: r.createdAt, ...r.attribution === "unverified_prior_work" ? { attribution: r.attribution } : {}, ...typeof r.id === "string" ? { id: r.id } : {}, ...typeof r.batchId === "string" ? { batchId: r.batchId } : {} };
+  });
+  const normalize = (rows) => [...new Set(rows.map((r) => {
+    if (!r || r.owner !== owner || !emailIdentity(r.email)) fail7();
+    return emailIdentity(r.email);
+  }))];
+  const suppressedKeys = normalize(suppression.rows), refusedKeys = normalize(refusals.rows);
+  const creators = /* @__PURE__ */ new Map(), emails = /* @__PURE__ */ new Map();
+  for (const row of identities.rows) {
+    if (row?.owner !== owner || typeof row.creatorKey !== "string" || !/^youtube:UC[A-Za-z0-9_-]{22}$/.test(row.creatorKey) || !Array.isArray(row.emailKeys) || row.emailKeys.some((e) => emailIdentity(e) !== e)) fail7();
+    creators.set(row.creatorKey, (creators.get(row.creatorKey) || 0) + 1);
+    for (const e of new Set(row.emailKeys)) {
+      const keys2 = emails.get(e) || /* @__PURE__ */ new Set();
+      keys2.add(row.creatorKey);
+      emails.set(e, keys2);
+    }
+  }
+  const duplicateCreatorKeys = [...creators].filter(([, n]) => n > 1).map(([k]) => k), sharedEmailKeys = [...emails].filter(([, v]) => v.size > 1).map(([k]) => k);
+  return { duplicateCreatorKeys, sharedEmailKeys, owner, complete: true, scope: "manual_youtube_task", refusalsComplete: true, records, suppressedKeys, refusedKeys: [...new Set(refusedKeys)] };
 }
 
 // supabase/functions/youtube-manual-mail/repository.mjs
@@ -911,45 +894,7 @@ function youtubeManualRepository({ sb: sb2, historySource }) {
   };
 }
 
-// supabase/functions/youtube-manual-mail/gmail-refusal-review.mjs
-async function gmailRefusalReview({ provider, owner, senderEmail, addresses, now = Date.now }) {
-  if (!owner || !emailIdentity(senderEmail) || !Array.isArray(addresses) || addresses.length > 100 || new Set(addresses.map(emailIdentity)).size !== addresses.length || addresses.some((a) => !emailIdentity(a))) throw Error("GMAIL_REVIEW_INVALID");
-  const rows = new Array(addresses.length), deadline = now() + 45e3;
-  let next = 0;
-  async function worker() {
-    while (true) {
-      const i = next++;
-      if (i >= addresses.length) return;
-      const email = addresses[i];
-      if (now() > deadline) {
-        rows[i] = { owner, email, status: "unknown", source: "provider_unavailable", checkedAt: new Date(now()).toISOString() };
-        continue;
-      }
-      try {
-        const result = await provider.history({ owner, address: email.trim().toLowerCase(), senderEmail }), p = result?.proof, checked2 = Date.parse(p?.checkedAt), elapsed = now() - checked2;
-        if (p?.clear !== true || p.address !== email.trim().toLowerCase() || p.emailKey !== emailIdentity(email) || p.senderEmail !== senderEmail || !Number.isFinite(checked2) || elapsed < 0 || elapsed > 1e4) throw Error("GMAIL_HISTORY_UNVERIFIED");
-        rows[i] = { owner, email, status: "no_refusal_confirmed", source: "provider_empty_history", checkedAt: p.checkedAt };
-      } catch (error2) {
-        if (error2?.code !== "EXISTING_GMAIL_CONTACT" && error2?.code !== "GMAIL_ALIAS_HISTORY_REVIEW_REQUIRED") {
-          rows[i] = { owner, email, status: "unknown", source: "provider_unavailable", checkedAt: new Date(now()).toISOString() };
-          continue;
-        }
-        let fingerprint2 = null;
-        try {
-          fingerprint2 = await provider.historyFingerprint({ owner, address: email.trim().toLowerCase(), senderEmail });
-        } catch {
-        }
-        rows[i] = { owner, email, status: "unknown", source: "provider_existing_history", checkedAt: fingerprint2?.checkedAt || new Date(now()).toISOString(), ...fingerprint2 ? { fingerprint: fingerprint2.fingerprint, messageCount: fingerprint2.messageIds.length } : {} };
-      }
-    }
-  }
-  const results = await Promise.allSettled(Array.from({ length: Math.min(4, addresses.length) }, () => worker()));
-  if (results.some((r) => r.status === "rejected") || rows.some((x) => !x)) throw Error("GMAIL_HISTORY_UNAVAILABLE");
-  return { owner, complete: true, rows };
-}
-
 // supabase/functions/youtube-manual-mail/history-source.mjs
-var cutoff = Date.parse("2026-11-09T15:00:00.000Z");
 var fail9 = () => {
   throw Object.assign(new Error("HISTORY_INCOMPLETE"), { code: "HISTORY_INCOMPLETE" });
 };
@@ -957,10 +902,10 @@ var emailFrom = (x) => emailIdentity(String(x || "").replace(/^email:/i, ""));
 function youtubeManualHistorySource({ readSnapshot, provider, connection, now = Date.now }) {
   return async function read(owner, addresses) {
     if (typeof readSnapshot !== "function" || !owner || !Array.isArray(addresses) || !addresses.length || addresses.length > 100) fail9();
-    const result = await readSnapshot(owner, ["sanji_youtube_manual_ledger", "sanji_youtube_manual_gmail_reviews", "sanji_daily_campaign_queue", "sanji_outbox", "sanji_suppression", "sanji_records"]);
+    const result = await readSnapshot(owner, ["sanji_youtube_manual_ledger", "sanji_suppression", "sanji_records"]);
     const tables = result?.tables;
     if (result?.owner !== owner || result.complete !== true || !tables || Object.values(tables).some((rows) => !Array.isArray(rows) || rows.some((r) => r.owner !== owner))) fail9();
-    for (const table of ["sanji_youtube_manual_ledger", "sanji_youtube_manual_gmail_reviews", "sanji_daily_campaign_queue", "sanji_outbox", "sanji_suppression", "sanji_records"]) if (!Array.isArray(tables[table])) fail9();
+    for (const table of ["sanji_youtube_manual_ledger", "sanji_suppression", "sanji_records"]) if (!Array.isArray(tables[table])) fail9();
     const ledger = [], candidateById = new Map(tables.sanji_records.filter((r) => r.kind === "candidate").map((r) => [r.id, r]));
     const add = (r, creatorKey, email, status, createdAt, attribution, batchId, id) => {
       if (!emailIdentity(email) || typeof creatorKey !== "string" || !creatorKey || !Number.isFinite(Date.parse(createdAt))) fail9();
@@ -971,23 +916,6 @@ function youtubeManualHistorySource({ readSnapshot, provider, connection, now = 
       const status = { reserved: "reserved", sending: "processing", granted: "processing", accepted: "accepted", outcome_unknown: "outcome_unknown", held: "reserved" }[r.state];
       if (!status || typeof r.channel !== "string" || !/^UC[A-Za-z0-9_-]{22}$/.test(r.channel)) fail9();
       add(r, "youtube:" + r.channel, r.email, status, r.created_at, "manual_youtube", r.batch_id, r.id);
-    }
-    for (const r of tables.sanji_daily_campaign_queue) {
-      if (r.platform !== "youtube") continue;
-      if (!Number.isFinite(Date.parse(r.created))) fail9();
-      if (Date.parse(r.created) < cutoff) continue;
-      if (["cancelled", "rejected"].includes(r.status)) continue;
-      add(r, r.creator_key, r.recipient, "outcome_unknown", r.created, "unverified_prior_work");
-    }
-    for (const r of tables.sanji_outbox) {
-      if (r.data?.proposalType === "youtube_manual_campaign" && tables.sanji_youtube_manual_ledger.some((l) => l.outbox_id === r.id && l.batch_id === r.data.manualBatchId)) continue;
-      if (r.channel !== "email") continue;
-      if (!Number.isFinite(Date.parse(r.created))) fail9();
-      if (Date.parse(r.created) < cutoff || !["accepted", "reserved", "processing", "sending", "outcome_unknown"].includes(r.status)) continue;
-      const emails = Array.isArray(r.data?.emails) && r.data.emails.length ? r.data.emails : [r.data?.email];
-      if (!emails.length || emails.some((x) => !emailIdentity(x))) fail9();
-      const c = candidateById.get(r.target), channel = String(c?.data?.profile || "").match(/\/channel\/(UC[A-Za-z0-9_-]{22})\/?$/)?.[1];
-      for (const email of emails) add(r, channel ? "youtube:" + channel : "unattributed", email, "outcome_unknown", r.created, "unverified_prior_work");
     }
     const suppression = [];
     for (const r of tables.sanji_suppression) {
@@ -1011,20 +939,6 @@ function youtubeManualHistorySource({ readSnapshot, provider, connection, now = 
       }
       if (c) for (const email of emailsFor(c)) refusals.push({ owner, email });
     }
-    const sender = await connection(owner);
-    if (sender?.owner !== owner || sender.summary?.reauthRequired === true || !emailIdentity(sender.summary?.email)) fail9();
-    const gmail = await gmailRefusalReview({ provider, owner, senderEmail: sender.summary.email.toLowerCase(), addresses, now });
-    for (const item of gmail.rows) {
-      if (item.status !== "unknown" || !item.fingerprint || !item.messageCount) continue;
-      const key = emailIdentity(item.email), matches = tables.sanji_youtube_manual_gmail_reviews.filter((r) => r.email_key === key && r.sender_email === sender.summary.email.toLowerCase());
-      if (matches.some((r) => !Number.isFinite(Date.parse(r.created_at)))) fail9();
-      matches.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || String(b.id).localeCompare(String(a.id)));
-      const review = matches[0], candidate = candidateById.get(review?.candidate_id), created = Date.parse(review?.created_at), expires = Date.parse(review?.expires_at);
-      if (review && !(matches[1] && Date.parse(matches[1].created_at) === created && matches[1].fingerprint !== review.fingerprint) && review.reviewed_by === owner && candidate?.version === review.candidate_version && review.fingerprint === item.fingerprint && review.message_count === item.messageCount && Number.isFinite(created) && created <= now() && Number.isFinite(expires) && expires > now() && expires - created <= 48 * 36e5 + 1e3) {
-        item.status = "no_refusal_confirmed";
-        item.source = "owner_reviewed";
-      }
-    }
     const identities = [];
     for (const c of candidateById.values()) {
       const m = String(c.data?.profile || "").match(/^https:\/\/(?:www\.)?youtube\.com\/channel\/(UC[A-Za-z0-9_-]{22})\/?$/);
@@ -1032,12 +946,12 @@ function youtubeManualHistorySource({ readSnapshot, provider, connection, now = 
       identities.push({ owner, creatorKey: "youtube:" + m[1], emailKeys: [...new Set(emailsFor(c).map(emailIdentity).filter(Boolean))] });
     }
     const source = (rows) => ({ owner, complete: true, rows });
-    return { ledger: source(ledger), suppression: source(suppression), refusals: source(refusals), identities: source(identities), gmailReview: gmail };
+    return { ledger: source(ledger), suppression: source(suppression), refusals: source(refusals), identities: source(identities) };
   };
 }
 
 // supabase/functions/youtube-manual-mail/snapshot-reader.mjs
-var KEYS = Object.freeze({ sanji_youtube_manual_ledger: "id", sanji_youtube_manual_gmail_reviews: "id", sanji_daily_campaign_queue: "creator_key", sanji_outbox: "id", sanji_suppression: "identity", sanji_records: "id" });
+var KEYS = Object.freeze({ sanji_youtube_manual_ledger: "id", sanji_suppression: "identity", sanji_records: "id" });
 var fail10 = () => {
   throw Object.assign(new Error("HISTORY_INCOMPLETE"), { code: "HISTORY_INCOMPLETE" });
 };
@@ -1248,7 +1162,6 @@ function youtubeManualSendFlow({ repository, payloadBuilder, providerFactory, en
   }
   async function checkedHistory(owner, batch, entry, provided) {
     const history = provided || await repository.manualHistory(owner, [entry.email]);
-    if (!gmailRefusalReviewed(history, entry.email)) fail13("GMAIL_REVIEW_INCOMPLETE");
     const emailKey = entry.emailKey;
     if (typeof emailKey !== "string" || !Array.isArray(history.duplicateCreatorKeys) || !Array.isArray(history.sharedEmailKeys)) fail13("BATCH_CHANGED");
     if (history.duplicateCreatorKeys.includes("youtube:" + entry.channel) || history.sharedEmailKeys.includes(emailKey)) fail13("IDENTITY_AMBIGUOUS");
@@ -1316,7 +1229,13 @@ function youtubeManualSendFlow({ repository, payloadBuilder, providerFactory, en
       finish: (args) => repository.finish(args)
     };
     try {
-      return await youtubeManualDispatch({ repository: bound, provider: isolated }).dispatchOne({ owner, batchId: batch.id, approvalHash: batch.approvalHash });
+      const result = await youtubeManualDispatch({ repository: bound, provider: isolated }).dispatchOne({ owner, batchId: batch.id, approvalHash: batch.approvalHash });
+      if (result?.status === "complete_or_held" && !result.counts) {
+        const latest = await repository.batchRows(owner, batch.id);
+        if (latest.length !== batch.review.entries.length) fail13("BATCH_INCOMPLETE");
+        return { status: "complete_or_held", counts: latest.reduce((x, r) => (x[r.state] = (x[r.state] || 0) + 1, x), {}) };
+      }
+      return result;
     } finally {
       isolated.clear?.();
     }
