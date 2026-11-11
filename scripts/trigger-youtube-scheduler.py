@@ -20,18 +20,39 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class IdentityInputInvalid(ValueError):
-    pass
+    REASONS = frozenset({"url_type", "url_too_long", "token_type", "token_length", "token_whitespace", "url_parse", "url_scheme", "url_credentials", "url_port", "url_fragment", "url_host_actions_subdomain", "url_host_other"})
+
+    def __init__(self, reason):
+        self.reason = reason if reason in self.REASONS else "other"
+        super().__init__("GitHub identity input invalid")
 
 
 def github_token(request_url, request_token, opener=None):
-    if not isinstance(request_url, str) or len(request_url) > 8192 or not isinstance(request_token, str) or not 1 <= len(request_token) <= 8192 or any(c.isspace() for c in request_token):
-        raise IdentityInputInvalid("GitHub identity unavailable")
+    if not isinstance(request_url, str):
+        raise IdentityInputInvalid("url_type")
+    if len(request_url) > 8192:
+        raise IdentityInputInvalid("url_too_long")
+    if not isinstance(request_token, str):
+        raise IdentityInputInvalid("token_type")
+    if not 1 <= len(request_token) <= 8192:
+        raise IdentityInputInvalid("token_length")
+    if any(c.isspace() for c in request_token):
+        raise IdentityInputInvalid("token_whitespace")
     try:
         url = urllib.parse.urlsplit(request_url)
-        if url.scheme != "https" or url.hostname not in ("pipelines.actions.githubusercontent.com", "token.actions.githubusercontent.com") or url.username or url.password or url.port not in (None, 443) or url.fragment:
-            raise IdentityInputInvalid("GitHub identity endpoint invalid")
-    except ValueError as exc:
-        raise IdentityInputInvalid("GitHub identity endpoint invalid") from exc
+        host, port = url.hostname, url.port
+    except ValueError:
+        raise IdentityInputInvalid("url_parse") from None
+    if url.scheme != "https":
+        raise IdentityInputInvalid("url_scheme")
+    if url.username or url.password:
+        raise IdentityInputInvalid("url_credentials")
+    if port not in (None, 443):
+        raise IdentityInputInvalid("url_port")
+    if url.fragment:
+        raise IdentityInputInvalid("url_fragment")
+    if host not in ("pipelines.actions.githubusercontent.com", "token.actions.githubusercontent.com"):
+        raise IdentityInputInvalid("url_host_actions_subdomain" if host and host.endswith(".actions.githubusercontent.com") else "url_host_other")
     client = opener or urllib.request.build_opener(NoRedirect())
     target = request_url + ("&" if url.query else "?") + urllib.parse.urlencode({"audience": AUDIENCE})
     req = urllib.request.Request(target, headers={"Authorization": "Bearer " + request_token})
@@ -103,8 +124,8 @@ def health_diagnostic(environ, get_token=github_token, check_health=health):
         return failed("identity_input", "missing")
     try:
         token = get_token(request_url, request_token)
-    except IdentityInputInvalid:
-        return failed("identity_input", "invalid")
+    except IdentityInputInvalid as exc:
+        return failed("identity_input", exc.reason)
     except urllib.error.HTTPError as exc:
         return failed("identity_request", "http_error", exc)
     except (urllib.error.URLError, TimeoutError):
