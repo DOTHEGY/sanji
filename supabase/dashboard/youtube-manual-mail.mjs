@@ -586,14 +586,19 @@ function createSharedInlinePreview({ images, owner, requiredImageIds }) {
   }
   return { sharedImages, render };
 }
-function composeInlineOutreach2({ copy, images, owner, requiredImageIds, from, to, senderName, messageId = randomUUID4(), now = /* @__PURE__ */ new Date() }) {
+function createSharedInlineComposer({ images, owner, requiredImageIds }) {
+  const checked2 = validateInlineImages2(images, { owner, requiredIds: requiredImageIds });
+  const encodedImages = checked2.map((image) => encoded(image.bytes));
+  return (options) => composeWithImages({ ...options, images, owner, requiredImageIds }, checked2, encodedImages);
+}
+function composeWithImages({ copy, images, owner, requiredImageIds, from, to, senderName, messageId = randomUUID4(), now = /* @__PURE__ */ new Date() }, validatedImages, encodedImages) {
   if (!copy || copy.sendingEnabled !== false || !emailIdentity(from) || !emailIdentity(to) || /[^\x21-\x7E]/.test(from + to) || !String(copy.subject || "").trim() || typeof copy.body !== "string" || copy.body.length > 2e4 || !String(senderName || "").trim() || !/^[-A-Za-z0-9_]{1,100}$/.test(messageId) || Number.isNaN(new Date(now).getTime())) fail3("MAIL_PREVIEW_INVALID", "\uBC1C\uC2E0\uC790\xB7\uC218\uC2E0\uC790\xB7\uBCF8\uBB38\uC744 \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4.");
   if (typeof copy.senderEmail !== "string" || from !== copy.senderEmail.trim().toLowerCase()) fail3("SENDER_SIGNATURE_MISMATCH", "\uD604\uC7AC \uBC1C\uC2E0 \uACC4\uC815\uACFC \uC2B9\uC778\uB41C Gmail \uC11C\uBA85\uC774 \uC77C\uCE58\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
   if (copy.attachments?.length) fail3("UNEXPECTED_ATTACHMENTS", "\uC77C\uBC18 \uCCA8\uBD80\uB97C \uCD94\uAC00\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
-  const { checked: checked2, html, text } = inlineContent({ copy, images, owner, requiredImageIds });
+  const { checked: checked2, html, text } = inlineContent({ copy, images, owner, requiredImageIds }, validatedImages);
   const boundary = "sanji_alt_" + messageId, related = "sanji_related_" + messageId;
   const lines = [`From: ${encodedHeader(senderName)} <${from}>`, `To: ${to}`, `Subject: ${encodedHeader(copy.subject)}`, `Date: ${new Date(now).toUTCString()}`, `Message-ID: <${messageId}@sanji.local>`, "MIME-Version: 1.0", `Content-Type: multipart/alternative; boundary="${boundary}"`, "", `--${boundary}`, "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", encoded(text), `--${boundary}`, `Content-Type: multipart/related; boundary="${related}"; type="text/html"`, "", `--${related}`, "Content-Type: text/html; charset=UTF-8", "Content-Transfer-Encoding: base64", "", encoded(html)];
-  for (const image of checked2) lines.push(`--${related}`, "Content-Type: image/png", `Content-ID: <${image.cid}>`, `Content-Disposition: inline; filename="${image.name}"`, "Content-Transfer-Encoding: base64", "", encoded(image.bytes));
+  for (const [index, image] of checked2.entries()) lines.push(`--${related}`, "Content-Type: image/png", `Content-ID: <${image.cid}>`, `Content-Disposition: inline; filename="${image.name}"`, "Content-Transfer-Encoding: base64", "", encodedImages?.[index] ?? encoded(image.bytes));
   lines.push(`--${related}--`, `--${boundary}--`, "");
   const mime = lines.join("\r\n");
   if (Buffer4.byteLength(mime) > 20 * 1024 * 1024) fail3("MAIL_TOO_LARGE", "\uBA54\uC77C \uBCF8\uBB38 \uD06C\uAE30\uB97C \uD655\uC778\uD574\uC57C \uD569\uB2C8\uB2E4.");
@@ -1010,31 +1015,46 @@ var fail11 = () => {
   throw Object.assign(new Error("APPROVED_CONTENT_CHANGED"), { code: "APPROVED_CONTENT_CHANGED" });
 };
 function youtubeManualPayloadBuilder({ repository, now = Date.now }) {
-  return async function build(owner, batch, candidateId) {
+  async function prepareBatch(owner, batch) {
+    batch = structuredClone(batch);
     if (!batch || batch.owner !== owner || !batch.confirmedAt || !Number.isFinite(Date.parse(batch.createdAt)) || !Number.isFinite(Date.parse(batch.expiresAt)) || Date.parse(batch.expiresAt) <= now() || !Array.isArray(batch.review?.entries)) fail11();
     const saved = batch.review;
     const rebuilt = buildManualReview({ owner, sender: saved.sender, snapshotHash: saved.snapshotHash, settingsId: saved.settingsId, settingsVersion: saved.settingsVersion, mailPolicy: saved.mailPolicy, rows: saved.entries.map((e) => ({ ...e, owner })), scope: saved.scope });
     if (rebuilt.approvalHash !== batch.approvalHash || stableJSON(rebuilt.review) !== stableJSON(saved)) fail11();
-    const entries = saved.entries.filter((x) => x.id === candidateId);
-    if (entries.length !== 1) fail11();
-    const entry = entries[0];
-    const [policy, stored, settings, connection, current] = await Promise.all([repository.policy(owner), repository.snapshot(owner, batch.snapshotId), repository.currentSettings(owner), repository.currentConnection(owner), repository.currentRecipient(owner, entry.id)]);
-    if (policy?.owner !== owner || policy.revision !== batch.policyRevision || policy.snapshot_id !== batch.snapshotId || stored?.sha256 !== batch.snapshotHash || saved.snapshotHash !== batch.snapshotHash || settings?.id !== saved.settingsId || settings?.version !== saved.settingsVersion || current?.owner !== owner || current.id !== entry.id || current.version !== entry.version || current.complete !== true) fail11();
-    if (stableJSON(manualMailPolicy(policy, owner, batch.policyRevision)) !== stableJSON(saved.mailPolicy)) fail11();
-    const snapshot = verifyPrivateSnapshot(stored, owner);
-    if (stableJSON(settingsSignature(settings, connection)) !== stableJSON(snapshot.signature) || snapshot.signature.senderEmail !== saved.sender) fail11();
-    if (snapshot.products.length) {
-      const products = await repository.currentProducts(owner, snapshot.products.map((p) => p.id));
-      if (!Array.isArray(products) || stableJSON(products.map(({ id, version, sha256 }) => ({ id, version, sha256 })).sort((a, b) => a.id.localeCompare(b.id))) !== stableJSON([...snapshot.products].sort((a, b) => a.id.localeCompare(b.id)))) fail11();
+    async function shared() {
+      if (Date.parse(batch.expiresAt) <= now()) fail11();
+      const [policy, stored, settings, connection] = await Promise.all([repository.policy(owner), repository.snapshot(owner, batch.snapshotId), repository.currentSettings(owner), repository.currentConnection(owner)]);
+      if (policy?.owner !== owner || policy.revision !== batch.policyRevision || policy.snapshot_id !== batch.snapshotId || stored?.sha256 !== batch.snapshotHash || saved.snapshotHash !== batch.snapshotHash || settings?.id !== saved.settingsId || settings?.version !== saved.settingsVersion) fail11();
+      if (stableJSON(manualMailPolicy(policy, owner, batch.policyRevision)) !== stableJSON(saved.mailPolicy)) fail11();
+      const snapshot2 = verifyPrivateSnapshot(stored, owner);
+      if (stableJSON(settingsSignature(settings, connection)) !== stableJSON(snapshot2.signature) || snapshot2.signature.senderEmail !== saved.sender) fail11();
+      if (snapshot2.products.length) {
+        const products = await repository.currentProducts(owner, snapshot2.products.map((p) => p.id));
+        if (!Array.isArray(products) || stableJSON(products.map(({ id, version, sha256 }) => ({ id, version, sha256 })).sort((a, b) => a.id.localeCompare(b.id))) !== stableJSON([...snapshot2.products].sort((a, b) => a.id.localeCompare(b.id)))) fail11();
+      }
+      return snapshot2;
     }
-    const target = manualYoutubeTarget(current, owner, entry.email, now());
-    if (target.creatorKey !== "youtube:" + entry.channel || target.name !== entry.name || target.profileUrl !== entry.profileUrl || target.sourceUrl !== entry.sourceUrl || target.sourceCheckedAt !== entry.sourceCheckedAt || stableJSON(target.sources) !== stableJSON(entry.sources) || target.sourceFingerprint !== entry.sourceFingerprint || target.reviewVersion !== entry.reviewVersion || target.audience !== entry.audience || target.metricsSource !== entry.metricsSource || target.metricsCheckedAt !== entry.metricsCheckedAt || target.activitySource !== entry.activitySource || target.activityCheckedAt !== entry.activityCheckedAt || target.mukbangReason !== entry.mukbangReason) fail11();
-    const copy = renderYoutubeOutreachCopy({ template: snapshot.template, channelName: target.name, signature: snapshot.signature, inlineImages: snapshot.images });
-    if (copy.subject !== entry.subject || copy.body !== entry.body) fail11();
-    const messageId = createHash7("sha256").update(batch.id + "|" + entry.id).digest("hex");
-    const mime = composeInlineOutreach2({ copy, images: snapshot.images, owner, requiredImageIds: snapshot.template.requiredInlineImageIds, from: saved.sender, to: entry.email, senderName: snapshot.signature.senderName, messageId, now: batch.createdAt });
-    return { raw: mime.raw, rawHash: createHash7("sha256").update(mime.raw).digest("hex"), senderEmail: saved.sender, messageId };
-  };
+    const snapshot = await shared(), compose = createSharedInlineComposer({ images: snapshot.images, owner, requiredImageIds: snapshot.template.requiredInlineImageIds });
+    async function build2(candidateId) {
+      if (Date.parse(batch.expiresAt) <= now()) fail11();
+      const entries = saved.entries.filter((x) => x.id === candidateId);
+      if (entries.length !== 1) fail11();
+      const entry = entries[0];
+      const current = await repository.currentRecipient(owner, entry.id);
+      if (current?.owner !== owner || current.id !== entry.id || current.version !== entry.version || current.complete !== true) fail11();
+      const target = manualYoutubeTarget(current, owner, entry.email, now());
+      if (target.creatorKey !== "youtube:" + entry.channel || target.name !== entry.name || target.profileUrl !== entry.profileUrl || target.sourceUrl !== entry.sourceUrl || target.sourceCheckedAt !== entry.sourceCheckedAt || stableJSON(target.sources) !== stableJSON(entry.sources) || target.sourceFingerprint !== entry.sourceFingerprint || target.reviewVersion !== entry.reviewVersion || target.audience !== entry.audience || target.metricsSource !== entry.metricsSource || target.metricsCheckedAt !== entry.metricsCheckedAt || target.activitySource !== entry.activitySource || target.activityCheckedAt !== entry.activityCheckedAt || target.mukbangReason !== entry.mukbangReason) fail11();
+      const copy = renderYoutubeOutreachCopy({ template: snapshot.template, channelName: target.name, signature: snapshot.signature, inlineImages: snapshot.images });
+      if (copy.subject !== entry.subject || copy.body !== entry.body) fail11();
+      const messageId = createHash7("sha256").update(batch.id + "|" + entry.id).digest("hex");
+      const mime = compose({ copy, from: saved.sender, to: entry.email, senderName: snapshot.signature.senderName, messageId, now: batch.createdAt });
+      return { raw: mime.raw, rawHash: createHash7("sha256").update(mime.raw).digest("hex"), senderEmail: saved.sender, messageId };
+    }
+    return { build: build2, recheck: shared };
+  }
+  const build = async (owner, batch, candidateId) => (await prepareBatch(owner, batch)).build(candidateId);
+  build.prepareBatch = prepareBatch;
+  return build;
 }
 
 // supabase/functions/youtube-manual-mail/provider.mjs
@@ -1199,11 +1219,13 @@ function youtubeManualSendFlow({ repository, payloadBuilder, providerFactory, en
     const batch = await currentBatch(owner, { batchId: input.batchId, approvalHash: input.approvalHash });
     validateProjectScope(batch.review.scope);
     const items = [], history = await repository.manualHistory(owner, batch.review.entries.map((e) => e.email));
+    const prepared = typeof payloadBuilder.prepareBatch === "function" ? await payloadBuilder.prepareBatch(owner, batch) : null;
     for (const entry of batch.review.entries) {
       await checkedHistory(owner, batch, entry, history);
-      const payload = await payloadBuilder(owner, batch, entry.id);
+      const payload = prepared ? await prepared.build(entry.id) : await payloadBuilder(owner, batch, entry.id);
       items.push({ id: entry.id, version: entry.version, email: entry.email, payloadHash: payload.rawHash, messageId: payload.messageId });
     }
+    if (prepared) await prepared.recheck();
     if (typeof repository.scheduleBatch !== "function") fail13("SCHEDULER_UNAVAILABLE");
     const result = await repository.scheduleBatch({ owner, batchId: batch.id, approvalHash: batch.approvalHash, items, expectedRunAt: input.expectedRunAt });
     if (!result || result.state !== "scheduled" || Date.parse(result.runAt) !== Date.parse(input.expectedRunAt) || !Array.isArray(result.rows) || result.rows.length !== items.length) fail13("SCHEDULE_UNCERTAIN");
@@ -1427,3 +1449,4 @@ var env = (name) => Deno.env.get(name) || "";
 var sb = createClient(env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY"), { auth: { persistSession: false, autoRefreshToken: false } });
 var runtime = youtubeManualRuntime({ sb, env });
 Deno.serve(youtubeManualHandler({ sb, prepare: runtime.preview, confirm: runtime.confirm, schedule: runtime.schedule, status: runtime.status, recent: runtime.recent, cancel: runtime.cancel, gmailReviewPrepare: runtime.gmailReviewPrepare, gmailReviewConfirm: runtime.gmailReviewConfirm, origin: env("APP_ORIGIN") || "https://dothegy.github.io" }));
+

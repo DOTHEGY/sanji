@@ -24,7 +24,11 @@ export function youtubeManualSendFlow({repository,payloadBuilder,providerFactory
  async function schedule(owner,input){
   if(!input||Object.keys(input).some(k=>!['batchId','approvalHash','expectedRunAt'].includes(k))||typeof input.expectedRunAt!=='string'||!Number.isFinite(Date.parse(input.expectedRunAt)))fail('INVALID_SEND_REQUEST');
   gate();if(env('YOUTUBE_MANUAL_SCHEDULER_ENABLED')!=='true'||env('YOUTUBE_MANUAL_SCHEDULER_TRIGGER_VERIFIED')!=='true')fail('SCHEDULER_UNAVAILABLE');const batch=await currentBatch(owner,{batchId:input.batchId,approvalHash:input.approvalHash});validateProjectScope(batch.review.scope);const items=[],history=await repository.manualHistory(owner,batch.review.entries.map(e=>e.email));
-  for(const entry of batch.review.entries){await checkedHistory(owner,batch,entry,history);const payload=await payloadBuilder(owner,batch,entry.id);items.push({id:entry.id,version:entry.version,email:entry.email,payloadHash:payload.rawHash,messageId:payload.messageId});}
+  const prepared=typeof payloadBuilder.prepareBatch==='function'?await payloadBuilder.prepareBatch(owner,batch):null;
+  for(const entry of batch.review.entries){await checkedHistory(owner,batch,entry,history);const payload=prepared?await prepared.build(entry.id):await payloadBuilder(owner,batch,entry.id);items.push({id:entry.id,version:entry.version,email:entry.email,payloadHash:payload.rawHash,messageId:payload.messageId});}
+  // Recheck mutable policy, settings, sender and immutable snapshot before the
+  // atomic database reservation. Dispatch still rebuilds every payload afresh.
+  if(prepared)await prepared.recheck();
   if(typeof repository.scheduleBatch!=='function')fail('SCHEDULER_UNAVAILABLE');
   const result=await repository.scheduleBatch({owner,batchId:batch.id,approvalHash:batch.approvalHash,items,expectedRunAt:input.expectedRunAt});
   if(!result||result.state!=='scheduled'||Date.parse(result.runAt)!==Date.parse(input.expectedRunAt)||!Array.isArray(result.rows)||result.rows.length!==items.length)fail('SCHEDULE_UNCERTAIN');
