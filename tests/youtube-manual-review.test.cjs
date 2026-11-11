@@ -1,0 +1,9 @@
+const {test}=require('node:test'),assert=require('node:assert/strict');
+test('approval binds owner, sender, snapshot, exact recipient, subject and body',async()=>{
+ const {buildManualReview:b,confirmManualReview:c}=await import('../supabase/functions/creator-daily-outreach/youtube-manual-review.mjs');
+ const input={owner:'o',sender:'sender@example.com',snapshotHash:'a'.repeat(64),settingsId:'settings-1',settingsVersion:2,mailPolicy:{classification:'reviewed_non_marketing_business_proposal',classificationSource:'fixture review',authorizationSource:'fixture approval'},rows:[{owner:'o',id:'x',version:1,channel:'UC'+'a'.repeat(22),email:'person@example.com',name:'채널',profileUrl:'https://youtube.com/channel/UC'+'a'.repeat(22),sourceUrl:'https://example.com',sourceCheckedAt:new Date().toISOString(),sources:[{url:'https://example.com',checkedAt:new Date().toISOString()}],sourceFingerprint:'c'.repeat(64),reviewVersion:'manual_source_review_v1',audience:40000,metricsSource:'https://example.com',metricsCheckedAt:new Date().toISOString(),activitySource:'https://example.com',activityCheckedAt:new Date().toISOString(),mukbangReason:'먹방',subject:'안녕하세요',body:'본문'}]},approved=b(input).approvalHash;
+ assert.equal(c(input,approved).entries.length,1);
+ for(const mutated of [{...input,sender:'other@example.com'},{...input,snapshotHash:'b'.repeat(64)},{...input,settingsId:'other-settings'},{...input,settingsVersion:3},{...input,rows:[{...input.rows[0],body:'다른 본문'}]},{...input,rows:[{...input.rows[0],email:'other@example.com'}]}])assert.throws(()=>c(mutated,approved),/REVIEW_CHANGED/);
+ assert.throws(()=>b({...input,rows:[input.rows[0],{...input.rows[0],id:'y',channel:'UC'+'b'.repeat(22)}]}),/REVIEW_RECIPIENT_INVALID/);
+ assert.throws(()=>b({...input,rows:[{...input.rows[0],owner:'another'}]}),/REVIEW_RECIPIENT_INVALID/);
+});

@@ -37,3 +37,13 @@ entrypoint = "./functions/creator-daily-outreach-worker/index.ts"
 # NEW fixed service endpoint with existing Vault-backed x-job-token authentication.
 # Activating this persistent access and recurrence requires separate approval.
 verify_jwt = false
+
+[functions.youtube-manual-mail]
+entrypoint = "./functions/youtube-manual-mail/index.ts"
+# Sanji user JWT at gateway and membership/owner checks inside the function.
+verify_jwt = true
+
+[functions.youtube-manual-scheduler]
+entrypoint = "./functions/youtube-manual-scheduler/index.ts"
+# GitHub OIDC is not a Supabase JWT; the handler strictly verifies it itself.
+verify_jwt = false

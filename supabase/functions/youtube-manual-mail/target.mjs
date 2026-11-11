@@ -1,0 +1,25 @@
+import {createHash} from 'node:crypto';
+import {emailIdentity,sourceUrl} from '../creator-daily-outreach/domain.mjs';
+const fail=(code='RECIPIENT_REVIEW_REQUIRED')=>{throw Object.assign(new Error(code),{code});};
+const checked=(value,now)=>{const n=Date.parse(value);return Number.isFinite(n)&&n<=now&&now-n<=30*86400000?new Date(n).toISOString():null;};
+const publicUrl=value=>{const url=sourceUrl(value);if(!url)return null;const u=new URL(url);if(!u.search)return url;if(['youtube.com','www.youtube.com','m.youtube.com'].includes(u.hostname)&&u.pathname==='/watch'&&/^[A-Za-z0-9_-]{11}$/.test(u.searchParams.get('v')||''))return 'https://www.youtube.com/watch?v='+u.searchParams.get('v');return null;};
+const fingerprint=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
+// User-selected stored publication only. It does not assert deliverability,
+// collaboration consent, creator affiliation or automated source verification.
+export function manualYoutubeTarget(resolved,owner,requestedEmail,now=Date.now()){
+ if(resolved?.complete!==true||resolved.owner!==owner||!resolved.candidate||resolved.candidate.platform!=='youtube'||!emailIdentity(requestedEmail)||requestedEmail!==requestedEmail.trim().toLowerCase())fail();
+ const native=resolved.native;
+ if(!native)fail();
+ const d=native.data||{},c=resolved.candidate,key='youtube:'+c.externalId,profile=sourceUrl(d.profile);
+ if(native.owner!==owner||native.id!==resolved.id||native.version!==resolved.version||native.kind!=='candidate'||d.kind!=='크리에이터'||d.channels!=='YouTube'||!/^UC[A-Za-z0-9_-]{22}$/.test(c.externalId||'')||!profile||!new RegExp('^https://(?:www\\.)?youtube\\.com/channel/'+c.externalId+'/?$').test(profile)||typeof d.name!=='string'||!d.name.trim()||d.name.length>150||/[\u0000-\u001f\u007f]/.test(d.name)||['거절','수신 거부','제외','상대방 거절','우리 측 거절'].includes(d.status)||c.excluded===true)fail();
+ if(/(?:privacy|abuse|noreply|no-reply|support|careers|recruit|legal)@/i.test(requestedEmail))fail();
+ const leads=[d.contact,...(Array.isArray(d.youtubeResearch?.businessContacts)?d.youtubeResearch.businessContacts:[])].filter(Boolean),matches=[];
+ const sameMailboxSpellings=new Set(leads.map(x=>typeof x.email==='string'?x.email.trim().toLowerCase():'').filter(x=>x&&emailIdentity(x)===emailIdentity(requestedEmail)));if(sameMailboxSpellings.size!==1)fail('PUBLIC_EMAIL_SOURCE_REVIEW_REQUIRED');
+ const denial=/(?:수신\s*거부|연락.{0,12}(?:중단|그만|하지\s*마)|(?:협업|광고|제휴).{0,24}(?:거절|금지|불가|받지|원하지)|unsubscribe|please\s+stop|not\s+(?:for\s+)?(?:business|collab)|no\s+(?:business|collab))/i;for(const lead of leads){if(emailIdentity(typeof lead.email==='string'?lead.email.trim().toLowerCase():'')===emailIdentity(requestedEmail)&&denial.test([lead.context,lead.purpose,lead.note].filter(x=>typeof x==='string').join(' ')))fail('RECIPIENT_BLOCKED');}
+ for(const lead of leads){if(typeof lead.email!=='string'||lead.email.trim().toLowerCase()!==requestedEmail)continue;const url=publicUrl(lead.sourceUrl||lead.source),date=checked(lead.checked||lead.observedAt,now);if(!url||!date)continue;matches.push({url,checkedAt:date,email:requestedEmail,context:typeof lead.context==='string'?lead.context.slice(0,4000):''});}
+ const unique=[...new Map(matches.map(m=>[m.url+'|'+m.checkedAt+'|'+m.context,m])).values()].sort((a,b)=>(a.url+'|'+a.checkedAt+'|'+a.context).localeCompare(b.url+'|'+b.checkedAt+'|'+b.context));if(!unique.length||unique.length>5||unique.some(x=>/(?:not\s+(?:for\s+)?(?:business|collab)|no\s+(?:business|collab)|(?:협업|광고|제휴).{0,20}(?:거절|금지|불가|받지))/i.test(x.context)))fail('PUBLIC_EMAIL_SOURCE_REVIEW_REQUIRED');const distinctEmails=new Set(leads.map(x=>emailIdentity(typeof x.email==='string'?x.email.trim().toLowerCase():'')).filter(Boolean));if(distinctEmails.size!==1)fail('PUBLIC_EMAIL_SOURCE_REVIEW_REQUIRED');
+ const audience=d.followers,metricsSource=publicUrl(d.metricsSource),metricsCheckedAt=checked(d.metricsChecked,now),reason=typeof d.reason==='string'?d.reason.trim():'';
+ const activities=(Array.isArray(d.evidence)?d.evidence:[]).filter(e=>/최근|활동|activity|recent/i.test(String(e.description||''))).map(e=>({url:publicUrl(e.url),date:checked(e.checked,now)})).filter(e=>e.url&&e.date).sort((a,b)=>Date.parse(b.date)-Date.parse(a.date)||a.url.localeCompare(b.url));
+ if(!Number.isSafeInteger(audience)||audience<30000||audience>200000||!metricsSource||!metricsCheckedAt)fail('AUDIENCE_SOURCE_REVIEW_REQUIRED');if(reason.length>4000)fail('RECIPIENT_REVIEW_REQUIRED');if(activities.length<1)fail('ACTIVITY_SOURCE_REVIEW_REQUIRED');
+ return {creatorKey:key,platform:'youtube',externalId:c.externalId,name:d.name.trim(),profileUrl:profile,contact:{address:requestedEmail,key:emailIdentity(requestedEmail)},sourceUrl:unique[0].url,sourceCheckedAt:unique[0].checkedAt,sources:unique.map(({url,checkedAt})=>({url,checkedAt})),sourceFingerprint:fingerprint(unique),audience,metricsSource,metricsCheckedAt,activitySource:activities[0].url,activityCheckedAt:activities[0].date,mukbangReason:reason,reviewVersion:'manual_source_review_v1'};
+}

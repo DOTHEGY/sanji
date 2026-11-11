@@ -1,0 +1,26 @@
+name: YouTube email scheduler
+on:
+  schedule:
+    # 10:00–11:55 Korea time. GitHub may start scheduled workflows late.
+    - cron: '*/5 1-2 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: youtube-manual-scheduler
+  cancel-in-progress: false
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Check due work
+        if: github.event_name == 'schedule'
+        run: python3 scripts/trigger-youtube-scheduler.py
+      - name: Check authentication without processing work
+        if: github.event_name == 'workflow_dispatch'
+        run: python3 scripts/trigger-youtube-scheduler.py --health
