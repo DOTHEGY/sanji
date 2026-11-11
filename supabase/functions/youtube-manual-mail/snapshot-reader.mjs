@@ -1,4 +1,4 @@
-const KEYS=Object.freeze({sanji_youtube_manual_ledger:'id',sanji_youtube_manual_gmail_reviews:'id',sanji_daily_campaign_queue:'creator_key',sanji_outbox:'id',sanji_suppression:'identity',sanji_records:'id'});
+const KEYS=Object.freeze({sanji_youtube_manual_ledger:'id',sanji_suppression:'identity',sanji_records:'id'});
 const fail=()=>{throw Object.assign(new Error('HISTORY_INCOMPLETE'),{code:'HISTORY_INCOMPLETE'});};
 // Stable, owner-scoped, bounded keyset scan: any changed, capped or unavailable
 // source fails closed. The returned records remain server-side.

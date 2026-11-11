@@ -1,6 +1,5 @@
 import {youtubeManualDispatch} from '../creator-daily-outreach/youtube-manual-dispatch.mjs';
 import {classifyManualRecipient} from '../creator-daily-outreach/manual-email-cutoff.mjs';
-import {gmailRefusalReviewed} from '../creator-daily-outreach/youtube-manual-history.mjs';
 import {validateProjectScope} from './project-scope.mjs';
 const fail=code=>{throw Object.assign(new Error(code),{code});};
 // Server-only orchestration. No caller-supplied content, raw MIME or grant.
@@ -11,7 +10,7 @@ export function youtubeManualSendFlow({repository,payloadBuilder,providerFactory
   const b=await repository.batch(owner,input.batchId);if(!b||b.owner!==owner||!b.confirmedAt||b.approvalHash!==input.approvalHash||!Array.isArray(b.review?.entries)||!b.review.entries.length||b.review.entries.length>100)fail('CONFIRM_REQUIRED');return b;
  }
  async function checkedHistory(owner,batch,entry,provided){
-  const history=provided||await repository.manualHistory(owner,[entry.email]);if(!gmailRefusalReviewed(history,entry.email))fail('GMAIL_REVIEW_INCOMPLETE');
+  const history=provided||await repository.manualHistory(owner,[entry.email]);
   const emailKey=entry.emailKey;if(typeof emailKey!=='string'||!Array.isArray(history.duplicateCreatorKeys)||!Array.isArray(history.sharedEmailKeys))fail('BATCH_CHANGED');if(history.duplicateCreatorKeys.includes('youtube:'+entry.channel)||history.sharedEmailKeys.includes(emailKey))fail('IDENTITY_AMBIGUOUS');
   const check=classifyManualRecipient({owner,creatorKey:'youtube:'+entry.channel,email:entry.email,records:history.records.filter(r=>r.batchId!==batch.id),suppressed:history.suppressedKeys.includes(emailKey),explicitRefusal:history.refusedKeys.includes(emailKey),complete:history.complete===true&&history.refusalsComplete===true});
   if(!check.eligible)fail('RECIPIENT_BLOCKED');return history;
