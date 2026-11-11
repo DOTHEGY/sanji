@@ -20,7 +20,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class IdentityInputInvalid(ValueError):
-    REASONS = frozenset({"url_type", "url_too_long", "token_type", "token_length", "token_whitespace", "url_parse", "url_scheme", "url_credentials", "url_port", "url_fragment", "url_host_actions_subdomain", "url_host_other"})
+    REASONS = frozenset({"url_type", "url_too_long", "token_type", "token_length", "token_whitespace", "url_parse", "url_scheme", "url_credentials", "url_port", "url_fragment", "url_host_vstoken", "url_host_actions_subdomain", "url_host_other"})
 
     def __init__(self, reason):
         self.reason = reason if reason in self.REASONS else "other"
@@ -52,6 +52,8 @@ def github_token(request_url, request_token, opener=None):
     if url.fragment:
         raise IdentityInputInvalid("url_fragment")
     if host not in ("pipelines.actions.githubusercontent.com", "token.actions.githubusercontent.com"):
+        if host == "vstoken.actions.githubusercontent.com":
+            raise IdentityInputInvalid("url_host_vstoken")
         raise IdentityInputInvalid("url_host_actions_subdomain" if host and host.endswith(".actions.githubusercontent.com") else "url_host_other")
     client = opener or urllib.request.build_opener(NoRedirect())
     target = request_url + ("&" if url.query else "?") + urllib.parse.urlencode({"audience": AUDIENCE})
