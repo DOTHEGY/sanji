@@ -1,0 +1,5 @@
+a04e71cd37972b7c9dafedff3f8b3afdf9af9eb749f3e20912fcafeddb12b912  supabase/proposals/youtube-manual-project-provenance.sql
+dbf14615d2820435ab71cfc8f2dcce274f82918793ee9ee9cbf0e38ca6d193dc  supabase/dashboard/youtube-manual-mail.mjs
+3c920915528fd839f261969cde7935ac28f30c47d0fcdd48ef2cd674f7f0381c  supabase/dashboard/youtube-manual-scheduler.mjs
+f65780f01e9b916c2f147234ef11b88bd1a4a3abb8b5fad4734ea5985cd7b008  tests/evidence/youtube-project-94fbc/full-regression.log
+388dec56ade575a517b1b64af385189618b380367088319667fca700c8defb9a  tests/evidence/youtube-project-94fbc/project-targeted.log
