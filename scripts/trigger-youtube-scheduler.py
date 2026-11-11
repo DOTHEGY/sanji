@@ -19,12 +19,19 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+class IdentityInputInvalid(ValueError):
+    pass
+
+
 def github_token(request_url, request_token, opener=None):
     if not isinstance(request_url, str) or len(request_url) > 8192 or not isinstance(request_token, str) or not 1 <= len(request_token) <= 8192 or any(c.isspace() for c in request_token):
-        raise ValueError("GitHub identity unavailable")
-    url = urllib.parse.urlsplit(request_url)
-    if url.scheme != "https" or url.hostname not in ("pipelines.actions.githubusercontent.com", "token.actions.githubusercontent.com") or url.username or url.password or url.port not in (None, 443) or url.fragment:
-        raise ValueError("GitHub identity endpoint invalid")
+        raise IdentityInputInvalid("GitHub identity unavailable")
+    try:
+        url = urllib.parse.urlsplit(request_url)
+        if url.scheme != "https" or url.hostname not in ("pipelines.actions.githubusercontent.com", "token.actions.githubusercontent.com") or url.username or url.password or url.port not in (None, 443) or url.fragment:
+            raise IdentityInputInvalid("GitHub identity endpoint invalid")
+    except ValueError as exc:
+        raise IdentityInputInvalid("GitHub identity endpoint invalid") from exc
     client = opener or urllib.request.build_opener(NoRedirect())
     target = request_url + ("&" if url.query else "?") + urllib.parse.urlencode({"audience": AUDIENCE})
     req = urllib.request.Request(target, headers={"Authorization": "Bearer " + request_token})
@@ -82,15 +89,50 @@ def health(token, opener=None):
         raise RuntimeError("scheduler health invalid")
 
 
+def health_diagnostic(environ, get_token=github_token, check_health=health):
+    """Only fixed stage labels and HTTP status are returned; no exception text."""
+    def failed(stage, kind, exc=None):
+        result = {"stage": stage, "result": kind}
+        if isinstance(exc, urllib.error.HTTPError) and type(exc.code) is int and 100 <= exc.code <= 599:
+            result["http_status"] = exc.code
+        return False, result
+
+    request_url = environ.get("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+    request_token = environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
+    if not request_url or not request_token:
+        return failed("identity_input", "missing")
+    try:
+        token = get_token(request_url, request_token)
+    except IdentityInputInvalid:
+        return failed("identity_input", "invalid")
+    except urllib.error.HTTPError as exc:
+        return failed("identity_request", "http_error", exc)
+    except (urllib.error.URLError, TimeoutError):
+        return failed("identity_request", "transport_error")
+    except Exception:
+        return failed("identity_request", "invalid_or_unavailable")
+
+    try:
+        check_health(token)
+    except urllib.error.HTTPError as exc:
+        return failed("scheduler_health", "http_error", exc)
+    except (urllib.error.URLError, TimeoutError):
+        return failed("scheduler_health", "transport_error")
+    except Exception:
+        return failed("scheduler_health", "invalid_or_unavailable")
+    return True, {"stage": "scheduler_health", "result": "authenticated"}
+
+
 if __name__ == "__main__":
     try:
         if sys.argv[1:] not in ([], ["--health"]):
             raise ValueError("invalid mode")
-        token = github_token(os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL", ""), os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN", ""))
         if sys.argv[1:] == ["--health"]:
-            health(token)
-        else:
-            trigger(token)
+            ok, result = health_diagnostic(os.environ)
+            print(json.dumps(result, separators=(",", ":")), file=sys.stdout if ok else sys.stderr)
+            sys.exit(0 if ok else 1)
+        token = github_token(os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL", ""), os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN", ""))
+        trigger(token)
     except Exception:
         print("Scheduler did not complete; review status before further action.", file=sys.stderr)
         sys.exit(1)
