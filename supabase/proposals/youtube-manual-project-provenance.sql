@@ -1,5 +1,8 @@
 -- Review candidate: preserve ACLs, do not backfill or touch existing records.
 begin;
+do $$ begin
+ if to_regprocedure('public.sanji_youtube_manual_reserve(uuid,uuid,uuid,integer,text,text,text,text)') is null or to_regprocedure('public.sanji_youtube_manual_finish(uuid,uuid,uuid,text,text,text)') is null then raise exception 'expected existing functions missing'; end if;
+end $$;
 create or replace function public.sanji_youtube_manual_reserve(p_owner uuid,p_batch uuid,p_candidate uuid,p_version integer,p_email text,p_approval text,p_payload text,p_message_id text) returns uuid
 language plpgsql security definer set search_path='' as $$
 declare c public.sanji_records; b public.sanji_youtube_manual_batches; k text; ch text; result uuid;
@@ -35,4 +38,7 @@ begin
  end if;
  update public.sanji_youtube_manual_ledger set state=p_result,provider_id=case when p_result='accepted' then p_provider_id else null end,provider_thread=case when p_result='accepted' then p_provider_thread else null end,outbox_id=o,thread_id=t,claim_token=null,updated_at=clock_timestamp() where id=r.id;
 end $$;
+revoke all on function public.sanji_youtube_manual_reserve(uuid,uuid,uuid,integer,text,text,text,text) from public,anon,authenticated,service_role;
+revoke all on function public.sanji_youtube_manual_finish(uuid,uuid,uuid,text,text,text) from public,anon,authenticated,service_role;
+grant execute on function public.sanji_youtube_manual_finish(uuid,uuid,uuid,text,text,text) to service_role;
 commit;
