@@ -1,8 +1,8 @@
 name: YouTube email scheduler
 on:
   schedule:
-    # 10:00–11:55 Korea time. GitHub may start scheduled workflows late.
-    - cron: '*/5 1-2 * * *'
+    # 10:00–11:55 and 15:00–16:55 Korea time. GitHub may start workflows late.
+    - cron: '*/5 1-2,6-7 * * *'
   workflow_dispatch:
 permissions:
   contents: read

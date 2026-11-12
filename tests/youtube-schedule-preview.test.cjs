@@ -21,3 +21,18 @@ test('reservation final action uses reviewed time, never promises tomorrow',()=>
  assert.ok(source.includes("format(new Date(expectedRunAt))"));
  assert.ok(source.includes("'/schedule',{...body,expectedRunAt}"));
 });
+test('selected KST minute preserves 15:00 and midnight boundaries without a silent shift',async()=>{
+ const {chosenTimeSeoul,reviewProjectReservation}=await import('../web/youtube-schedule-preview.mjs');
+ const now='2026-11-12T01:00:00Z';
+ assert.equal(chosenTimeSeoul('2026-11-12','15:00',now),'2026-11-12T06:00:00.000Z');
+ assert.equal(chosenTimeSeoul('2026-11-13','10:00','2026-11-12T15:00:00Z'),'2026-11-13T01:00:00.000Z');
+ assert.equal(chosenTimeSeoul('2027-01-01','15:00','2026-12-31T15:00:00Z'),'2027-01-01T06:00:00.000Z');
+ assert.equal(reviewProjectReservation({rows:[],projectId:'gs-bbangteojineunjip-chewy-bread',day:'2026-11-11',sendDay:'2026-11-12',sendTime:'15:00',now}).runAt,'2026-11-12T06:00:00.000Z');
+ for(const time of ['00:00','14:00','15:01','','24:00','15:60','3:00','15:00:01',null])assert.throws(()=>chosenTimeSeoul('2026-11-12',time,now));
+ for(const time of ['10:00'])assert.throws(()=>chosenTimeSeoul('2026-11-12',time,now),/지나지 않은/);
+ assert.throws(()=>chosenTimeSeoul('2026-02-30','15:00',now));
+ const source=require('node:fs').readFileSync('web/youtube-saved.mjs','utf8');
+ assert.ok(source.includes("const sendTime=node('select')"));assert.ok(source.includes('sendTime:sendTime.value'));assert.ok(!source.includes('오전 10시'));
+});
+
+test('explicit afternoon is not silently replaced when send day uses the default',async()=>{const {reviewProjectReservation}=await import('../web/youtube-schedule-preview.mjs');const options={rows:[],projectId:'gs-bbangteojineunjip-chewy-bread',day:'2026-11-12',now:'2026-11-12T02:00:00Z'};assert.equal(reviewProjectReservation({...options,sendTime:'15:00'}).runAt,'2026-11-13T06:00:00.000Z');assert.throws(()=>reviewProjectReservation({...options,sendTime:'14:00'}));});

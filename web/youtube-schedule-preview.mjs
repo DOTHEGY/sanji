@@ -8,15 +8,17 @@ export function tomorrowTenSeoul(now){
  const seoul=new Date(ms+9*3600000);
  return new Date(Date.UTC(seoul.getUTCFullYear(),seoul.getUTCMonth(),seoul.getUTCDate()+1,1)).toISOString();
 }
-export function chosenTenSeoul(day,now){
+export function chosenTimeSeoul(day,time,now){
  const ms=now instanceof Date?now.getTime():Date.parse(now);
  if(!Number.isFinite(ms))throw Error('현재 시각을 확인할 수 없습니다.');
- const at=typeof day==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(day)?Date.parse(day+'T01:00:00Z'):NaN;
- if(!Number.isFinite(at)||new Date(at).toISOString().slice(0,10)!==day)throw Error('예약 날짜를 확인하세요.');
- if(at<=ms)throw Error('아직 지나지 않은 오전 10시(한국 시간)를 선택하세요.');
+ if(typeof day!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(day)||!['10:00','15:00'].includes(time))throw Error('예약 날짜와 시각을 확인하세요.');
+ const at=Date.parse(day+'T'+time+':00+09:00');
+ if(!Number.isFinite(at)||new Date(at+9*3600000).toISOString().slice(0,16)!==day+'T'+time)throw Error('예약 날짜와 시각을 확인하세요.');
+ if(at<=ms)throw Error('아직 지나지 않은 시각(한국 시간)을 선택하세요.');
  return new Date(at).toISOString();
 }
-export function reviewProjectReservation({rows,projectId,day,excludedIds=[],now,sendDay}){
+export function chosenTenSeoul(day,now){return chosenTimeSeoul(day,'10:00',now);}
+export function reviewProjectReservation({rows,projectId,day,excludedIds=[],now,sendDay,sendTime='10:00'}){
  if(projectId!==FIRST_PROJECT.id||!Array.isArray(rows)||!Array.isArray(excludedIds)||!/^\d{4}-\d{2}-\d{2}$/.test(day||'')||new Date(day+'T00:00:00Z').toISOString().slice(0,10)!==day)throw Error('프로젝트와 날짜를 확인하세요.');
  const excluded=new Set(excludedIds),inProject=rows.filter(r=>projectMemberships(r?.data).some(p=>p.id===projectId));
  const blockedProfiles=new Set(),blockedEmails=new Set();
@@ -28,6 +30,6 @@ export function reviewProjectReservation({rows,projectId,day,excludedIds=[],now,
   if(!/^https:\/\/(?:www\.)?youtube\.com\/channel\/UC[A-Za-z0-9_-]{22}$/.test(profile)||!Number.isSafeInteger(audience)||audience<30000||audience>200000||!key){held.push(row.id);continue;}
   const channel=profile.split('/').pop();if(seenProfiles.has(channel)||seenEmails.has(key)){held.push(row.id);continue;}seenProfiles.add(channel);seenEmails.add(key);candidates.push({id:row.id,version:row.version,name:row.data.name,email});
  }
- return {runAt:sendDay===undefined?tomorrowTenSeoul(now):chosenTenSeoul(sendDay,now),projectId,day,candidates,held,reviewOnly:true};
+ return {runAt:chosenTimeSeoul(sendDay===undefined?tomorrowTenSeoul(now).slice(0,10):sendDay,sendTime,now),projectId,day,candidates,held,reviewOnly:true};
 }
 
