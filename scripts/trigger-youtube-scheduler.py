@@ -103,6 +103,35 @@ def trigger(token, opener=None, maximum=30):
     raise RuntimeError("scheduler invocation limit reached")
 
 
+def approved_batch(token, opener=None, maximum=30):
+    """Continue only this approved batch after a definitive scheduled response.
+
+    No transport, HTTP, malformed-response, held, or uncertain result is retried.
+    The server rechecks the fixed owner/batch/approval and authorization expiry.
+    """
+    if not isinstance(token, str) or not 1 <= len(token) <= 8192 or any(c.isspace() for c in token):
+        raise ValueError("scheduler identity unavailable")
+    if type(maximum) is not int or not 1 <= maximum <= 30:
+        raise ValueError("invalid invocation limit")
+    client = opener or urllib.request.build_opener(NoRedirect())
+    for _ in range(maximum):
+        request = urllib.request.Request(URL + "/manual-approved-20261112", data=b"{}", method="POST", headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
+        with client.open(request, timeout=60) as response:
+            if response.status != 200:
+                raise RuntimeError("manual scheduler response unavailable")
+            raw = response.read(4097)
+        if len(raw) > 4096:
+            raise RuntimeError("manual scheduler response invalid")
+        payload = json.loads(raw)
+        if not isinstance(payload, dict) or set(payload) != {"status"}:
+            raise RuntimeError("manual scheduler response invalid")
+        if payload["status"] in ("complete", "idle"):
+            return payload["status"]
+        if payload["status"] != "scheduled":
+            raise RuntimeError("manual scheduler stopped; review required")
+    raise RuntimeError("manual scheduler invocation limit reached")
+
+
 def health(token, opener=None):
     if not isinstance(token, str) or not 1 <= len(token) <= 8192 or any(c.isspace() for c in token):
         raise ValueError("scheduler identity unavailable")
@@ -152,15 +181,19 @@ def health_diagnostic(environ, get_token=github_token, check_health=health):
 
 if __name__ == "__main__":
     try:
-        if sys.argv[1:] not in ([], ["--health"]):
+        if sys.argv[1:] not in ([], ["--health"], ["--approved-batch"]):
             raise ValueError("invalid mode")
         if sys.argv[1:] == ["--health"]:
             ok, result = health_diagnostic(os.environ)
             print(json.dumps(result, separators=(",", ":")), file=sys.stdout if ok else sys.stderr)
             sys.exit(0 if ok else 1)
         token = github_token(os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL", ""), os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN", ""))
-        trigger(token)
+        if sys.argv[1:] == ["--approved-batch"]:
+            approved_batch(token)
+        else:
+            trigger(token)
     except Exception:
         print("Scheduler did not complete; review status before further action.", file=sys.stderr)
         sys.exit(1)
     print("Scheduler checked due work.")
+

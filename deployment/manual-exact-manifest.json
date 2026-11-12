@@ -1,0 +1,41 @@
+{
+  "baseline": {
+    "main": "a02b62216014b26db898751e2fc7b4ade05eb0da",
+    "productionFunction": "youtube-manual-scheduler",
+    "version": 4,
+    "sourceSha256": "3dfde939d536e15052f73e910b12ae9645afed1cf2b122dbdd08c20913cadb35",
+    "verify_jwt": false,
+    "authentication": "Unchanged GitHub OIDC verifier. Manual route requires workflow_dispatch from the existing main workflow."
+  },
+  "manualScope": {
+    "batchId": "f8e70802-9223-487e-adf5-02fdc088301a",
+    "owner": "e59d9463-c111-40b2-b267-a0100f8ab05b",
+    "approvalHash": "6e79abe7c0f21ea6a2e50da3b7e9b990a038504fc9452c4d243c87d88be6a8a4",
+    "count": 54,
+    "expiresAt": "2026-11-12T09:00:00.000Z"
+  },
+  "deploymentRequirements": [
+    "Recheck latest production and batch state before applying.",
+    "Apply CREATE FUNCTION, REVOKE and GRANT in one transaction.",
+    "No change to existing JWT gateway setting or OIDC verification.",
+    "Workflow default remains health. Explicit approved-nov12-54 choice is required.",
+    "Stop on uncertainty. Do not revive processing, held, cancelled or unknown states.",
+    "No production deployment or send was performed by artifact author."
+  ],
+  "verification": {
+    "tests": 16,
+    "independentReview": "No blocking issue. Atomic migration required.",
+    "sqlRuntime": "PGlite fixture execution; digest/time replaced only for synthetic tests. No live SQL mutation.",
+    "concurrencyLimit": "NOWAIT row locks and repeated-claim tests; PGlite does not model multiple independent connections."
+  },
+  "files": {
+    "deployment/youtube-manual-scheduler-exact-20261112.mjs": "8020cc26682b11459cf116a7cda7e5bf7c1f7eaf530d932301271e27a844ba28",
+    "deployment/manual-exact-source.mjs": "053105f1b97ef4adfe67aecef0fd1f361eff0d9579f93b2083120274e947abd2",
+    "deployment/manual-exact-claim.sql": "56831fc24ed949068356741de03516922b2c3722d9f3eb186c4205be384c1dc8",
+    ".github/workflows/youtube-manual-scheduler.yml": "3c6ec27ef0bf2f1c5e6cc75e6952fc98ce95a16a859108f3e5a4f584dfb8ea3f",
+    "scripts/trigger-youtube-scheduler.py": "d4b122fa18d9646f19d0ca5e17ae353f1d2d69371d8cbb1290085e25b82e1c5c",
+    "tests/exact-manual.test.cjs": "353805d61a3173e033250d4980015ba5548488ae5e158577e87f3aeade7bdfb2",
+    "tests/exact-claim-sql.test.cjs": "15693fa7da1c986c23c6a54952ceddeb74a05d6fd34fa3c8615ce8d662a6a4bf",
+    "tests/helpers/exact-manual-release.cjs": "910666621c22f2bc17391e0f54e6170b14e05fd1485f373c50369bb7162cf7fb"
+  }
+}

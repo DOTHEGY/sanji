@@ -4,6 +4,15 @@ on:
     # 10:00–11:55 and 15:00–16:55 Korea time. GitHub may start workflows late.
     - cron: '*/5 1-2,6-7 * * *'
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Health only or the approved 54-row Nov 12 batch (expires 18:00 KST)"
+        type: choice
+        default: health
+        required: true
+        options:
+          - health
+          - approved-nov12-54
 permissions:
   contents: read
   id-token: write
@@ -22,5 +31,9 @@ jobs:
         if: github.event_name == 'schedule'
         run: python3 scripts/trigger-youtube-scheduler.py
       - name: Check authentication without processing work
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && inputs.mode != 'approved-nov12-54'
         run: python3 scripts/trigger-youtube-scheduler.py --health
+
+      - name: Process only the approved November 12 reservation
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'approved-nov12-54'
+        run: python3 scripts/trigger-youtube-scheduler.py --approved-batch
