@@ -1,3 +1,4 @@
+import {classifyYoutubeDescription} from '../_shared/mcn-exclusion.mjs';
 import {buildBriefReview,annotateCandidate} from './relevance.mjs';
 import { mukbangReview } from './review-filters.mjs';
 export const DISCOVERY_LIMITS = {target:50, searchCalls:4, candidates:100, pageSize:50};
@@ -77,7 +78,7 @@ export async function discover(body, {apiKey, fetchImpl=fetch, now=()=>Date.now(
     const visible = new Set();
     for (const item of channels) if (item && candidates.has(item.id)) {
       visible.add(item.id);
-      Object.assign(candidates.get(item.id), {title:publicText(item.snippet?.title,150)||candidates.get(item.id).title,description:publicText(item.snippet?.description), subscriberCount:item.statistics?.hiddenSubscriberCount ? null : publicCount(item.statistics?.subscriberCount), subscribersHidden:Boolean(item.statistics?.hiddenSubscriberCount), uploadsPlaylistId:/^UU[A-Za-z0-9_-]{22}$/.test(item.contentDetails?.relatedPlaylists?.uploads||'')?item.contentDetails.relatedPlaylists.uploads:null});
+      Object.assign(candidates.get(item.id), {title:publicText(item.snippet?.title,150)||candidates.get(item.id).title,description:publicText(item.snippet?.description),mcnAssessment:classifyYoutubeDescription(item.id,item.snippet?.description), subscriberCount:item.statistics?.hiddenSubscriberCount ? null : publicCount(item.statistics?.subscriberCount), subscribersHidden:Boolean(item.statistics?.hiddenSubscriberCount), uploadsPlaylistId:/^UU[A-Za-z0-9_-]{22}$/.test(item.contentDetails?.relatedPlaylists?.uploads||'')?item.contentDetails.relatedPlaylists.uploads:null});
     }
     for (const id of candidates.keys()) if (!visible.has(id)) {candidates.delete(id);unavailableChannels++;}
   }
