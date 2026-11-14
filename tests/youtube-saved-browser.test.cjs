@@ -2,7 +2,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),http=requir
 const esbuild=require('esbuild');const {chromium}=require('@playwright/test');
 let browser,server,base;
 test.before(async()=>{const bundle=(await esbuild.build({stdin:{contents:`import {mountYoutubeSaved} from './web/youtube-saved.mjs';window.mountYoutubeSaved=mountYoutubeSaved;`,resolveDir:path.resolve(__dirname,'..')},bundle:true,write:false,format:'iife'})).outputFiles[0].text;
-server=http.createServer((req,res)=>{res.setHeader('Content-Type',req.url==='/app.js'?'text/javascript':'text/html');res.end(req.url==='/app.js'?bundle:'<div id="saved"></div><script src="/app.js"></script>');});await new Promise(r=>server.listen(0,'127.0.0.1',r));base=`http://127.0.0.1:${server.address().port}`;browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});});
+server=http.createServer((req,res)=>{res.setHeader('Content-Type',req.url==='/app.js'?'text/javascript; charset=utf-8':'text/html; charset=utf-8');res.end(req.url==='/app.js'?bundle:'<div id="saved"></div><script src="/app.js"></script>');});await new Promise(r=>server.listen(0,'127.0.0.1',r));base=`http://127.0.0.1:${server.address().port}`;browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});});
 test.after(async()=>{await browser?.close();if(server)await new Promise(r=>server.close(r));});
 async function page(){const p=await browser.newPage();await p.goto(base);await p.evaluate(()=>{
 window.owner='owner-a';window.rows=[];window.reads=0;window.saves=0;window.changes=0;window.gate=null;window.saveGate=null;
