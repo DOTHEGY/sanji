@@ -1,3 +1,4 @@
+import {youtubeSelectionExclusion} from '../supabase/functions/_shared/mcn-exclusion.mjs';
 import {savedEmailDisplay} from './youtube-email-view.mjs';
 import {emailIdentity} from '../supabase/functions/creator-daily-outreach/domain.mjs';
 // Project membership is explicit and separate from topic collections.
@@ -20,7 +21,7 @@ export function projectStats(rows,id,day){
  for(const row of rows){const membership=projectMemberships(row?.data).find(p=>p.id===id);if(!membership)continue;
   const profile=row.data?.profile;if(typeof profile!=='string'||!/^https:\/\/(?:www\.)?youtube\.com\/channel\/UC[A-Za-z0-9_-]{22}\/?$/.test(profile))continue;
   const key=profile.replace(/^https:\/\/(?:www\.)?youtube\.com/,'https://www.youtube.com').replace(/\/$/,'');if(seen.has(key))continue;seen.add(key);unique.push({row,membership});}
- const qualified=unique.filter(x=>Number.isFinite(x.row.data?.followers)&&x.row.data.followers>=FIRST_PROJECT.minFollowers&&x.row.data.followers<=FIRST_PROJECT.maxFollowers);
+ const qualified=unique.filter(x=>!youtubeSelectionExclusion(x.row).excluded&&Number.isFinite(x.row.data?.followers)&&x.row.data.followers>=FIRST_PROJECT.minFollowers&&x.row.data.followers<=FIRST_PROJECT.maxFollowers);
  const mailSeen=new Set(),withEmail=[];
  for(const x of [...qualified].sort((a,b)=>Date.parse(a.membership.addedAt)-Date.parse(b.membership.addedAt))){const key=emailIdentity(sourcedEmail(x.row.data));if(!key||mailSeen.has(key))continue;mailSeen.add(key);withEmail.push(x);}
  return {count:unique.length,qualified:qualified.length,withEmail:withEmail.length,today:withEmail.filter(x=>projectDay(x.membership)===day).length,rows:unique.map(x=>x.row)};

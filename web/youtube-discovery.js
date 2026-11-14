@@ -173,9 +173,9 @@ $('queries').addEventListener('input', () => { queryOrigin = $('queries').value.
 $('use-30k').addEventListener('click',()=>{$('minimum-subscribers').value='30000';$('maximum-subscribers').value='200000';updateFolds();});
 for (const id of ['minimum-subscribers','maximum-subscribers','minimum-views','result-order','fold-news', 'fold-business', 'fold-mukbang']) $(id).addEventListener('change', updateFolds);
 $('show-all').addEventListener('click', () => { $('minimum-subscribers').value='0';$('maximum-subscribers').value='0';$('minimum-views').value='0'; $('fold-mukbang').checked = false; $('fold-news').checked = false; $('fold-business').checked = false; updateFolds(); });
-function selectedCandidateExcluded(){return resultCards.some(row=>row.channel.channelId===selectedChannelId&&row.reviewState==='excluded');}
+function selectedCandidateExcluded(){return resultCards.some(row=>row.channel.channelId===selectedChannelId&&(row.reviewState==='excluded'||row.channel.mcnAssessment?.excluded===true));}
 function selectContact(contact, channel, brief) {
-  if(resultCards.some(row=>row.channel.channelId===channel.channelId&&row.reviewState==='excluded'))return;
+  if(channel.mcnAssessment?.excluded===true||resultCards.some(row=>row.channel.channelId===channel.channelId&&row.reviewState==='excluded'))return;
   selectedChannelId=channel.channelId;
   selectedEmail = contact.email;
   $('recipient').replaceChildren(document.createTextNode(`수신자: ${selectedEmail} · ${channel.title} · `), link('직접 확인한 연락처 출처', contact.sourceUrl), el('span', ` · 공개 용도·확인 메모: ${contact.context}`));
@@ -242,7 +242,7 @@ function renderChannel(channel, ticket) {
   const choose = el('button', '입력한 주소로 초안 작성'); choose.disabled = true;
   function valid() {
     let url; try { url = new URL(source.value); } catch { return false; }
-    return reviewRow.reviewState!=='excluded' && consent.checked && Boolean(context.value.trim()) && email.validity.valid && /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email.value) && url.protocol === 'https:' && !url.username && !url.password;
+    return channel.mcnAssessment?.excluded!==true && reviewRow.reviewState!=='excluded' && consent.checked && Boolean(context.value.trim()) && email.validity.valid && /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email.value) && url.protocol === 'https:' && !url.username && !url.password;
   }
   for (const field of [email, source, context]) field.addEventListener('input', () => { consent.checked = false; choose.disabled = true; clearDraft(); });
   consent.addEventListener('change', () => { choose.disabled = !valid(); if (!consent.checked) clearDraft(); });
