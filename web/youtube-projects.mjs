@@ -11,18 +11,15 @@ export function addProjectMembership(data,id,addedAt,assignedDay){
  return {...data,youtubeResearch:{...(data.youtubeResearch||{}),projects:[...existing,{id,addedAt,...(assignedDay?{assignedDay}:{})}]}};
 }
 export function projectDay(membership){return typeof membership?.assignedDay==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(membership.assignedDay)&&Number.isFinite(Date.parse(membership.assignedDay))?membership.assignedDay:new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(membership.addedAt));}
-export function sourcedEmail(data){
- const chosen=savedEmailDisplay(data).email;if(!chosen)return null;
- const contacts=[data?.contact,...(Array.isArray(data?.youtubeResearch?.businessContacts)?data.youtubeResearch.businessContacts:[])];
- return contacts.some(c=>{try{const u=new URL(c?.sourceUrl||c?.source||'');return typeof c?.email==='string'&&c.email.trim().toLowerCase()===chosen&&u.protocol==='https:'&&!u.username&&!u.password&&Number.isFinite(Date.parse(c.checked||c.observedAt||''));}catch{return false;}})?chosen:null;
-}
+export function sourcedEmail(data){return savedEmailDisplay(data).email;}
+
 export function projectStats(rows,id,day){
  const seen=new Set(),unique=[];
  for(const row of rows){const membership=projectMemberships(row?.data).find(p=>p.id===id);if(!membership)continue;
   const profile=row.data?.profile;if(typeof profile!=='string'||!/^https:\/\/(?:www\.)?youtube\.com\/channel\/UC[A-Za-z0-9_-]{22}\/?$/.test(profile))continue;
   const key=profile.replace(/^https:\/\/(?:www\.)?youtube\.com/,'https://www.youtube.com').replace(/\/$/,'');if(seen.has(key))continue;seen.add(key);unique.push({row,membership});}
- const qualified=unique.filter(x=>!youtubeSelectionExclusion(x.row).excluded&&Number.isFinite(x.row.data?.followers)&&x.row.data.followers>=FIRST_PROJECT.minFollowers&&x.row.data.followers<=FIRST_PROJECT.maxFollowers);
+ const eligible=unique.filter(x=>!youtubeSelectionExclusion(x.row).excluded),qualified=eligible.filter(x=>Number.isFinite(x.row.data?.followers)&&x.row.data.followers>=FIRST_PROJECT.minFollowers&&x.row.data.followers<=FIRST_PROJECT.maxFollowers);
  const mailSeen=new Set(),withEmail=[];
- for(const x of [...qualified].sort((a,b)=>Date.parse(a.membership.addedAt)-Date.parse(b.membership.addedAt))){const key=emailIdentity(sourcedEmail(x.row.data));if(!key||mailSeen.has(key))continue;mailSeen.add(key);withEmail.push(x);}
+ for(const x of [...eligible].sort((a,b)=>Date.parse(a.membership.addedAt)-Date.parse(b.membership.addedAt))){const key=emailIdentity(sourcedEmail(x.row.data));if(!key||mailSeen.has(key))continue;mailSeen.add(key);withEmail.push(x);}
  return {count:unique.length,qualified:qualified.length,withEmail:withEmail.length,today:withEmail.filter(x=>projectDay(x.membership)===day).length,rows:unique.map(x=>x.row)};
 }
