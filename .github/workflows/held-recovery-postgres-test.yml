@@ -1,0 +1,30 @@
+name: Isolated held recovery PostgreSQL concurrency
+on:
+  workflow_dispatch:
+  push:
+    branches: ['test/youtube-held-concurrency-20261116']
+permissions:
+  contents: read
+jobs:
+  isolated-postgres:
+    if: github.ref == 'refs/heads/test/youtube-held-concurrency-20261116'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:17.7
+        env:
+          POSTGRES_USER: fixture
+          POSTGRES_PASSWORD: synthetic-ci-only
+          POSTGRES_DB: held_recovery_test
+        options: >-
+          --health-cmd "pg_isready -U fixture -d held_recovery_test"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Two-session synthetic recovery tests
+        env:
+          POSTGRES_TEST_CONTAINER: ${{ job.services.postgres.id }}
+        run: python3 tests/held-recovery-ci/run.py
