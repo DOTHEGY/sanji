@@ -1,18 +1,20 @@
 import { createClient } from '@supabase/supabase-js';
 import { supabaseUrl, supabaseKey } from './supabase-config.js';
-import { weddingCandidate, weddingRows } from './youtube-wedding-model.mjs';
+import { researchDay, weddingCandidate, weddingRows } from './youtube-wedding-model.mjs';
+import { verifiedContactsForDay, readVerifiedProjectContacts } from './youtube-verified-project-contacts.mjs';
 const client = createClient(supabaseUrl, supabaseKey, {auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:false,flowType:'pkce'}});
 const $ = id => document.getElementById(id);
 const heading=$('wedding-heading'), panel=$('wedding-panel'), auth=$('wedding-auth'), form=$('wedding-form'),
-  status=$('wedding-status'), filter=$('wedding-day'), list=$('wedding-list'), refresh=$('wedding-refresh');
+  status=$('wedding-status'), filter=$('wedding-day'), list=$('wedding-list'), refresh=$('wedding-refresh'),
+  contactStatus=$('wedding-contact-status'), contactList=$('wedding-contact-list');
 const generic='별도 YouTube 프로젝트', projectTable='sanji_private_wedding_projects', shortlistTable='sanji_private_wedding_shortlist';
-let owner=null, epoch=0, rows=[], disposed=false, saving=false, uncertain=false, refreshing=false;
+let owner=null, epoch=0, rows=[], contacts=null, disposed=false, saving=false, uncertain=false, refreshing=false;
 const element=(tag,text)=>{const node=document.createElement(tag);node.textContent=text;return node;};
 const link=(label,address)=>{const node=element('a',label);node.href=address;node.target='_blank';node.rel='noopener noreferrer';return node;};
 const current=(actor,ticket)=>!disposed&&ticket===epoch&&owner===actor;
 function clear(){
-  owner=null;rows=[];panel.hidden=true;heading.textContent=generic;saving=false;uncertain=false;refreshing=false;
-  status.textContent='';form.reset();filter.replaceChildren(new Option('전체',''));list.replaceChildren();
+  owner=null;rows=[];contacts=null;panel.hidden=true;heading.textContent=generic;saving=false;uncertain=false;refreshing=false;
+  status.textContent='';contactStatus.textContent='';contactList.replaceChildren();form.reset();filter.replaceChildren(new Option('전체',''));list.replaceChildren();
 }
 function draw(){
   const day=filter.value, all=weddingRows(rows,owner);
@@ -20,6 +22,16 @@ function draw(){
   filter.replaceChildren(new Option('전체',''), ...days.map(d=>new Option(d,d)));
   filter.value=days.includes(day)?day:'';
   const visible=weddingRows(rows,owner,filter.value);
+  const verified=contacts===null?null:verifiedContactsForDay(contacts,filter.value);
+  contactStatus.textContent=verified===null
+    ? '주소 확인 목록을 불러오지 못했습니다. 조사 원본은 아래에서 볼 수 있습니다.'
+    : `공개 비즈니스 주소 확인 ${verified.length}개 · 조사 기록 ${visible.length}개`;
+  contactList.replaceChildren(...(verified??[]).map(row=>{
+    const item=element('li','');
+    item.append(element('strong',row.name),element('p',row.email),
+      element('p',row.projectDay+' · 주소 확인 '+researchDay(row.verifiedAt)),link('주소 확인 출처',row.sourceUrl));
+    return item;
+  }));
   list.replaceChildren(...visible.map(row=>{
     const item=element('li','');
     item.append(element('strong',row.name),element('p',row.projectDay+' · '+row.note),link('채널 원문',row.channelUrl),document.createTextNode(' · '),link('영상 근거',row.evidenceUrl));
@@ -73,7 +85,12 @@ async function verify(session){
     owner=requested;
     const next=await readRows(requested,ticket);
     if(!current(requested,ticket)||!next)return;
-    rows=next;uncertain=false;saving=false;heading.textContent=project.data.title;auth.textContent='후보 조사 목록 · 메일 기능 없음';panel.hidden=false;draw();
+    let nextContacts=null;
+    try { nextContacts=await readVerifiedProjectContacts({client,owner:requested,shortlist:next,current:()=>current(requested,ticket)}); }
+    catch { /* An unavailable evidence query must not look like zero verified contacts. */ }
+    if(!current(requested,ticket))return;
+    rows=next;contacts=nextContacts;uncertain=false;saving=false;heading.textContent=project.data.title;
+    auth.textContent='비즈니스 주소 확인 · 발송 기능 없음';panel.hidden=false;draw();
   }catch{if(!disposed&&ticket===epoch){clear();auth.textContent='워크스페이스 권한 또는 목록을 확인하지 못했습니다. 화면을 다시 열어 주세요.';}}
 }
 // Do not await Supabase calls inside the SDK's auth-event callback.
