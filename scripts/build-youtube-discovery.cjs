@@ -14,3 +14,10 @@ for(const file of ['app.js','style.css']){
 }
 fs.writeFileSync(path.join(out,'index.html'),html);
 console.log('Isolated YouTube discovery built: public/workspace/youtube/');
+const wedding=path.join(out,'wedding');
+fs.mkdirSync(wedding,{recursive:true});
+esbuild.buildSync({entryPoints:[path.join(root,'web/youtube-wedding.js')],bundle:true,outfile:path.join(wedding,'app.js'),platform:'browser',target:'es2022',format:'iife',minify:true});
+const weddingJs=crypto.createHash('sha256').update(fs.readFileSync(path.join(wedding,'app.js'))).digest('hex').slice(0,12);
+const weddingCss=crypto.createHash('sha256').update(fs.readFileSync(path.join(out,'style.css'))).digest('hex').slice(0,12);
+fs.writeFileSync(path.join(wedding,'index.html'),fs.readFileSync(path.join(root,'private/youtube-wedding/index.html'),'utf8')
+ .replace('./app.js','./app.js?v='+weddingJs).replace('../style.css','../style.css?v='+weddingCss));
