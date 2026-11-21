@@ -22,3 +22,5 @@
 .mail-history-accepted { background:#dcfce7; color:#14532d; }
 .mail-history-outcome_unknown,.mail-history-held,.mail-history-unverified,.mail-history-processing { background:#fef3c7; color:#78350f; }
 .mail-history-failed,.mail-history-bounced { background:#fee2e2; color:#7f1d1d; }
+
+.creator-project-day{margin-block:1rem 1.6rem}.creator-project-day>h4{margin-block:0 .6rem}.creator-mail-state{font-weight:700;white-space:nowrap}.creator-mail-sent{color:#1a7352}.creator-mail-scheduled{color:#234fa5}.creator-mail-found_only{color:#4c5768}.creator-mail-unknown,.creator-mail-failed{color:#8a400d}.creator-project-day td small{display:block}

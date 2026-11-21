@@ -7,7 +7,7 @@ test.after(async()=>{await browser?.close();if(server)await new Promise(r=>serve
 async function page(){const p=await browser.newPage();await p.goto(base);await p.evaluate(()=>{
 window.owner='owner-a';window.rows=[];window.reads=0;window.saves=0;window.changes=0;window.selectionChanges=0;window.gate=null;window.saveGate=null;
 const client={auth:{getSession:async()=>({data:{session:{user:{id:window.owner},access_token:'fixture-token'}}})},from:table=>{if(table!=='sanji_records')throw Error('Wrong table');let requested;const q={select:()=>q,eq:(k,v)=>{if(k==='owner')requested=v;return q;},order:()=>q,limit:()=>q,setHeader:()=>q,gt:()=>q,then:async(resolve,reject)=>{window.reads++;const captured=window.rows.filter(r=>r.owner===requested);if(window.gate)await window.gate;resolve({data:captured});}};return q;},rpc:(name,args)=>({setHeader:()=>({then:async(resolve)=>{window.saves++;if(window.saveGate)await window.saveGate;if(window.rows.some(r=>r.owner===window.owner&&r.data.companyKey===args.p_data.companyKey)){resolve({error:{code:'23505'}});return;}window.rows.push({id:'00000000-0000-0000-0000-000000000001',owner:window.owner,version:1,updated:'2026-11-09T00:00:00Z',kind:'candidate',data:args.p_data});resolve({data:window.rows.at(-1)});}})})};
-window.controller=window.mountYoutubeSaved({container:document.querySelector('#saved'),client,getOwner:()=>window.owner,isCurrent:o=>window.owner===o,onChange:()=>window.changes++,onSelectionChange:()=>window.selectionChanges++});
+window.controller=window.mountYoutubeSaved({container:document.querySelector('#saved'),client,getOwner:()=>window.owner,isCurrent:o=>window.owner===o,onChange:()=>window.changes++,onSelectionChange:()=>window.selectionChanges++,readDayStatus:(scope,context)=>window.mailEvidence?.(scope,context)??Promise.resolve(null)});
 });return p;}
 const profile='https://www.youtube.com/channel/UC'+'a'.repeat(22);
 test('saved reads are owner bound and a late former-owner result never appears',async()=>{const p=await page();try{await p.evaluate(profile=>{window.rows=[{id:'00000000-0000-0000-0000-000000000001',owner:'owner-a',version:1,updated:'2026-11-09T00:00:00Z',kind:'candidate',data:{kind:'크리에이터',name:'OLD PRIVATE',profile}}];window.gate=new Promise(r=>window.release=r);window.loading=window.controller.load();},profile);await p.waitForFunction(()=>window.reads>0);await p.evaluate(()=>{window.owner='owner-b';window.controller.clear();window.release();window.gate=null;});await p.evaluate(()=>window.loading);assert.equal(await p.getByText('OLD PRIVATE').count(),0);await p.evaluate(()=>window.controller.load());assert.match(await p.locator('#saved').textContent(),/산지 저장 0명/);}finally{await p.close();}});
@@ -34,3 +34,33 @@ assert.match(await p.getByLabel('예약 대상 준비').textContent(),/예약할
 assert.equal(await p.evaluate(()=>window.saves),0);
 }finally{await p.close();}});
 test('refresh and clear invalidate an already prepared selection before resetting exclusions',async()=>{const p=await page();try{await p.evaluate(()=>window.controller.load());assert.equal(await p.evaluate(()=>window.selectionChanges),1);await p.evaluate(()=>window.controller.load());assert.equal(await p.evaluate(()=>window.selectionChanges),2);await p.evaluate(()=>window.controller.clear());assert.equal(await p.evaluate(()=>window.selectionChanges),3);}finally{await p.close();}});
+test('per-row campaign mail statuses keep discovery dates, recorded send and reservation times separate',async()=>{
+ const p=await page();
+ try{
+  await p.evaluate(profile=>{
+    const projectId='gs-bbangteojineunjip-chewy-bread';
+    const statuses=['sent','scheduled','found_only','unknown'];
+    const dayFor=i=>i<3?'2026-11-15':'2026-11-16';
+    window.rows=statuses.map((_,i)=>({id:'00000000-0000-0000-0000-'+String(i+1).padStart(12,'0'),owner:window.owner,version:1,kind:'candidate',updated:'2026-11-15T00:00:00Z',
+    data:{kind:'크리에이터',name:'합성 후보 '+i,profile:profile.replace(/a{22}/,String.fromCharCode(97+i).repeat(22)),contact:{email:'fixture-'+i+'@example.test'},youtubeResearch:{projects:[{id:projectId,addedAt:'2026-11-15T01:00:00Z',assignedDay:dayFor(i)}]}}}));
+    window.statusCalls=[];
+    window.mailEvidence=async scope=>{
+     window.statusCalls.push(scope);
+     return {...scope,items:scope.ids.map(id=>{const i=Number(id.slice(-2))-1;return {candidateId:id,state:statuses[i],at:['2026-11-15T16:00:00Z','2026-11-16T01:00:00Z'][i],completeForCandidate:i===2};})};
+    };
+    return window.controller.load();
+  },profile);
+  await p.getByRole('heading',{name:'2026-11-15 · 프로젝트 분류일 (KST)'}).waitFor();
+  const sections=p.locator('.creator-project-day');
+  assert.equal(await sections.count(),2);
+  const before=sections.filter({hasText:'2026-11-15 · 프로젝트 분류일'});
+  await before.getByText('발송 완료',{exact:true}).waitFor();
+  const total=await before.innerText();
+  assert.match(total,/Gmail 접수 기록.*11.*16.*1:00/);
+  assert.match(total,/예약 시각.*11.*16.*10:00/);
+  assert.match(total,/찾기만 함/);
+  assert.match(await sections.filter({hasText:'2026-11-16 · 프로젝트 분류일'}).innerText(),/확인 필요/);
+  assert.equal(await p.evaluate(()=>window.statusCalls.length),2);
+  assert.equal(await p.evaluate(()=>window.saves),0);
+ }finally{await p.close();}
+});

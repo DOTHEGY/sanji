@@ -17,7 +17,17 @@ const pending = new Set(), cancelHistoryPending = new Set();
 let resultCards = [];
 let queryOrigin = 'empty';
 let submittedBrief = null;
-const saved = mountYoutubeSaved({container:$('saved-youtube'),client,getOwner:()=>owner,isCurrent:candidateOwner=>!disposed&&owner===candidateOwner,onChange:()=>updateFolds(),onPreview:key=>campaign.previewRecipient(key),onReview:(rows,runAt,scope)=>campaign.previewBatch(rows,runAt,scope),onSelectionChange:()=>campaign.clear()});
+async function readProjectDayStatus(scope,{owner:expectedOwner,signal}){
+ const session=(await client.auth.getSession())?.data?.session;
+ if(signal.aborted||disposed||owner!==expectedOwner||session?.user?.id!==expectedOwner||!session.access_token)throw Error('STALE');
+ const response=await fetch(supabaseUrl+'/functions/v1/youtube-project-day-status',{
+   method:'POST',signal,cache:'no-store',headers:{Authorization:'Bearer '+session.access_token,apikey:supabaseKey,'Content-Type':'application/json'},
+   body:JSON.stringify(scope),
+ });
+ if(!response.ok)throw Error('read-only mail evidence unavailable');
+ return response.json();
+}
+const saved = mountYoutubeSaved({container:$('saved-youtube'),client,getOwner:()=>owner,isCurrent:candidateOwner=>!disposed&&owner===candidateOwner,onChange:()=>updateFolds(),onPreview:key=>campaign.previewRecipient(key),onReview:(rows,runAt,scope)=>campaign.previewBatch(rows,runAt,scope),onSelectionChange:()=>campaign.clear(),readDayStatus:readProjectDayStatus});
 let previewEpoch=0,previewController=null,sendInFlight=false,mailHistoryFilter='all';
 const campaign={async load(offset=0){
  if(sendInFlight)return;
