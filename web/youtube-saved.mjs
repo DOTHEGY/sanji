@@ -3,6 +3,7 @@ import {inAudienceRange,savedEmailDisplay} from './youtube-email-view.mjs';
 import {loadStableStateRecords} from './state-records.mjs';
 import {DEFAULT_YOUTUBE_COLLECTION,collectionName,recordCollections,collectionNames,withCollection,collectionStats} from './youtube-collections.mjs';
 import {FIRST_PROJECT,projectMemberships,addProjectMembership,projectStats,projectDay} from './youtube-projects.mjs';
+import {decodeDayStatus,dayStatusText,validDay,validCandidateId,MAX_DAY_STATUS_IDS} from './youtube-project-day-status.mjs';
 import {reviewProjectReservation,tomorrowTenSeoul} from './youtube-schedule-preview.mjs';
 // Manually researched CRM records only. This module never persists YouTube API
 // search snapshots, creates credentials, changes permissions, or sends messages.
@@ -40,7 +41,8 @@ export function youtubeMatchesFilters(data,query,from,to){
 }
 function node(tag,text){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;return e;}
 function sourceLink(text,value){const url=https(value);if(!url)return node('span',text);const a=node('a',text);a.href=url;a.target='_blank';a.rel='noopener noreferrer';return a;}
-export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=()=>{},onPreview=()=>{},onReview=()=>{},onSelectionChange=()=>{}}) {
+export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=()=>{},onPreview=()=>{},onReview=()=>{},onSelectionChange=()=>{},readDayStatus=null}) {
+  let statusRead=null;
   let revision=0,busy=false,records=[],saveOperation=0,selected=DEFAULT_YOUTUBE_COLLECTION,drafts=[],loaded=false,uncertain=false,selectedRecipients=new Set(),projectMode=false;
   const heading=node('h2','YouTube 크리에이터');
   const projectPanel=node('section'),projectHeading=node('h3','프로젝트'),projectButton=node('button',FIRST_PROJECT.name),allButton=node('button','기존 후보 전체'),projectInfo=node('p'),projectDays=node('div');projectButton.type='button';allButton.type='button';projectInfo.setAttribute('role','status');projectDays.setAttribute('aria-label','프로젝트 날짜별 후보');
@@ -95,18 +97,50 @@ export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=
     if(from.value&&to.value&&from.value>to.value){status.textContent='시작일이 종료일보다 늦습니다. 날짜를 확인하세요.';list.replaceChildren();return;}
     const hasAddress=row=>!youtubeSelectionExclusion(row).excluded&&savedEmailDisplay(row.data).email!==null;const current=rows.filter(hasAddress),history=rows.filter(r=>!hasAddress(r));
     list.replaceChildren();status.textContent=`산지 저장 ${records.length}명 · 표시 ${rows.length}명 · 공개 주소 후보 ${current.length}명 (검증 주소 수가 아닙니다)`;
-    function table(records,label){const wrap=node('div');wrap.className='creator-table-wrap';const table=node('table');table.className='creator-table';table.setAttribute('aria-label',label);const head=node('thead'),hr=node('tr');for(const title of ['채널명','이메일주소','구독자수']){const th=node('th',title);th.setAttribute('scope','col');hr.append(th);}head.append(hr);const body=node('tbody');table.append(head,body);wrap.append(table);return {wrap,body};}
-    const activeTable=table(current,'공개 주소가 기록된 YouTube 후보');list.append(activeTable.wrap);
-    if(!current.length)list.append(node('p','이 모음에 예약할 공개 주소가 기록된 채널이 없습니다. 이메일 미확인·기존 조사 기록은 아래에 보존되어 있습니다.'));
-    const historyBox=node('details');historyBox.className='creator-history';historyBox.append(node('summary',`제외·이메일 미확인 기록 (${history.length}명)`),node('p','기존 후보·주소·주제 모음을 그대로 보존합니다. 이메일 미확인·기존 제외 기록은 예약 대상에 포함하지 않습니다.'));
-    const oldTable=table(history,'기존 YouTube 조사 기록');historyBox.append(oldTable.wrap);list.append(historyBox);
+    statusRead?.abort();
+    const controller=new AbortController();statusRead=controller;
+    const tables=new Map(),statusRequests=[];
+    const dayOf=r=>projectMode?projectDay(projectMemberships(r.data).find(p=>p.id===FIRST_PROJECT.id)):'';
+    const days=projectMode?[...new Set(rows.map(dayOf))].sort().reverse():[''];
+    function table(label){
+      const wrap=node('div');wrap.className='creator-table-wrap';
+      const table=node('table');table.className='creator-table';table.setAttribute('aria-label',label);
+      const head=node('thead'),hr=node('tr');
+      for(const title of ['채널명','이메일주소','구독자수',...(projectMode?['발송 상태']:[])]){
+        const th=node('th',title);th.setAttribute('scope','col');hr.append(th);
+      }
+      head.append(hr);const body=node('tbody');table.append(head,body);wrap.append(table);return {wrap,body};
+    }
+    for(const day of days){
+      const group=projectMode?node('section'):list;
+      if(projectMode){group.className='creator-project-day';group.append(node('h4',day+' · 프로젝트 분류일 (KST)'));list.append(group);}
+      const groupRows=rows.filter(r=>dayOf(r)===day);
+      const activeTable=table('공개 주소가 기록된 YouTube 후보');group.append(activeTable.wrap);
+      if(!groupRows.some(hasAddress)) group.append(node('p','이 모음에 예약할 공개 주소가 기록된 채널이 없습니다. 이메일 미확인·기존 조사 기록은 아래에 보존되어 있습니다.'));
+      const historyBox=node('details');historyBox.className='creator-history';
+      historyBox.append(node('summary',`제외·이메일 미확인 기록 (${groupRows.filter(r=>!hasAddress(r)).length}명)`),node('p','기존 후보·주소·주제 모음을 그대로 보존합니다. 이메일 미확인·기존 제외 기록은 예약 대상에 포함하지 않습니다.'));
+      const oldTable=table('기존 YouTube 조사 기록');historyBox.append(oldTable.wrap);group.append(historyBox);
+      const cells=new Map();
+      tables.set(day,{activeTable,oldTable,cells});
+      if(projectMode&&validDay(day))statusRequests.push({day,cells});
+    }
+    if(!days.length)list.append(node('p','날짜와 검색어에 맞는 프로젝트 후보가 없습니다.'));
+    function showMailStatus(cell,value){
+      const {state,label,detail}=dayStatusText(value);
+      const badge=node('span',label);badge.className='creator-mail-state creator-mail-'+state;
+      cell.replaceChildren(badge);
+      if(detail)cell.append(node('small',detail));
+    }
     for(const r of rows){const d=r.data,card=node('details');card.className='creator-detail';const summary=node('summary','상세 근거');card.append(summary,sourceLink('YouTube 채널 원문',d.profile));
       const tr=node('tr'),name=node('td'),email=node('td'),audience=node('td'),contact=savedEmailDisplay(d);
       const choose=node('input');choose.type='checkbox';choose.checked=selectedRecipients.has(r.id);choose.disabled=!contact.email||youtubeSelectionExclusion(r).excluded;choose.setAttribute('aria-label',`${d.name} 예약에서 제외`);choose.addEventListener('change',()=>{if(choose.checked)selectedRecipients.add(r.id);else selectedRecipients=new Set([...selectedRecipients].filter(id=>id!==r.id));selectionReview.replaceChildren();selectionStatus.textContent=`예약에서 제외 ${selectedRecipients.size}명 · 다른 조건에서 선택한 사람도 유지됩니다.`;onSelectionChange();});
-      name.append(choose,sourceLink(d.name,d.profile));const exclusion=youtubeSelectionExclusion(r);if(exclusion.excluded){name.append(node('small','신규 예약 제외: '+exclusion.reason));card.append(node('p','신규 예약 제외: '+exclusion.reason+(exclusion.organizationName?' · '+exclusion.organizationName:'')));for(const evidence of exclusion.evidence||[])card.append(sourceLink('제외 근거',evidence.sourceUrl));}const key=youtubeProfile(d.profile)?.match(/\/channel\/(UC[A-Za-z0-9_-]{22})$/)?.[1];
+      name.append(choose,sourceLink(d.name,d.profile));const observed=youtubeObservationDay(d);if(projectMode&&observed&&observed!==dayOf(r))name.append(node('small','조사 확인일: '+observed+' (KST)'));const exclusion=youtubeSelectionExclusion(r);if(exclusion.excluded){name.append(node('small','신규 예약 제외: '+exclusion.reason));card.append(node('p','신규 예약 제외: '+exclusion.reason+(exclusion.organizationName?' · '+exclusion.organizationName:'')));for(const evidence of exclusion.evidence||[])card.append(sourceLink('제외 근거',evidence.sourceUrl));}const key=youtubeProfile(d.profile)?.match(/\/channel\/(UC[A-Za-z0-9_-]{22})$/)?.[1];
       const preview=node('button','카피 보기');preview.type='button';preview.className='compact secondary';preview.disabled=!key;preview.setAttribute('aria-label',`${d.name} 개별 카피 보기`);const owner=getOwner(),ticket=revision;preview.addEventListener('click',()=>{if(!loaded||busy||ticket!==revision||!isCurrent(owner)||getOwner()!==owner||!key)return;onPreview('youtube:'+key);});name.append(preview,card);
       email.append(node('span',contact.email||'미확인'));const hint=node('small',contact.email?'공개 주소 기록 · 수신 동의 미확인':contact.label);hint.className='muted';email.append(hint);if(contact.otherCount)card.append(node('p',`추가 주소 근거 ${contact.otherCount}개는 아래에 보존합니다. 수신자는 크리에이터당 최대 1개 주소만 선택하며 플랫폼 간 공유 수신함도 중복 제외합니다.`));
-      audience.textContent=Number.isSafeInteger(d.followers)&&d.followers>=0?d.followers.toLocaleString('ko-KR'):'미확인';tr.append(name,email,audience);(hasAddress(r)?activeTable.body:oldTable.body).append(tr);
+      audience.textContent=Number.isSafeInteger(d.followers)&&d.followers>=0?d.followers.toLocaleString('ko-KR'):'미확인';tr.append(name,email,audience);
+      const {activeTable,oldTable,cells}=tables.get(dayOf(r));
+      if(projectMode){const outcome=node('td');showMailStatus(outcome,null);if(validCandidateId(r.id))cells.set(r.id,outcome);tr.append(outcome);}
+      (hasAddress(r)?activeTable.body:oldTable.body).append(tr);
       if(d.followers!=null)card.append(node('p',`공개 구독자 수: ${Number(d.followers).toLocaleString('ko-KR')} · 출처 확인일 ${d.metricsChecked||'미확인'}`),sourceLink('수치 확인 출처',d.metricsSource));
       card.append(node('p','모음: '+(recordCollections(d).join(' · ')||'미분류')),node('p',d.reason||'주제 기록 없음'),node('p',d.note||''));
       for(const e of d.evidence||[]){const p=node('p');p.append(sourceLink(e.description||'확인 출처',e.url),document.createTextNode(` · 확인 ${e.checked||'미확인'}`));card.append(p);}
@@ -116,11 +150,29 @@ export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=
       else if(!leads.some(lead=>lead?.email))card.append(node('p','공개 업무 이메일 미확인 · 이메일 개수가 아닌 후보 수로 집계합니다.'));
       card.append(node('p',`상태: ${d.status||'상태 미기록'} · ${d.next||'추가 메모 없음'}`));
     }
+    if(typeof readDayStatus==='function'){
+      const account=getOwner(),ticket=revision,projectId=FIRST_PROJECT.id;
+      const queue=statusRequests.flatMap(({day,cells})=>{
+        const ids=[...cells.keys()];
+        return Array.from({length:Math.ceil(ids.length/MAX_DAY_STATUS_IDS)},(_,index)=>({day,cells,ids:ids.slice(index*MAX_DAY_STATUS_IDS,(index+1)*MAX_DAY_STATUS_IDS)}));
+      });
+      const current=()=>!controller.signal.aborted&&statusRead===controller&&ticket===revision&&getOwner()===account&&isCurrent(account);
+      const update=async()=>{while(current()&&queue.length){
+        const {day,cells,ids}=queue.shift(),scope={projectId,day,ids};
+        try{
+          const value=await readDayStatus(scope,{owner:account,signal:controller.signal});
+          if(!current())return;
+          for(const [id,status] of decodeDayStatus(value,scope))showMailStatus(cells.get(id),status);
+        }catch{/* Verification gap remains visibly unknown. */}
+      }};
+      const workers=Math.min(3,queue.length);for(let i=0;i<workers;i++)void update();
+    }
   }
   async function checkedSession(owner,ticket){
     const r=await client.auth.getSession();if(r.error||r.data?.session?.user?.id!==owner||ticket!==revision||!isCurrent(owner))throw Error('STALE');return r.data.session;
   }
   async function load(afterSave=false){
+    statusRead?.abort();
     if(busy&&afterSave!==true)return;
     onSelectionChange();
     const owner=getOwner(),ticket=++revision;records=[];selectedRecipients.clear();selectionReview.replaceChildren();loaded=false;list.replaceChildren();drawCollections();onChange();
@@ -184,6 +236,6 @@ export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=
   });
   const getSavedIds=()=>new Set(records.map(r=>youtubeProfile(r.data.profile)?.match(/\/channel\/(UC[A-Za-z0-9_-]{22})$/)?.[1]).filter(Boolean));
   drawCollections();
-  return {load,getSavedIds,excludeRecipient(id){selectedRecipients.add(id);selectionReview.replaceChildren();if(loaded)draw();onSelectionChange();},getSelectedRecipients(){if(!projectMode||!from.value||from.value!==to.value)return [];try{return reviewProjectReservation({rows:records,projectId:FIRST_PROJECT.id,day:from.value,excludedIds:[...selectedRecipients],now:new Date(),sendDay:sendDate.value,sendTime:sendTime.value}).candidates.map(({id,version,email})=>({id,version,email}));}catch{return [];}},hasChannelId:id=>typeof id==='string'&&getSavedIds().has(id),clear(){onSelectionChange();revision++;saveOperation++;records=[];selectedRecipients.clear();selectionReview.replaceChildren();selectionStatus.textContent='예약에서 제외 0명';projectInfo.textContent='';projectChoice.replaceChildren();projectMode=false;busy=false;loaded=false;uncertain=false;selected=DEFAULT_YOUTUBE_COLLECTION;drafts=[];list.replaceChildren();form.reset();search.value='';from.value='';to.value='';sendTime.value='10:00';sendDate.value=tomorrowTenSeoul(new Date()).slice(0,10);collectionInput.value='';collectionStatus.textContent='';saveStatus.textContent='';status.textContent='로그인 후 저장한 후보를 불러옵니다.';drawCollections();onChange();}};
+  return {load,getSavedIds,excludeRecipient(id){selectedRecipients.add(id);selectionReview.replaceChildren();if(loaded)draw();onSelectionChange();},getSelectedRecipients(){if(!projectMode||!from.value||from.value!==to.value)return [];try{return reviewProjectReservation({rows:records,projectId:FIRST_PROJECT.id,day:from.value,excludedIds:[...selectedRecipients],now:new Date(),sendDay:sendDate.value,sendTime:sendTime.value}).candidates.map(({id,version,email})=>({id,version,email}));}catch{return [];}},hasChannelId:id=>typeof id==='string'&&getSavedIds().has(id),clear(){statusRead?.abort();onSelectionChange();revision++;saveOperation++;records=[];selectedRecipients.clear();selectionReview.replaceChildren();selectionStatus.textContent='예약에서 제외 0명';projectInfo.textContent='';projectChoice.replaceChildren();projectMode=false;busy=false;loaded=false;uncertain=false;selected=DEFAULT_YOUTUBE_COLLECTION;drafts=[];list.replaceChildren();form.reset();search.value='';from.value='';to.value='';sendTime.value='10:00';sendDate.value=tomorrowTenSeoul(new Date()).slice(0,10);collectionInput.value='';collectionStatus.textContent='';saveStatus.textContent='';status.textContent='로그인 후 저장한 후보를 불러옵니다.';drawCollections();onChange();}};
 }
 
