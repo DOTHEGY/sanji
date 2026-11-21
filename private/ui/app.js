@@ -1313,7 +1313,35 @@ function sentMailCards() {
 }
 function youtubeEmailPanel(){
  if(typeof YOUTUBE_DISCOVERY_AVAILABLE==='undefined'||!YOUTUBE_DISCOVERY_AVAILABLE)return '';
- return '<section class="panel email-youtube-panel"><h2>유튜브 크리에이터 이메일</h2><p class="fine">저장된 크리에이터를 검토하고 선택하세요. 메일 발송 가능 상태는 아래 화면에서 확인합니다.</p><details><summary>유튜브 크리에이터 열기</summary><iframe class="email-youtube-frame" src="./youtube/" title="유튜브 크리에이터 이메일" loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe><p><a href="./youtube/" target="_blank" rel="noopener noreferrer">별도 창으로 열기 ↗</a></p></details></section>';
+ return '<section class="panel email-youtube-panel"><h2>유튜브 크리에이터 이메일</h2><div class="mail-tabs" role="tablist" aria-label="YouTube 프로젝트"><button type="button" class="primary" id="youtube-tab-existing" role="tab" aria-selected="true" aria-controls="youtube-pane-existing">기존 프로젝트</button><button type="button" id="youtube-tab-empty" role="tab" aria-selected="false" aria-controls="youtube-pane-empty" tabindex="-1">별도 YouTube 프로젝트</button></div><div id="youtube-pane-existing" role="tabpanel" aria-labelledby="youtube-tab-existing"><p class="fine">저장된 크리에이터를 검토하고 선택하세요. 메일 발송 가능 상태는 아래 화면에서 확인합니다.</p><details><summary>유튜브 크리에이터 열기</summary><iframe class="email-youtube-frame" src="./youtube/" title="유튜브 크리에이터 이메일" loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe><p><a href="./youtube/" target="_blank" rel="noopener noreferrer">별도 창으로 열기 ↗</a></p></details></div><div id="youtube-pane-empty" role="tabpanel" aria-labelledby="youtube-tab-empty" tabindex="0" hidden><iframe class="email-youtube-frame" data-src="./youtube/wedding/" title="별도 YouTube 프로젝트" loading="lazy" referrerpolicy="no-referrer"></iframe></div></section>';
+}
+function mountYoutubeProjectTabs(host){
+ const tabs=[...host.querySelectorAll('[role="tab"]')];
+ const panes=tabs.map(tab=>host.querySelector('#'+tab.getAttribute('aria-controls')));
+ if(tabs.length!==2||panes.some(pane=>!pane))return;
+ const select=(index)=>{
+  if(index===1){
+   const frame=panes[1].querySelector('iframe[data-src]');
+   if(frame){frame.src=frame.dataset.src;frame.removeAttribute('data-src');}
+  }
+  tabs.forEach((tab,i)=>{
+   const active=index===i;
+   tab.setAttribute('aria-selected',String(active));
+   tab.classList.toggle('primary',active);
+   tab.tabIndex=active?0:-1;
+   panes[i].hidden=!active;
+  });
+ };
+ tabs.forEach((tab,index)=>{
+  tab.addEventListener('click',()=>select(index));
+  tab.addEventListener('keydown',event=>{
+   const next={ArrowLeft:1-index,ArrowRight:1-index,Home:0,End:1}[event.key];
+   if(!Number.isInteger(next))return;
+   event.preventDefault();
+   select(next);
+   tabs[next].focus();
+  });
+ });
 }
 function syncYoutubeEmailHost(key){
  const host=$('#youtube-email-host');if(!host)return;
@@ -1321,7 +1349,7 @@ function syncYoutubeEmailHost(key){
  if(!owner){host.hidden=true;return;}
  if(host.dataset.owner!==owner){host.replaceChildren();host.dataset.owner=owner;}
  const show=(key==='brands'||key==='discovery')&&typeof YOUTUBE_DISCOVERY_AVAILABLE!=='undefined'&&YOUTUBE_DISCOVERY_AVAILABLE;
- if(show&&!host.firstElementChild)host.innerHTML=youtubeEmailPanel();
+ if(show&&!host.firstElementChild){host.innerHTML=youtubeEmailPanel();mountYoutubeProjectTabs(host);}
  host.hidden=!show;
 }
 async function discoveryPage() {
