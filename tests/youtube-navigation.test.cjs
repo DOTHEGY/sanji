@@ -170,10 +170,17 @@ test('direct project routes mount only the selected workspace and retain both if
   await newDraft.fill('private unsaved');
   assert.equal(newDocumentRequests,1);
   await menu.nth(3).click();
+  await page.waitForURL('**/#settings',{timeout:5000});
+  await host.waitFor({state:'hidden',timeout:5000});
+  assert.equal(await menu.nth(3).getAttribute('aria-current'),'page');
   assert.equal(await host.isHidden(),true);
   await menu.nth(0).click();
+  await page.waitForURL('**/#youtube-primary',{timeout:5000});
+  await oldPane.waitFor({state:'visible',timeout:5000});
   assert.equal(await oldDraft.inputValue(),'primary unsaved');
   await menu.nth(1).click();
+  await page.waitForURL('**/#youtube-private',{timeout:5000});
+  await newPane.waitFor({state:'visible',timeout:5000});
   assert.equal(await newDraft.inputValue(),'private unsaved');
   assert.equal(newDocumentRequests,1);
   await page.evaluate(()=>{window.me={id:'new-fixture-owner',email:'new@example.test'};window.openWorkspace();});

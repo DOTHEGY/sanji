@@ -2361,7 +2361,7 @@ document.addEventListener("change", (e) => {
   if (e.target.id === "mail-filter" && discoveryView) $("#discovery-results").innerHTML=discoveryCards(discoveryView);
 });
 window.addEventListener('beforeunload',e=>{if(inboxEdited||prototypeDraftDirty||manualInbox.dirty||manualProductView?.hasWork()||transientInboxView?.hasDraft()){e.preventDefault();e.returnValue='';}});
-window.addEventListener('pagehide',()=>{privateYoutubeLabelState=null;paintPrivateYoutubeLabel(routes['youtube-private'][1]);manualNotesDispose();prototypeDisposeHistorical();transientDispose();if($('#manual-inbox-root'))manualDispose();});
+window.addEventListener('pagehide',()=>{manualNotesDispose();prototypeDisposeHistorical();transientDispose();if($('#manual-inbox-root'))manualDispose();});
 $('#modal').addEventListener('close',()=>{if(!$('#modal').open){prototypeDisposeHistorical();transientDispose();if($('#manual-inbox-root'))manualDispose();}});
 document.addEventListener('cancel',e=>{if(e.target?.id==='modal'&&transientInboxView){if(!transientInboxView.canClose())e.preventDefault();else transientDispose();}},true);
 window.addEventListener("hashchange", () => {
@@ -2376,6 +2376,11 @@ window.addEventListener("hashchange", () => {
   inboxEdited=false;inboxDirtyForms.clear();render();
 });
 window.addEventListener("beforeunload",e=>{if(manualNotesView?.hasWork()){e.preventDefault();e.returnValue="";}});
+boot();
+window.addEventListener('pagehide',()=>{
+ privateYoutubeLabelState=null;
+ paintPrivateYoutubeLabel(routes['youtube-private'][1]);
+});
 window.addEventListener('pageshow',event=>{if(event.persisted&&YOUTUBE_DISCOVERY_AVAILABLE)loadPrivateYoutubeLabel();});
 if(typeof manualClient!=="undefined")manualClient.auth.onAuthStateChange((_event,session)=>{
  if(privateYoutubeLabelState&&session?.user?.id!==privateYoutubeLabelState.owner){
@@ -2383,4 +2388,3 @@ if(typeof manualClient!=="undefined")manualClient.auth.onAuthStateChange((_event
   paintPrivateYoutubeLabel(routes["youtube-private"][1]);
  }
 });
-boot();
