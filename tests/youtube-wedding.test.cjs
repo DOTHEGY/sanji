@@ -90,8 +90,9 @@ test('stale previous owner response cannot re-open after logout',async()=>{
 test('blank route is owner-gated, isolated from old YouTube page, and only loaded by workspace tab',()=>{
  const parent=fs.readFileSync('private/ui/app.js','utf8'),old=fs.readFileSync('public/workspace/youtube/index.html','utf8'),child=fs.readFileSync('public/workspace/youtube/wedding/index.html','utf8');
  assert.match(parent,/me = await api\("\/me"\)/);
- assert.match(parent,/id="youtube-pane-empty" role="tabpanel"[^>]+ hidden><iframe[^>]+ data-src="\.\/youtube\/wedding\/"/);
- assert.match(parent,/const frame=panes\[1\]\.querySelector\('iframe\[data-src\]'\)/);
+ assert.match(parent,/id="youtube-pane-empty" role="tabpanel"[^>]+ hidden><\/div>/);
+ assert.match(parent,/index===1&&!panes\[1\]\.querySelector\('iframe'\)/);
+ assert.match(parent,/frame\.src='\.\/youtube\/wedding\/'/);
  assert.doesNotMatch(old,/\.\/wedding\//);
  assert.doesNotMatch(child,/mailto:|(?:id|name)="(?:send|schedule|subject|email)"/i);
  const source=fs.readFileSync('web/youtube-wedding.js','utf8');
@@ -171,13 +172,14 @@ test('workspace tab mounts the authenticated project iframe once, without rebuil
  }));
  let opens=0;
  const untouchedFrame={draft:'synthetic existing draft'};
- const frame={dataset:{src:'./youtube/wedding/'},set src(path){opens++;assert.equal(path,this.dataset.src)},removeAttribute(k){assert.equal(k,'data-src');delete this.dataset.src}};
- const panes={existing:{hidden:false,frame:untouchedFrame},empty:{hidden:true,querySelector(q){assert.equal(q,'iframe[data-src]');return frame.dataset.src?frame:null;}}};
- const host={querySelectorAll(){return tabs},querySelector(q){return panes[q.slice(1)]}};
+ const frame={};
+ const panes={existing:{hidden:false,frame:untouchedFrame},empty:{hidden:true,querySelector(q){assert.equal(q,'iframe');return this.frame||null;},
+  append(value){assert.equal(value,frame);assert.equal(value.src,'./youtube/wedding/');opens++;this.frame=value;}}};
+ const host={ownerDocument:{createElement(tag){assert.equal(tag,'iframe');return frame;}},querySelectorAll(){return tabs},querySelector(q){return panes[q.slice(1)]}};
  vm.runInNewContext(logic+'mountYoutubeProjectTabs(host)',{host});
- assert.equal(opens,0);
+ assert.equal(opens,0);assert.equal(panes.empty.frame,undefined);
  tabs[1].on.click();assert.equal(opens,1);assert.equal(panes.existing.hidden,true);assert.equal(panes.empty.hidden,false);
  tabs[1].on.keydown({key:'ArrowLeft',preventDefault(){}});assert.equal(tabs[0].focused,true);
  assert.equal(panes.existing.hidden,false);assert.equal(panes.empty.hidden,true);
- tabs[1].on.click();assert.equal(opens,1);assert.equal(panes.existing.frame,untouchedFrame);
+ tabs[1].on.click();assert.equal(opens,1);assert.equal(panes.existing.frame,untouchedFrame);assert.equal(panes.empty.frame,frame);
 });
