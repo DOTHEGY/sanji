@@ -195,6 +195,20 @@ export async function transientInboxApi(body, expectedOwner) {
   if (typeof expectedOwner !== "string" || !expectedOwner) throw error("계정을 확인하세요.", 403);
   return edge("/creator-instagram/transient-inbox", "POST", body, expectedOwner);
 }
+export async function workspaceYoutubeProjectTitle(expectedOwner) {
+  if (typeof expectedOwner !== "string" || !expectedOwner) throw error("계정을 확인하세요.", 403);
+  const session = await member();
+  if (session.user.id !== expectedOwner || !session.access_token) throw error("계정이 변경됐습니다.", 403);
+  const row = await result(client
+    .from("sanji_private_wedding_projects")
+    .select("owner,title")
+    .eq("owner", expectedOwner)
+    .setHeader("Authorization", "Bearer " + session.access_token)
+    .maybeSingle());
+  if (!row) return null;
+  if (row.owner !== expectedOwner || typeof row.title !== "string") throw error("계정을 확인하세요.", 403);
+  return row.title;
+}
 export async function workspaceApi(path, method = "GET", body) {
   if (path === "/status") return { setupRequired: false, supabase: true };
   if (path === "/auth/login") {

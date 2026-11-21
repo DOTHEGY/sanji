@@ -54,6 +54,9 @@ let csrf = "",
   selectedThread = "",
   toastTimer;
 const routes = {
+  "youtube-primary": ["▶", "쫀득빵"],
+  "youtube-private": ["▶", "별도 YouTube 프로젝트"],
+  copy: ["▧", "카피"],
   dashboard: ["◫", "대시보드"],
   brands: ["▣", "브랜드 이메일"],
   emailtracking: ["◉", "이메일 성과·추적"],
@@ -70,6 +73,34 @@ const navGroups = [
   {label:"상품", keys:["deals"]},
   {label:"관리", keys:["templates","settings"], bottom:true},
 ];
+const compactProjectMenus = [
+  ["youtube-primary", routes["youtube-primary"][1]],
+  ["youtube-private", routes["youtube-private"][1]],
+  ["copy", "카피"],
+  ["settings", "Gmail 설정"],
+];
+let privateYoutubeLabelState = null;
+function compactYoutubeLabel(title) {
+  const name=typeof title==="string"?title.trim():"";
+  if(!name||name.length>100)return routes["youtube-private"][1];
+  // A common saved name has the form "[region] [venue] 웨딩".
+  return /^(?:\S+\s+)?(\S+)\s+웨딩$/u.exec(name)?.[1]||name;
+}
+function paintPrivateYoutubeLabel(label) {
+  const nav=$('#private-youtube-menu-label');if(nav)nav.textContent=label;
+  const copy=$('#private-youtube-copy-label');if(copy)copy.textContent=label;
+  const crumb=$('#breadcrumb');if(crumb&&location.hash==='#youtube-private')crumb.textContent='워크스페이스 / '+label;
+}
+function loadPrivateYoutubeLabel() {
+  if(typeof workspaceYoutubeProjectTitle!=="function"||!me?.id||privateYoutubeLabelState?.owner===me.id)return;
+  const request={owner:me.id,label:null};
+  privateYoutubeLabelState=request;
+  void workspaceYoutubeProjectTitle(request.owner).then(title=>{
+    if(privateYoutubeLabelState!==request||me?.id!==request.owner)return;
+    request.label=compactYoutubeLabel(title);
+    paintPrivateYoutubeLabel(request.label);
+  }).catch(()=>{if(privateYoutubeLabelState===request)privateYoutubeLabelState=null;});
+}
 const statuses = [
   "미접촉",
   "검토 중",
@@ -184,6 +215,7 @@ async function authPage() {
   inboxRequestGeneration++;
   if(typeof manualDispose==='function'&&$('#manual-inbox-root')){manualDispose();$('#modal')?.close();}
   me = null;
+  privateYoutubeLabelState = null;
   csrf = "";
   const youtubeHost=$("#youtube-email-host");if(youtubeHost){youtubeHost.replaceChildren();youtubeHost.hidden=true;youtubeHost.dataset.owner="";}
   $("#nav").innerHTML = "";
@@ -197,15 +229,25 @@ function render() {
   if(manualNotesView){if(location.hash==="#manual-notes")return;if(!manualNotesView.canClose()){history.replaceState(null,"","#manual-notes");return;}manualNotesDispose();}
   inboxRequestGeneration++;
   if (!me) return;
-  const rawKey = location.hash.slice(1) || "brands";
+  const compact=typeof YOUTUBE_DISCOVERY_AVAILABLE!=="undefined"&&YOUTUBE_DISCOVERY_AVAILABLE;
+  const rawKey = location.hash.slice(1) || (compact?"youtube-primary":"brands");
   const retired=["dashboard","creators","matching","manual-notes"];
-  if(!location.hash||retired.includes(rawKey)){history.replaceState(null,"",location.pathname+location.search+"#brands");}
+  if(!location.hash||retired.includes(rawKey)){history.replaceState(null,"",location.pathname+location.search+(retired.includes(rawKey)?"#brands":"#"+rawKey));}
   const key = rawKey === "discovery" || retired.includes(rawKey) ? "brands" : rawKey;
   if(key!=="inbox"){inboxLifecycle="active";inboxNotesDispose();}
   syncYoutubeEmailHost(key);
-  $("#nav").innerHTML = navGroups.map(g => `<div class="nav-group${g.bottom?" nav-management":""}"${g.label?` role="group" aria-label="${g.label}"`:""}>${g.label?`<p class="nav-group-label">${g.label}</p>`:""}${g.keys.map(k=>`<a href="#${k}" class="${key===k?"active":""}"${key===k?' aria-current="page"':""}><span aria-hidden="true">${routes[k][0]}</span>${routes[k][1]}</a>`).join("")}${typeof YOUTUBE_DISCOVERY_AVAILABLE !== "undefined" && YOUTUBE_DISCOVERY_AVAILABLE && g.keys.includes("creators") ? '<a href="./youtube/" target="_blank" rel="noopener" aria-label="유튜브 크리에이터 검색 (새 탭)"><span aria-hidden="true">▶</span>유튜브 크리에이터 검색 ↗</a>' : ""}</div>`).join("");
-  $("#breadcrumb").textContent =
-    "워크스페이스 / " + (routes[key]?.[1] || "대시보드");
+  const menu=compact?compactProjectMenus:[];
+  const nav=$("#nav"),focused=typeof document!=="undefined"&&nav.contains(document.activeElement)?document.activeElement?.getAttribute("href"):null;
+  nav.innerHTML = compact
+    ? '<div class="nav-group compact-project-menu" role="group" aria-label="워크스페이스 메뉴">'+menu.map(([route,label])=>
+      `<a href="#${route}" class="${key===route?"active":""}"${key===route?' aria-current="page"':""}><span aria-hidden="true">${routes[route][0]}</span><span class="workspace-menu-label"${route==="youtube-private"?' id="private-youtube-menu-label"':""}>${label}</span></a>`).join("")+'</div>'
+    : navGroups.map(g => `<div class="nav-group${g.bottom?" nav-management":""}"${g.label?` role="group" aria-label="${g.label}"`:""}>${g.label?`<p class="nav-group-label">${g.label}</p>`:""}${g.keys.map(k=>`<a href="#${k}" class="${key===k?"active":""}"${key===k?' aria-current="page"':""}><span aria-hidden="true">${routes[k][0]}</span>${routes[k][1]}</a>`).join("")}</div>`).join("");
+  if(focused)[...nav.querySelectorAll("a")].find(a=>a.getAttribute("href")===focused)?.focus({preventScroll:true});
+  $("#breadcrumb").textContent = "워크스페이스 / " + (menu.find(([route])=>route===key)?.[1] || routes[key]?.[1] || "대시보드");
+  if(compact) {
+    if(privateYoutubeLabelState?.owner===me.id&&privateYoutubeLabelState?.label)paintPrivateYoutubeLabel(privateYoutubeLabelState.label);
+    else loadPrivateYoutubeLabel();
+  }
   (pages[key] || dashboard)();
 }
 function dashboardExistingSummary(state,discovery,now){
@@ -1347,14 +1389,27 @@ function mountYoutubeProjectTabs(host){
    tabs[next].focus();
   });
  });
+ return select;
 }
 function syncYoutubeEmailHost(key){
  const host=$('#youtube-email-host');if(!host)return;
- const owner=typeof me?.email==='string'?me.email:'';
+ const owner=me?.id||(typeof me?.email==='string'?me.email:'');
  if(!owner){host.hidden=true;return;}
- if(host.dataset.owner!==owner){host.replaceChildren();host.dataset.owner=owner;}
- const show=(key==='brands'||key==='discovery')&&typeof YOUTUBE_DISCOVERY_AVAILABLE!=='undefined'&&YOUTUBE_DISCOVERY_AVAILABLE;
- if(show&&!host.firstElementChild){host.innerHTML=youtubeEmailPanel();mountYoutubeProjectTabs(host);}
+ if(host.dataset.owner!==owner){host.replaceChildren();host.dataset.owner=owner;host.dataset.selectedRoute="";host.selectProject=null;}
+ const direct=key==='youtube-primary'||key==='youtube-private';
+ const show=(direct||key==='brands'||key==='discovery')&&typeof YOUTUBE_DISCOVERY_AVAILABLE!=='undefined'&&YOUTUBE_DISCOVERY_AVAILABLE;
+ if(show&&!host.firstElementChild){host.innerHTML=youtubeEmailPanel();host.selectProject=mountYoutubeProjectTabs(host);}
+ if(show){
+  const tabs=host.querySelector('[role="tablist"]');
+  if(tabs){tabs.hidden=direct;tabs.style.display=direct?'none':'';}
+  const heading=host.querySelector('.email-youtube-panel > h2');
+  if(heading)heading.hidden=direct;
+  if(direct&&host.dataset.selectedRoute!==key)host.selectProject?.(key==='youtube-primary'?0:1);
+  if(key==='youtube-primary'){
+   const details=host.querySelector('#youtube-pane-existing > details');if(details)details.open=true;
+  }
+ }
+ host.dataset.selectedRoute=show?key:'';
  host.hidden=!show;
 }
 async function discoveryPage() {
@@ -1683,7 +1738,17 @@ function trackingCampaignForm(id=""){
  modal('<h2>캠페인·추적 고지</h2><form id="tracking-campaign-form" data-id="'+esc(id)+'">'+field("name","캠페인 이름",c.name)+'<label class="field">영업 범위<select name="scope"><option value="brand" '+(c.scope!=="creator"?"selected":"")+'>브랜드 영업</option><option value="creator" '+(c.scope==="creator"?"selected":"")+'>크리에이터 영업</option></select></label>'+field("enabled","캠페인 추적 켜기",c.enabled,"checkbox")+field("externalTracking","Mailsuite 등 외부 추적 사용 · 이 서비스 픽셀 중복 적용 금지",c.external_tracking,"checkbox")+field("disclosure","수신자 고지 문구·HTTPS 정책 링크 (20자 이상) · 작성한 본문에 직접 포함해야 적용",c.disclosure,"textarea")+field("basisNote","처리 근거·고지/동의 검토 기록 · 공개 이메일을 추적 동의로 간주하지 않음",c.basis_note,"textarea")+'<p class="fine">카피는 자동 수정하지 않습니다. 필요한 안내와 선택 방법을 확정한 뒤 본문·템플릿에 직접 넣어 주세요. 개별 처리 중지 요청은 메일 상세의 추적 중지로 반영할 수 있습니다.</p><button type="submit">캠페인 저장</button></form>');
 }
 
+function projectCopyPage() {
+  $("#app").innerHTML=head("카피","프로젝트별로 기존 카피를 확인합니다.")+
+    '<section class="panel"><h2>쫀득빵</h2><p>후보 목록에서 각 사람의 <strong>카피 보기</strong>를 열면 실제 등록된 문안의 미리보기를 볼 수 있습니다.</p><a href="#youtube-primary">쫀득빵 후보에서 카피 보기 ↗</a></section>'+
+    '<section class="panel"><h2 id="private-youtube-copy-label">별도 YouTube 프로젝트</h2><p>아직 카피가 설정되지 않았습니다.</p></section>'+
+    '<p class="fine"><a href="#templates">기존 공통 템플릿</a></p>';
+  if(privateYoutubeLabelState?.owner===me?.id&&privateYoutubeLabelState?.label)paintPrivateYoutubeLabel(privateYoutubeLabelState.label);
+}
 const pages = {
+  copy: projectCopyPage,
+  "youtube-primary": () => $("#app").replaceChildren(),
+  "youtube-private": () => $("#app").replaceChildren(),
   emailtracking:emailTrackingPage,
   dashboard,
   discovery: discoveryPage,
@@ -2296,7 +2361,7 @@ document.addEventListener("change", (e) => {
   if (e.target.id === "mail-filter" && discoveryView) $("#discovery-results").innerHTML=discoveryCards(discoveryView);
 });
 window.addEventListener('beforeunload',e=>{if(inboxEdited||prototypeDraftDirty||manualInbox.dirty||manualProductView?.hasWork()||transientInboxView?.hasDraft()){e.preventDefault();e.returnValue='';}});
-window.addEventListener('pagehide',()=>{manualNotesDispose();prototypeDisposeHistorical();transientDispose();if($('#manual-inbox-root'))manualDispose();});
+window.addEventListener('pagehide',()=>{privateYoutubeLabelState=null;paintPrivateYoutubeLabel(routes['youtube-private'][1]);manualNotesDispose();prototypeDisposeHistorical();transientDispose();if($('#manual-inbox-root'))manualDispose();});
 $('#modal').addEventListener('close',()=>{if(!$('#modal').open){prototypeDisposeHistorical();transientDispose();if($('#manual-inbox-root'))manualDispose();}});
 document.addEventListener('cancel',e=>{if(e.target?.id==='modal'&&transientInboxView){if(!transientInboxView.canClose())e.preventDefault();else transientDispose();}},true);
 window.addEventListener("hashchange", () => {
@@ -2311,4 +2376,11 @@ window.addEventListener("hashchange", () => {
   inboxEdited=false;inboxDirtyForms.clear();render();
 });
 window.addEventListener("beforeunload",e=>{if(manualNotesView?.hasWork()){e.preventDefault();e.returnValue="";}});
+window.addEventListener('pageshow',event=>{if(event.persisted&&YOUTUBE_DISCOVERY_AVAILABLE)loadPrivateYoutubeLabel();});
+if(typeof manualClient!=="undefined")manualClient.auth.onAuthStateChange((_event,session)=>{
+ if(privateYoutubeLabelState&&session?.user?.id!==privateYoutubeLabelState.owner){
+  privateYoutubeLabelState=null;
+  paintPrivateYoutubeLabel(routes["youtube-private"][1]);
+ }
+});
 boot();

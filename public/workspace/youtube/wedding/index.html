@@ -6,12 +6,20 @@
 <meta name="referrer" content="no-referrer">
 <title>SANJI · 별도 YouTube 프로젝트</title>
 <link rel="stylesheet" href="../style.css?v=164621771b76">
-<script src="./app.js?v=fe937f5af658" defer></script>
+<script src="./app.js?v=d040f81c754f" defer></script>
 </head>
 <body><main>
 <header><h1 id="wedding-heading">별도 YouTube 프로젝트</h1></header>
 <p id="wedding-auth" role="status">로그인 확인 중…</p>
 <section id="wedding-panel" class="panel" hidden>
+<h2>공개 비즈니스 주소 확인 후보</h2>
+<p>채널 또는 공식 사이트에서 용도가 확인된 협업 문의 주소만 표시합니다. 발송·예약에는 연결되지 않습니다.</p>
+<label for="wedding-day">조사일 (한국시간)</label><select id="wedding-day"><option value="">전체</option></select>
+<p id="wedding-contact-status" role="status"></p>
+<ul id="wedding-contact-list"></ul>
+<button id="wedding-refresh" type="button">목록 새로고침</button>
+<details>
+<summary>조사 원본 및 연락처 미확인 기록</summary>
 <h2>직접 확인한 후보 기록</h2>
 <p>이 프로젝트에 추가된 채널과 영상 근거를 조사일별로 확인합니다. 계정에 저장되어 다른 기기에서도 볼 수 있습니다.</p>
 <form id="wedding-form" autocomplete="off">
@@ -21,11 +29,10 @@
 <label for="w-note">웨딩 콘텐츠 확인 근거 (개인 연락처 제외)</label><textarea id="w-note" name="note" required maxlength="500" rows="3"></textarea>
 <button type="submit">후보 저장</button>
 </form>
-<button id="wedding-refresh" type="button">기록 새로고침</button>
 <p id="wedding-status" role="status"></p>
 <h2>날짜별 조사 기록</h2>
-<label for="wedding-day">조사일 (한국시간)</label><select id="wedding-day"><option value="">전체</option></select>
 <ul id="wedding-list"></ul>
+</details>
 </section>
 </main></body>
 </html>

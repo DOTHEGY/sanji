@@ -16,13 +16,22 @@ async function harness(){
   }
  }]})).outputFiles[0].text;
  const nodes={}, events={}, get=id=>nodes[id]??(nodes[id]=new Node());
- const state={actor:null,allowed:true,wait:null,sessionWait:null,requestWait:null,calls:[],rows:[],project:true,loadOthers:false,failure:false,inserts:0}; let change;
+ const state={actor:null,allowed:true,wait:null,sessionWait:null,requestWait:null,calls:[],rows:[],contacts:[],contactReads:[],contactWait:null,contactFailure:false,project:true,loadOthers:false,failure:false,inserts:0}; let change;
  const mockClient={auth:{
   onAuthStateChange(cb){change=cb;cb('INITIAL_SESSION',null)},
   async getUser(){state.calls.push('getUser');return state.wait??{data:{user:{id:state.actor}}}},
   async getSession(){const actor=state.actor;if(state.sessionWait)await state.sessionWait;return {data:{session:actor?{user:{id:actor},access_token:'fixture-token-'+actor}:null}}}
  },async rpc(name){state.calls.push(name);return {data:state.allowed}},
  from(table){
+  if(table==='sanji_private_wedding_contacts'){
+   let actor,ids;
+   const q={select(){return q},eq(k,v){assert.equal(k,'owner');actor=v;return q},in(k,v){assert.equal(k,'channel_id');ids=v;return q},limit(limit){assert.equal(limit,ids.length+1);return q},
+    then(resolve,reject){state.contactReads.push({actor,ids});return (async()=>{
+     if(state.contactWait)await state.contactWait;
+     return state.contactFailure?{error:true}:{data:state.contacts.filter(r=>r.owner===actor&&ids.includes(r.channel_id))};
+    })().then(resolve,reject)}};
+   return q;
+  }
   let currentOwner,inserted,last,authorization;
   assert.ok(['sanji_private_wedding_projects','sanji_private_wedding_shortlist'].includes(table));
   const q={select(){return q},eq(k,v){assert.equal(k,'owner');currentOwner=v;return q},order(){return q},limit(){return q},gt(k,v){assert.equal(k,'channel_id');last=v;return q},
@@ -182,4 +191,32 @@ test('workspace tab mounts the authenticated project iframe once, without rebuil
  tabs[1].on.keydown({key:'ArrowLeft',preventDefault(){}});assert.equal(tabs[0].focused,true);
  assert.equal(panes.existing.hidden,false);assert.equal(panes.empty.hidden,true);
  tabs[1].on.click();assert.equal(opens,1);assert.equal(panes.existing.frame,untouchedFrame);assert.equal(panes.empty.frame,frame);
+});
+
+test('owner verified list does not rename original evidence; source failure is unknown, not zero',async()=>{
+ const {get,state,auth,tick}=await harness(),channel='UC'+'a'.repeat(22);
+ state.rows.push({owner:'a',channel_id:channel,channel_name:'Synthetic',video_id:'ZXCVbnm1234',project_day:'2026-11-21',added_at:'2026-11-21T15:00:00Z',evidence_note:'Research only'});
+ state.contacts.push({owner:'a',channel_id:channel,email:'partnerships@example.com',source_url:'https://creator.example.com/contact',source_kind:'official_website',verified_at:new Date(Date.now()-1800).toISOString(),expires_at:new Date(Date.now()+86400000).toISOString()});
+ auth('a');await tick();
+ assert.equal(get('wedding-contact-list').children.length,1);
+ assert.equal(get('wedding-contact-list').children[0].children[1].textContent,'partnerships@example.com');
+ assert.equal(get('wedding-contact-list').children[0].children[3].href,'https://creator.example.com/contact');
+ assert.match(get('wedding-contact-status').textContent,/확인 1개 · 조사 기록 1개/);
+ assert.equal(get('wedding-list').children.length,1);
+ state.contactFailure=true;await get('wedding-refresh').handlers.click();
+ assert.equal(get('wedding-contact-list').children.length,0);
+ assert.match(get('wedding-contact-status').textContent,/불러오지 못했습니다/);
+ assert.equal(get('wedding-list').children.length,1);
+});
+
+test('late owner contact read is discarded after account changes',async()=>{
+ const {get,state,auth,tick}=await harness(),channel='UC'+'a'.repeat(22);
+ state.rows.push({owner:'a',channel_id:channel,channel_name:'Synthetic',video_id:'ZXCVbnm1234',project_day:'2026-11-21',added_at:'2026-11-21T15:00:00Z',evidence_note:'Research only'});
+ state.contacts.push({owner:'a',channel_id:channel,email:'partnerships@example.com',source_url:'https://creator.example.com/contact',source_kind:'official_website',verified_at:new Date(Date.now()-1800).toISOString(),expires_at:new Date(Date.now()+86400000).toISOString()});
+ let finish;state.contactWait=new Promise(r=>finish=r);
+ auth('a');await tick();assert.equal(state.contactReads.length,1);
+ auth('b');await tick();finish();await tick();
+ assert.equal(get('wedding-contact-list').children.length,0);
+ assert.match(get('wedding-contact-status').textContent,/확인 0개 · 조사 기록 0개/);
+ assert.equal(state.inserts,0);
 });
