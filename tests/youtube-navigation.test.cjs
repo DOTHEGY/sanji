@@ -250,12 +250,14 @@ test('built workspace routes both real project panels and the private copy witho
    else if(path.endsWith('/template-library'))response={rows:[{archived:false,data:{purpose:'youtube_project_copy_primary',channel:'이메일',subject,body}}]};
    else if(path.endsWith('/recent'))response={rows:[],more:false};
    else if(path.endsWith('/schedule-status'))response={jobs:[]};
+   else if(path.endsWith('/connections'))response={gmail:{connected:false,enabled:false,reauthRequired:false},instagram:{connected:false,enabled:false}};
    else if(path.startsWith('/functions/v1/'))response={};
    return route.fulfill({headers,json:response});
   });
   await page.goto(origin+'/workspace/');
   const host=page.locator('#youtube-email-host'),primary=host.locator('[data-youtube-project="youtube-primary"]'),nav=page.locator('#nav a');
-  await primary.locator('#workspace').waitFor({timeout:12000});
+  try{await primary.locator('#workspace').waitFor({timeout:12000});}
+  catch(e){throw new Error(`Workspace boot fixture: ${(await page.locator('#toast,#connection-banner,#app').allTextContents()).join(' | ').slice(0,1000)}`,{cause:e});}
   await primary.getByText('최근 이메일 발송 상태',{exact:true}).waitFor({timeout:12000});
   await nav.nth(1).click();
   const wedding=host.locator('[data-youtube-project="youtube-private"]');
