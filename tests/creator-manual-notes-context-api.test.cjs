@@ -7,7 +7,7 @@ async function fixture(opts={}){
  let sessionReads=0;
  const client={auth:{getSession:async()=>{sessionReads++;if(opts.sessionRead)opts.sessionRead(state,sessionReads);return {data:{session:state.session},error:state.authError}}},from(table){const filters=[],q={select(columns){q.columns=columns;return q},eq(k,v){filters.push([k,'eq',v]);return q},gt(k,v){filters.push([k,'gt',v]);return q},order(){return q},limit(n){q.limit=n;return q},then(resolve){queries.push({table,columns:q.columns,filters,limit:q.limit});if(table==='sanji_members'&&opts.membership)return opts.membership(resolve,state);let rows=table==='sanji_members'?[{user_id:owner}]:table==='sanji_records'?(opts.records||[]):[];for(const [k,op,v]of filters)rows=rows.filter(r=>op==='eq'?r[k]===v:r[k]>v);if(table==='sanji_records'){rows=[...rows].sort((a,b)=>a.id.localeCompare(b.id));if(q.limit)rows=rows.slice(0,q.limit)}return resolve({data:rows,error:null})}};return q}};
  const box={module:{exports:{}},exports:{},__client:client,URL,Request,Response,TextEncoder,console,setTimeout,clearTimeout,fetch:async(url,request)=>{calls.push({url:String(url),request});if(opts.fetch)return opts.fetch(url,request,state);return new Response(JSON.stringify(opts.response||output()),{status:200,headers:{'Content-Type':'application/json'}})}};box.globalThis=box;vm.runInNewContext((await built).outputFiles[0].text,box);
- return {state,calls,queries,api:box.module.exports.manualNotesApi,workspace:box.module.exports.workspaceApi,proposal:box.module.exports.creatorProposalContextApi,official:(body={peerId:"12345"})=>box.module.exports.creatorProposalContextApi(body,owner,()=>state.alive),call:(body=input())=>box.module.exports.manualNotesApi(path,body,owner,()=>state.alive)};
+ return {state,calls,queries,projectCopy:(expected=owner)=>box.module.exports.workspacePrimaryProjectCopy(expected,()=>state.alive),api:box.module.exports.manualNotesApi,workspace:box.module.exports.workspaceApi,proposal:box.module.exports.creatorProposalContextApi,official:(body={peerId:"12345"})=>box.module.exports.creatorProposalContextApi(body,owner,()=>state.alive),call:(body=input())=>box.module.exports.manualNotesApi(path,body,owner,()=>state.alive)};
 }
 test('context routes only to isolated service, sends bound token and no caller owner',async()=>{const f=await fixture(),r=await f.call();assert.equal(r.noteId,noteId);assert.equal(f.calls.length,1);assert.match(f.calls[0].url,/\/functions\/v1\/creator-manual-notes\/creator-manual-notes\/context$/);assert.equal(f.calls[0].request.cache,'no-store');assert.equal(f.calls[0].request.headers.Authorization,'Bearer fixture-original');assert.deepEqual(JSON.parse(f.calls[0].request.body),input());assert.doesNotMatch(f.calls[0].request.body,/owner|fixture-original/)});
 test('context rejects unknown fields/routes and unbound generic workspace access before network',async()=>{const f=await fixture();for(const body of [{...input(),owner},{...input(),handle:'@synthetic_creator'},{...input(),creatorId:'bad'},null,[]])await assert.rejects(()=>f.call(body));await assert.rejects(()=>f.api(path+'/other',input(),owner,()=>true));await assert.rejects(()=>f.workspace(path,'POST',input()));assert.equal(f.calls.length,0)});
@@ -33,3 +33,21 @@ test('official helper rejects token refresh at final post-response session check
 test('catalog owner remains original authenticated scan owner after session object changes',async()=>{const f=await fixture({records:[{...record(1001),data:{name:'Synthetic',ownerId:other,catalog:{ownerId:other}}}],fetch:async(url,request,state)=>{state.session.user.id=other;return new Response(JSON.stringify({jobs:[]}),{status:200})}}),result=await f.workspace('/state');assert.equal(f.state.session.user.id,other);assert.equal(result.catalog.ownerId,owner);assert.notEqual(result.catalog.ownerId,f.state.session.user.id);assert.equal(result.catalog.expectedCount,1);assert.ok(f.queries.filter(q=>q.table==='sanji_records').every(q=>q.filters.some(([k,op,v])=>k==='owner'&&v===owner)))});
 test('legacy generic official context remains unchanged outside bound automatic flow',async()=>{const f=await fixture({response:officialOutput()}),result=await f.workspace('/creator-instagram/creator-context','POST',{peerId:'12345'});assert.equal(result.peerUsername,'synthetic_creator');assert.equal(f.calls.length,1)});
 test('official provider username case is canonicalized for exact stored handle comparison',async()=>{const f=await fixture({response:{...officialOutput(),peerUsername:'Synthetic_Creator'}}),result=await f.official();assert.equal(result.peerUsername,'Synthetic_Creator');assert.equal(result.creator.handle,'synthetic_creator')});
+
+test('project copy GET reuses the existing owner-bound template library; no payload, no site writes',async()=>{
+ const f=await fixture({response:{rows:[]}});
+ assert.deepEqual(Array.from((await f.projectCopy()).rows),[]);
+ assert.equal(f.calls.length,1);
+ const {url,request}=f.calls[0];
+ assert.match(url,/\/template-library$/);assert.equal(request.method,'GET');assert.equal(request.body,undefined);
+ assert.equal(request.cache,'no-store');assert.equal(request.headers.Authorization,'Bearer fixture-original');
+ const wrong=await fixture();await assert.rejects(()=>wrong.projectCopy(other));assert.equal(wrong.calls.length,0);
+});
+test('old template library response is discarded after switching to a different configured owner or route',async()=>{
+ for(const change of [s=>s.session={user:{id:other},access_token:'fixture-other'},s=>s.alive=false]){
+  let finish;
+  const f=await fixture({fetch:()=>new Promise(r=>finish=r)}),pending=f.projectCopy();
+  await new Promise(r=>setImmediate(r));change(f.state);finish(new Response(JSON.stringify({rows:[]}),{status:200}));
+  await assert.rejects(()=>pending);assert.equal(f.calls.length,1);
+ }
+});

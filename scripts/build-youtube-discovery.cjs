@@ -5,7 +5,7 @@ const crypto = require('node:crypto');
 const root = path.resolve(__dirname, '..');
 const out = path.join(root, 'public/workspace/youtube');
 fs.mkdirSync(out, { recursive: true });
-esbuild.buildSync({entryPoints:[path.join(root,'web/youtube-discovery.js')],bundle:true,outfile:path.join(out,'app.js'),platform:'browser',target:'es2022',format:'iife',minify:true});
+esbuild.buildSync({entryPoints:[path.join(root,'web/youtube-discovery-direct.js')],bundle:true,outfile:path.join(out,'app.js'),platform:'browser',target:'es2022',format:'iife',minify:true});
 let html=fs.readFileSync(path.join(root,'private/youtube-discovery/index.html'),'utf8');
 for(const file of ['app.js','style.css']){
  if(file==='style.css')fs.copyFileSync(path.join(root,'private/youtube-discovery',file),path.join(out,file));

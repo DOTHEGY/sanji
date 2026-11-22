@@ -7,11 +7,26 @@ const esbuild = require('esbuild');
 const { chromium } = require('@playwright/test');
 const root = path.resolve(__dirname, '..');
 const session = { user:{ id:'owner-a' }, access_token:'test-only-token' };
-let browser, server, base, bundle;
+let browser, server, base, bundle, nativeBundle;
 test.before(async () => {
- const result = await esbuild.build({entryPoints:[path.join(root,'web/youtube-discovery.js')],bundle:true,write:false,platform:'browser',format:'iife',plugins:[{name:'mock-auth',setup(build){build.onResolve({filter:/^@supabase\/supabase-js$/},()=>({path:'mock-auth',namespace:'mock'}));build.onLoad({filter:/.*/,namespace:'mock'},()=>({contents:`export function createClient(){let s=${JSON.stringify(session)},cb;window.testAuth=(v)=>{s=v;cb('SIGNED_OUT',s)};return{auth:{getSession:async()=>({data:{session:s}}),onAuthStateChange:(f)=>{cb=f}}}}`,loader:'js'}));}}]});
+ const result = await esbuild.build({entryPoints:[path.join(root,'web/youtube-discovery-direct.js')],bundle:true,write:false,platform:'browser',format:'iife',plugins:[{name:'mock-auth',setup(build){build.onResolve({filter:/^@supabase\/supabase-js$/},()=>({path:'mock-auth',namespace:'mock'}));build.onLoad({filter:/.*/,namespace:'mock'},()=>({contents:`export function createClient(){let s=${JSON.stringify(session)},cb;window.testAuth=(v)=>{s=v;cb?.('SIGNED_OUT',s)};return{auth:{getSession:async()=>({data:{session:s}}),onAuthStateChange:(f)=>{cb=f;return{data:{subscription:{unsubscribe(){cb=null}}}}}}}}`,loader:'js'}));}}]});
  bundle=result.outputFiles[0].text;
- server=http.createServer((req,res)=>{res.setHeader('Content-Type',req.url.includes('app.js')?'text/javascript':req.url.includes('style.css')?'text/css':'text/html');res.end(req.url.includes('app.js')?bundle:fs.readFileSync(path.join(root,'private/youtube-discovery',req.url.includes('style.css')?'style.css':'index.html')));});
+ nativeBundle=(await esbuild.build({stdin:{contents:`
+  import {mountYouTubeDiscovery} from './web/youtube-discovery-mount.js';
+  let session=${JSON.stringify(session)}, listener=null;
+  const control=new AbortController();
+  const q=new Proxy({}, {get(_,key){return key==='then'?(resolve,reject)=>Promise.resolve({data:[],count:0}).then(resolve,reject):()=>q;}});
+  const client={auth:{getSession:()=>Promise.resolve({data:{session}}),onAuthStateChange(cb){listener=cb;return{data:{subscription:{unsubscribe(){listener=null}}}};}},rpc:async()=>({data:true}),from:()=>q};
+  mountYouTubeDiscovery(document.querySelector('#native-root'),{owner:session.user.id,signal:control.signal,client});
+  window.switchNativeOwner=()=>{session={user:{id:'owner-b'},access_token:'other-fixture'};listener?.('SIGNED_IN',session);};
+  window.leaveNative=()=>control.abort();
+ `,resolveDir:root},bundle:true,write:false,platform:'browser',format:'iife',loader:{'.html':'text','.css':'text'}})).outputFiles[0].text;
+ server=http.createServer((req,res)=>{
+  if(req.url==='/fixture-native'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><meta charset="UTF-8"><input id="brief" value="outside"><main id="native-root"></main><script src="/fixture-native.js" defer></script>');return;}
+  if(req.url==='/fixture-native.js'){res.setHeader('Content-Type','text/javascript');res.end(nativeBundle);return;}
+  res.setHeader('Content-Type',req.url.includes('app.js')?'text/javascript':req.url.includes('style.css')?'text/css':'text/html');
+  res.end(req.url.includes('app.js')?bundle:fs.readFileSync(path.join(root,'private/youtube-discovery',req.url.includes('style.css')?'style.css':'index.html')));
+ });
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));base=`http://127.0.0.1:${server.address().port}`;
  browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH || '/usr/bin/chromium',args:['--no-sandbox']});
 });
@@ -128,3 +143,34 @@ test('fifty target summary folds unverified candidates explicitly and reveal-all
 });
 
 test('current scale filter folds 200k-plus history while explicit show-all preserves research rows',async()=>{const channels=[{...result.channels[0],channelId:'UC'+'a'.repeat(22),title:'Within Range',subscriberCount:200000},{...result.channels[0],channelId:'UC'+'b'.repeat(22),title:'Historical Large',subscriberCount:200001}];const page=await open(route=>route.fulfill({json:{...result,channels}}));try{await search(page);await page.waitForSelector('.card');await page.locator('#use-30k').click();assert.equal(await page.locator('#maximum-subscribers').inputValue(),'200000');assert.equal(await page.locator('.card:not([hidden])').count(),1);assert.match(await page.locator('#fold-reasons').textContent(),/20만 초과/);await page.locator('#show-all').click();assert.equal(await page.locator('.card:not([hidden])').count(),2);}finally{await page.close();}});
+
+test('native Chewy mounts the full existing controls in place, isolates duplicate IDs and clears on owner change',async()=>{
+ const page=await browser.newPage();
+ const paths=[];
+ await page.route('**/functions/v1/**',async route=>{
+  const headers={'access-control-allow-origin':'*','access-control-allow-methods':'GET, POST, OPTIONS','access-control-allow-headers':'*'};
+  if(route.request().method()==='OPTIONS'){await route.fulfill({status:204,headers});return;}
+  paths.push(new URL(route.request().url()).pathname);
+  await route.fulfill({json:{rows:[],more:false},headers});
+ });
+ try{
+  await page.goto(base+'/fixture-native');
+  const pane=page.locator('#native-root .sanji-chewy-native-panel');
+  await pane.locator('#workspace:not([hidden])').waitFor();
+  assert.equal(await page.locator('#native-root iframe').count(),0);
+  assert.equal(await pane.getByText('← SANJI 워크스페이스').count(),0);
+  assert.equal(await pane.locator('#saved-youtube').count(),1);
+  assert.equal(await pane.locator('#daily-outreach').count(),1);
+  await pane.locator('#research-advanced > summary').click();
+  await pane.locator('#brief').fill('초안 보존');
+  assert.equal(await page.locator('body > #brief').inputValue(),'outside');
+  await page.evaluate(()=>{document.querySelector('#native-root').hidden=true;document.querySelector('#native-root').hidden=false;});
+  assert.equal(await pane.locator('#brief').inputValue(),'초안 보존');
+  await page.evaluate(()=>window.switchNativeOwner());
+  await pane.locator('#workspace[hidden]').waitFor({state:'attached'});
+  assert.equal(await pane.locator('#brief').inputValue(),'');
+  assert.ok(paths.every(path=>path.endsWith('/recent')));
+  await page.evaluate(()=>window.leaveNative());
+  assert.equal(await pane.count(),0);
+ }finally{await page.close();}
+});

@@ -4,14 +4,14 @@ import {mountReservationDiagnostic} from './youtube-reservation-diagnostic.mjs';
 import { fullConfiguration } from './youtube-campaign-full.mjs';
 import { previewEnvelope, privatePreviewDocument, previewWarning } from './youtube-email-view.mjs';
 import { mountYoutubeSaved } from './youtube-saved.mjs';
-import { createClient } from '@supabase/supabase-js';
 import { reviewReasons, orderCandidates } from '../supabase/functions/youtube-discovery/review-filters.mjs';
 import { buildBriefReview } from '../supabase/functions/youtube-discovery/relevance.mjs';
 import { supabaseUrl, supabaseKey } from './supabase-config.js';
 
-// Default Supabase session key matches the main workspace; no new authentication flow.
-const client = createClient(supabaseUrl, supabaseKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, flowType: 'pkce' } });
-const $ = (id) => document.getElementById(id);
+// The direct page and the native workspace share the same isolated controller.
+export function mountYouTubeDiscoveryController(root,{client,expectedOwner=null,signal}){
+if(signal?.aborted)return ()=>{};
+const $ = (id) => root.getElementById(id);
 let owner = null, epoch = 0, searchBusy = false, selectedEmail = '', selectedChannelId = '', disposed = false;
 const pending = new Set(), cancelHistoryPending = new Set();
 let resultCards = [];
@@ -112,10 +112,12 @@ function clearPrivate() {
   clearDraft(); searchBusy = false; $('search').disabled = false;
 }
 function sessionChanged(session) {
-  const next = session?.user?.id || null;
+  const sessionOwner = session?.user?.id || null;
+  const next = expectedOwner && sessionOwner!==expectedOwner ? null : sessionOwner;
   if (next !== owner) { clearPrivate(); mailHistoryFilter = 'all'; owner = next; if(owner&&!disposed){saved.load();campaign.load();} }
   $('workspace').hidden = !owner || disposed;
-  const login = el('a', '기존 워크스페이스에서 로그인하세요'); login.href = '../';
+  const login = expectedOwner ? el('span','현재 워크스페이스 계정을 다시 확인해 주세요.') : el('a', '기존 워크스페이스에서 로그인하세요');
+  if (!expectedOwner) login.href = '../';
   $('auth-state').replaceChildren(owner ? el('span', '워크스페이스 계정 연결됨') : login);
 }
 function active(ticket) { return !disposed && owner === ticket.owner && epoch === ticket.epoch; }
@@ -358,8 +360,32 @@ $('open-mail').addEventListener('click', () => {
   $('mail-status').textContent = '메일 앱에 초안 열기를 요청했습니다. 이 화면에서 발송된 메일은 없습니다. 메일 앱에서 수신자와 내용을 다시 확인하세요.';
   window.location.href = uri;
 });
-client.auth.onAuthStateChange((event, session) => { if (!disposed) { if (event === 'SIGNED_OUT') clearPrivate(); sessionChanged(session); } });
-const initialEpoch = epoch;
-client.auth.getSession().then(({ data, error }) => { if (!disposed && initialEpoch === epoch) { sessionChanged(error ? null : data.session); } });
-window.addEventListener('pagehide', () => { disposed = true; clearPrivate(); owner = null; $('workspace').hidden = true; });
-window.addEventListener('pageshow', (event) => { if (event.persisted) location.reload(); });
+let authRevision=0;
+const subscription=client.auth.onAuthStateChange((event,session)=>{
+  if(disposed)return;
+  const revision=++authRevision;
+  // Invalidate old requests immediately, but never re-enter shared auth APIs
+  // inside the SDK's callback. Loading the next account is deferred.
+  if(event==='SIGNED_OUT'||(owner&&session?.user?.id!==owner)){
+    clearPrivate(); owner=null; $('workspace').hidden=true;
+  }
+  setTimeout(()=>{
+    if(!disposed&&revision===authRevision)sessionChanged(session);
+  },0);
+})?.data?.subscription;
+const initialEpoch=epoch,initialAuth=authRevision;
+client.auth.getSession().then(({data,error})=>{
+  if(!disposed&&initialEpoch===epoch&&initialAuth===authRevision)sessionChanged(error?null:data.session);
+},()=>{
+  if(!disposed&&initialEpoch===epoch&&initialAuth===authRevision)sessionChanged(null);
+});
+function dispose(){
+  if(disposed)return;
+  disposed=true;
+  subscription?.unsubscribe();
+  signal?.removeEventListener('abort',dispose);
+  clearPrivate(); owner=null; $('workspace').hidden=true;
+}
+signal?.addEventListener('abort',dispose,{once:true});
+return dispose;
+}
