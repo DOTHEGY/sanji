@@ -104,7 +104,7 @@ async function edge(path, method, body, expectedOwner, stillActive) {
   const data = await response
     .json()
     .catch(() => ({ error: "서버 응답을 읽지 못했습니다." }));
-  if (path === "/creator-manual-notes/context" || (path === "/creator-instagram/creator-context" && expectedOwner !== undefined)) {
+  if (path === "/creator-manual-notes/context" || ((path === "/creator-instagram/creator-context" || path === "/template-library") && expectedOwner !== undefined)) {
     const latest = await client.auth.getSession(), current = latest?.data?.session;
     if (latest?.error || current?.user?.id !== expectedOwner || current?.access_token !== session.access_token || typeof stillActive !== "function" || !stillActive()) throw error("계정 또는 화면이 변경됐습니다. 다시 확인하세요.", 403);
   }
@@ -194,6 +194,10 @@ export const inboxReviewSettingsApi = createInboxReviewSettingsApi({client,membe
 export async function transientInboxApi(body, expectedOwner) {
   if (typeof expectedOwner !== "string" || !expectedOwner) throw error("계정을 확인하세요.", 403);
   return edge("/creator-instagram/transient-inbox", "POST", body, expectedOwner);
+}
+export async function workspacePrimaryProjectCopy(expectedOwner, stillActive) {
+  if (typeof expectedOwner !== "string" || !expectedOwner || typeof stillActive !== "function" || !stillActive()) throw error("계정과 화면을 확인하세요.", 403);
+  return edge("/template-library", "GET", undefined, expectedOwner, stillActive);
 }
 export async function workspaceYoutubeProjectTitle(expectedOwner) {
   if (typeof expectedOwner !== "string" || !expectedOwner) throw error("계정을 확인하세요.", 403);

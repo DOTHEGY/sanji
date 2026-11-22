@@ -1,5 +1,5 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
-const source=fs.readFileSync('private/ui/app.js','utf8'),decl=source.slice(source.indexOf('const routes ='),source.indexOf('const statuses =')),render=source.slice(source.indexOf('function render() {'),source.indexOf('function dashboardExistingSummary(')),panel=source.slice(source.indexOf('function youtubeEmailPanel()'),source.indexOf('async function discoveryPage()',source.indexOf('function youtubeEmailPanel()')));
+const source=fs.readFileSync('private/ui/app.js','utf8'),decl=source.slice(source.indexOf('const routes ='),source.indexOf('const statuses =')),render=source.slice(source.indexOf('function render() {'),source.indexOf('function dashboardExistingSummary(')),panel=source.slice(source.indexOf('let youtubeWorkspaceOwner='),source.indexOf('async function discoveryPage()',source.indexOf('let youtubeWorkspaceOwner=')));
 function navContext(raw='#brands',feature=true,reader){
  const n={innerHTML:''},bread={},label={},copy={},calls=[],nodes={'#nav':n,'#breadcrumb':bread,'#private-youtube-menu-label':label,'#private-youtube-copy-label':copy};
  const routes=['youtube-primary','youtube-private','copy','brands','settings','templates','inbox','deals','emailtracking'];
@@ -43,15 +43,18 @@ test('private menu text uses only the current owner title and renders it as text
  assert.equal(c.title('<b>synthetic</b>'),'<b>synthetic</b>');
  c.me=null;c.open();assert.deepEqual(calls,['fixture-owner','next-owner']);
 });
-test('project-specific copy page links to real old preview without writing or implying a new copy',()=>{
- const app={innerHTML:''};
- const a=source.indexOf('function projectCopyPage()'),b=source.indexOf('const pages =',a);
- const c={me:null,privateYoutubeLabelState:null,$:()=>app,head:(title,sub)=>title+sub};
- vm.createContext(c);vm.runInContext(source.slice(a,b)+';projectCopyPage()',c);
- assert.match(app.innerHTML,/카피 보기/);assert.match(app.innerHTML,/href="#youtube-primary"/);
+test('project-specific copy requires login and offers only two collapsed project panels',async()=>{
+ const app={innerHTML:''},host={isConnected:true};
+ const a=source.indexOf('let projectCopyView ='),b=source.indexOf('const pages =',a);
+ const c={me:null,location:{hash:'#copy'},privateYoutubeLabelState:null,$:selector=>selector==='#app'?app:host,head:(title,sub)=>title+sub};
+ vm.createContext(c);vm.runInContext(source.slice(a,b)+';this.showCopy=projectCopyPage;',c);
+ let reads=0;c.workspacePrimaryProjectCopy=async()=>{reads++;return {rows:[]}};
+ await c.showCopy();assert.equal(app.innerHTML,'');assert.equal(reads,0);
+ c.me={id:'owner-fixture'};await c.showCopy();assert.equal(reads,1);
+ assert.equal([...app.innerHTML.matchAll(/<details class="panel"><summary(?: id="private-youtube-copy-label")?>([^<]+)<\/summary>/g)].map(m=>m[1]).join(','),'쫀득빵,별도 YouTube 프로젝트');
  assert.match(app.innerHTML,/아직 카피가 설정되지 않았습니다/);
- assert.match(app.innerHTML,/href="#templates"/);
- assert.doesNotMatch(app.innerHTML,/<form|<textarea|data-action|mailto:/);
+ assert.match(host.textContent,/아직 기본 카피가 설정되지 않았습니다/);
+ assert.doesNotMatch(app.innerHTML,/<details[^>]*\bopen\b|<a\b|<button|<form|<textarea|data-action|mailto:/);
 });
 test('private title query is read-only, scoped to the same member and pinned session',async()=>{
  const src=fs.readFileSync('web/supabase-api.js','utf8');
@@ -67,127 +70,226 @@ test('private title query is read-only, scoped to the same member and pinned ses
  actor='other-owner';await assert.rejects(c.read('fixture-owner'));assert.equal(calls.length,4);
  actor='fixture-owner';row={owner:'other-owner',title:'Other fixture'};await assert.rejects(c.read('fixture-owner'));
 });
-test('YouTube panel uses the same-origin existing page, and is unavailable in unsupported builds',()=>{const c={YOUTUBE_DISCOVERY_AVAILABLE:true};vm.createContext(c);vm.runInContext(panel+';this.panel=youtubeEmailPanel;',c);assert.match(c.panel(),/<iframe[^>]+src="\.\/youtube\/"/);assert.match(c.panel(),/유튜브 크리에이터 이메일/);c.YOUTUBE_DISCOVERY_AVAILABLE=false;assert.equal(c.panel(),'');});
+test('native project panel only mounts after selecting a signed-in project and clears the old owner',()=>{
+ const calls=[];
+ const host={hidden:true,children:[],ownerDocument:{createElement(){return {dataset:{},hidden:false}}},replaceChildren(){this.children=[]},append(node){this.children.push(node)}};
+ const c={YOUTUBE_DISCOVERY_AVAILABLE:true,me:null,AbortController,$:()=>host,
+  mountYouTubeDiscovery:mount('primary'),mountYouTubeWedding:mount('private')};
+ function mount(name){return (node,{owner,signal})=>{calls.push([name,owner,signal]);return ()=>calls.push(['cleanup',name]);}};
+ vm.createContext(c);vm.runInContext(panel+';this.select=syncYoutubeEmailHost;this.dispose=disposeYoutubeWorkspace;',c);
+ c.select('youtube-primary');assert.equal(host.hidden,true);assert.equal(calls.length,0);
+ c.me={id:'owner-a'};c.select('brands');assert.equal(host.hidden,true);assert.equal(calls.length,0);
+ c.select('youtube-primary');assert.equal(host.hidden,false);assert.equal(calls.length,1);
+ const primary=host.children[0];
+ c.select('youtube-private');const wedding=host.children[1];assert.equal(primary.hidden,true);assert.equal(wedding.hidden,false);assert.equal(calls.length,2);
+ c.select('settings');assert.equal(host.hidden,true);
+ c.select('youtube-primary');assert.equal(primary.hidden,false);assert.equal(wedding.hidden,true);assert.equal(calls.length,2);
+ assert.equal(host.children[0],primary);
+ c.me={id:'owner-b'};c.select('youtube-private');assert.equal(host.children.length,1);
+ assert.ok(calls[0][2].aborted&&calls[1][2].aborted);
+ assert.deepEqual(calls.slice(2).map(x=>x.slice(0,2)),[['cleanup','primary'],['cleanup','private'],['private','owner-b']]);
+ c.dispose();assert.equal(host.children.length,0);assert.equal(host.hidden,true);
+ c.YOUTUBE_DISCOVERY_AVAILABLE=false;c.select('youtube-private');assert.equal(host.children.length,0);
+});
 test('published bundle enables YouTube and links assets by matching hash',()=>{const build=fs.readFileSync('scripts/build-supabase.cjs','utf8');assert.match(build,/YouTube navigation capability marker missing/);const bundle=fs.readFileSync('public/workspace/app.js','utf8'),hash=require('node:crypto').createHash('sha256').update(bundle).digest('hex').slice(0,12);assert.ok(fs.readFileSync('public/workspace/index.html','utf8').includes('app.js?v='+hash));assert.match(fs.readFileSync('public/workspace/youtube/index.html','utf8'),/YouTube 크리에이터 이메일/)});
-test('desktop and mobile email panel fits and toggles without destroying the brand draft',async()=>{const {chromium}=require('@playwright/test');const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});try{const c={YOUTUBE_DISCOVERY_AVAILABLE:true};vm.createContext(c);vm.runInContext(panel+';this.panel=youtubeEmailPanel;',c);const css=fs.readFileSync('private/ui/style.css','utf8');for(const width of [1280,390]){const page=await browser.newPage({viewport:{width,height:850}});await page.setContent('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>'+css+'</style><main>'+c.panel()+'<textarea id="brand-draft">검토 중</textarea></main>');await page.locator('summary').first().click();assert.equal(await page.locator('iframe').count(),1);assert.equal(await page.locator('#brand-draft').inputValue(),'검토 중');assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);await page.close()}}finally{await browser.close()}});
-
-test('brand rerender preserves YouTube frame and its unsaved contents',async()=>{const {chromium}=require('@playwright/test');const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});try{const page=await browser.newPage();await page.setContent('<!doctype html><meta charset="utf-8"><section id="youtube-email-host" hidden></section><section id="app"></section>');await page.evaluate(code=>{window.$=q=>document.querySelector(q);window.me={email:'owner@example.test'};window.YOUTUBE_DISCOVERY_AVAILABLE=true;window.eval(code+';window.syncYoutubeEmailHost=syncYoutubeEmailHost');window.syncYoutubeEmailHost('brands');document.querySelector('iframe').srcdoc='<textarea>미저장 문안</textarea>';},panel);await page.locator('#youtube-email-host summary').click();await page.frameLocator('iframe').locator('textarea').waitFor();await page.frameLocator('iframe').locator('textarea').fill('편집 중');await page.evaluate(()=>{document.querySelector('#app').innerHTML='<p>브랜드 목록 갱신</p>';window.syncYoutubeEmailHost('brands');});assert.equal(await page.frameLocator('iframe').locator('textarea').inputValue(),'편집 중');await page.evaluate(()=>{window.syncYoutubeEmailHost('settings');window.syncYoutubeEmailHost('brands');});assert.equal(await page.frameLocator('iframe').locator('textarea').inputValue(),'편집 중');}finally{await browser.close()}});
-
-test('new project does not create or navigate an iframe until first selection; both frames then stay mounted',async()=>{
+test('desktop and mobile navigate the native projects without a nested page and preserve unsaved values',async()=>{
  const {chromium}=require('@playwright/test');
  const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
  try{
-  const page=await browser.newPage({viewport:{width:390,height:850}});
-  let projectLoads=0;
-  await page.route('https://sanji.example.test/**',route=>{
-   if(new URL(route.request().url()).pathname==='/workspace/youtube/wedding/'){
-    projectLoads++;
-    return route.fulfill({contentType:'text/html',body:'<p id="new-project">Synthetic project</p>'});
-   }
-   return route.fulfill({contentType:'text/html',body:'<p>Mocked previous page</p>'});
-  });
   const css=fs.readFileSync('private/ui/style.css','utf8');
-  await page.setContent('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><base href="https://sanji.example.test/workspace/"><style>'+css+'</style><section id="youtube-email-host" hidden></section><section id="app"></section>');
-  await page.evaluate(code=>{
-   window.$=q=>document.querySelector(q);
-   window.me={email:'owner@example.test'};
-   window.YOUTUBE_DISCOVERY_AVAILABLE=true;
-   window.eval(code+';window.syncYoutubeEmailHost=syncYoutubeEmailHost');
-   window.syncYoutubeEmailHost('brands');
-   window.previousFrame=document.querySelector('#youtube-pane-existing iframe');
-   window.previousFrame.srcdoc='<textarea id="draft"></textarea><div style="height:2000px"></div>';
-  },panel);
-  const host=page.locator('#youtube-email-host'), oldPanel=host.locator('#youtube-pane-existing'),newPanel=host.locator('#youtube-pane-empty');
-  const oldTab=host.getByRole('tab',{name:'기존 프로젝트'}),newTab=host.getByRole('tab',{name:'별도 YouTube 프로젝트'});
-  assert.equal(await host.locator('iframe').count(),1);
-  assert.equal(await newPanel.locator('iframe').count(),0);
-  assert.equal(projectLoads,0);
-  await oldPanel.locator('summary').click();
-  const draft=oldPanel.frameLocator('iframe').locator('#draft');
-  await draft.fill('synthetic unsaved draft');
-  await draft.evaluate(node=>node.ownerDocument.defaultView.scrollTo(0,150));
-  assert.equal(await draft.evaluate(node=>node.ownerDocument.defaultView.scrollY),150);
-  await newTab.click();
-  await newPanel.frameLocator('iframe').locator('#new-project').waitFor();
-  assert.equal(projectLoads,1);
-  assert.equal(await host.locator('iframe').count(),2);
-  assert.equal(await oldPanel.isHidden(),true);
-  await page.evaluate(()=>{window.newFrame=document.querySelector('#youtube-pane-empty iframe');window.syncYoutubeEmailHost('settings');window.syncYoutubeEmailHost('brands');});
-  assert.equal(await newTab.getAttribute('aria-selected'),'true');
-  await newTab.press('ArrowLeft');
-  assert.equal(await oldTab.getAttribute('aria-selected'),'true');
-  assert.equal(await oldTab.evaluate(node=>node===document.activeElement),true);
-  assert.equal(await draft.inputValue(),'synthetic unsaved draft');
-  assert.equal(await draft.evaluate(node=>node.ownerDocument.defaultView.scrollY),150);
-  await newTab.click();
-  assert.equal(await host.locator('iframe').count(),2);
-  assert.equal(projectLoads,1);
-  assert.equal(await page.evaluate(()=>window.previousFrame===document.querySelector('#youtube-pane-existing iframe')&&window.newFrame===document.querySelector('#youtube-pane-empty iframe')),true);
-  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  const markup='<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>'+css+'</style><aside><nav id="nav"></nav></aside><main><span id="breadcrumb"></span><section id="youtube-email-host" hidden></section><section id="app"></section></main>';
+  for(const width of [1280,390]){
+   const page=await browser.newPage({viewport:{width,height:850}});
+   let documentRequests=0;
+   await page.route('https://sanji.example.test/**',route=>{if(route.request().resourceType()==='document')documentRequests++;return route.fulfill({contentType:'text/html',body:markup});});
+   await page.goto('https://sanji.example.test/workspace/');
+   await page.evaluate(({decl,render,panel})=>{
+    window.$=q=>document.querySelector(q);
+    window.me={id:'fixture-owner',email:'owner@example.test'};
+    window.YOUTUBE_DISCOVERY_AVAILABLE=true;
+    window.inboxRequestGeneration=0;
+    window.catalogSheetSettingsDispose=()=>{};
+    window.inboxNotesDispose=()=>{};
+    window.manualNotesView=null;
+    window.pages={'youtube-primary':()=>{},'youtube-private':()=>{},settings:()=>{},copy:()=>{}};
+    window.mounts=[];
+    function mount(kind){return (root,{owner,signal})=>{
+     const input=document.createElement('textarea');input.setAttribute('aria-label',kind+' fixture');root.append(input);
+     window.mounts.push({kind,owner,signal});return ()=>root.replaceChildren();
+    };}
+    window.mountYouTubeDiscovery=mount('primary');window.mountYouTubeWedding=mount('private');
+    window.eval(decl+render+panel+';window.openWorkspace=render;');
+    window.addEventListener('hashchange',()=>window.openWorkspace());
+    window.openWorkspace();
+   },{decl,render,panel});
+   const nav=page.locator('#nav a'),host=page.locator('#youtube-email-host');
+   const primary=host.getByRole('textbox',{name:'primary fixture'}),wedding=host.getByRole('textbox',{name:'private fixture'});
+   assert.equal(await nav.count(),4);
+   assert.equal(await nav.nth(0).getAttribute('aria-current'),'page');
+   assert.equal(await host.locator('[data-youtube-project]').count(),1);
+   await primary.fill('primary unsaved');
+   await nav.nth(1).click();
+   await page.waitForURL('**/#youtube-private');
+   await wedding.fill('private unsaved');
+   await nav.nth(3).click();
+   await page.waitForURL('**/#settings');await host.waitFor({state:'hidden'});
+   await nav.nth(0).click();
+   await page.waitForURL('**/#youtube-primary');await primary.waitFor();assert.equal(await primary.inputValue(),'primary unsaved');
+   await nav.nth(1).click();
+   await page.waitForURL('**/#youtube-private');await wedding.waitFor();assert.equal(await wedding.inputValue(),'private unsaved');
+   assert.equal(await page.locator('iframe').count(),0);
+   assert.equal(documentRequests,1);
+   await page.evaluate(()=>{window.me={id:'new-fixture-owner'};window.openWorkspace();});
+   await wedding.waitFor();assert.equal(await wedding.inputValue(),'');
+   assert.deepEqual(await page.evaluate(()=>window.mounts.map(({kind,owner,signal})=>[kind,owner,signal.aborted])),[['primary','fixture-owner',true],['private','fixture-owner',true],['private','new-fixture-owner',false]]);
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+   await page.close();
+  }
  }finally{await browser.close()}
 });
 
-test('direct project routes mount only the selected workspace and retain both iframe documents',async()=>{
+test('basic project copy displays only the selected owner library slot as exact inert text',async()=>{
  const {chromium}=require('@playwright/test');
  const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
  try{
   const page=await browser.newPage({viewport:{width:390,height:850}});
-  let newDocumentRequests=0;
-  const css=fs.readFileSync('private/ui/style.css','utf8');
-  const markup='<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>'+css+'</style><aside><nav id="nav"></nav></aside><main><span id="breadcrumb"></span><section id="youtube-email-host" hidden></section><section id="app"></section></main>';
-  await page.route('https://sanji.example.test/**',route=>{
-   const path=new URL(route.request().url()).pathname;
-   if(path==='/workspace/')return route.fulfill({contentType:'text/html',body:markup});
-   const privateRoute=path.endsWith('/youtube/wedding/');
-   if(privateRoute)newDocumentRequests++;
-   return route.fulfill({contentType:'text/html',body:privateRoute?'<textarea id="private-fixture"></textarea>':'<textarea id="primary-fixture"></textarea>'});
-  });
-  await page.goto('https://sanji.example.test/workspace/');
-  await page.evaluate(({decl,render,panel})=>{
-   window.$=q=>document.querySelector(q);
-   window.me={id:'fixture-owner',email:'owner@example.test'};
-   window.YOUTUBE_DISCOVERY_AVAILABLE=true;
-   window.inboxRequestGeneration=0;
-   window.catalogSheetSettingsDispose=()=>{};
-   window.inboxNotesDispose=()=>{};
-   window.manualNotesView=null;
-   window.pages={'youtube-primary':()=>{},'youtube-private':()=>{},settings:()=>{},copy:()=>{}};
-   window.eval(decl+render+panel+';window.openWorkspace=render;');
-   window.addEventListener('hashchange',()=>window.openWorkspace());
-   window.openWorkspace();
-  },{decl,render,panel});
-  const menu=page.locator('#nav a'),host=page.locator('#youtube-email-host');
-  const oldPane=host.locator('#youtube-pane-existing'),newPane=host.locator('#youtube-pane-empty');
-  const oldDraft=oldPane.frameLocator('iframe').locator('#primary-fixture');
-  assert.equal(await menu.count(),4);
-  assert.equal(await menu.nth(0).getAttribute('aria-current'),'page');
-  assert.equal(await oldPane.locator('details').evaluate(node=>node.open),true);
-  assert.equal(await host.locator('[role=tablist]').isHidden(),true);
-  assert.equal(await newPane.locator('iframe').count(),0);
-  await oldDraft.fill('primary unsaved');
-  await menu.nth(1).click();
-  const newDraft=newPane.frameLocator('iframe').locator('#private-fixture');
-  await newDraft.fill('private unsaved');
-  assert.equal(newDocumentRequests,1);
-  await menu.nth(3).click();
-  await page.waitForURL('**/#settings',{timeout:5000});
-  await host.waitFor({state:'hidden',timeout:5000});
-  assert.equal(await menu.nth(3).getAttribute('aria-current'),'page');
-  assert.equal(await host.isHidden(),true);
-  await menu.nth(0).click();
-  await page.waitForURL('**/#youtube-primary',{timeout:5000});
-  await oldPane.waitFor({state:'visible',timeout:5000});
-  assert.equal(await oldDraft.inputValue(),'primary unsaved');
-  await menu.nth(1).click();
-  await page.waitForURL('**/#youtube-private',{timeout:5000});
-  await newPane.waitFor({state:'visible',timeout:5000});
-  assert.equal(await newDraft.inputValue(),'private unsaved');
-  assert.equal(newDocumentRequests,1);
-  await page.evaluate(()=>{window.me={id:'new-fixture-owner',email:'new@example.test'};window.openWorkspace();});
-  assert.equal(await newDraft.inputValue(),'');
-  assert.equal(newDocumentRequests,2);
-  await menu.nth(0).click();
-  assert.equal(await oldDraft.inputValue(),'');
-  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  await page.route('https://sanji.example.test/workspace/',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><meta charset="utf-8"><div id="app"></div>'}));
+  await page.goto('https://sanji.example.test/workspace/#copy');
+  const copy=source.slice(source.indexOf('let projectCopyView ='),source.indexOf('\nconst pages = {'));
+  await page.evaluate(code=>{
+   Object.assign(window,{$:s=>document.querySelector(s),me:{id:'owner-fixture'},privateYoutubeLabelState:null,PROJECT_COPY_PURPOSE:'youtube_project_copy_primary',head:()=>'<h1>카피</h1>'});
+   window.eval(code+';window.openCopy=projectCopyPage;window.hideCopy=clearProjectCopyView;');
+  },copy);
+  const display=page.locator('#youtube-primary-copy');
+  const subject='[채널명] 예시 제목',body=' 첫 줄  \r\n\r\n[채널명] <img src=x onerror=alert(1)> & 마지막 줄  ';
+  await page.evaluate(async({subject,body})=>{
+   const row={archived:false,data:{purpose:window.PROJECT_COPY_PURPOSE,channel:'이메일',subject,body}};
+   window.fixtureRow=row;
+   window.workspacePrimaryProjectCopy=async(owner,current)=>{
+    if(owner!=='owner-fixture'||!current())throw Error('owner');
+    return {rows:[{archived:false,data:{...row.data,purpose:'creator_proposal',subject:'다른 용도'}},{...row,archived:true},row]};
+   };await window.openCopy();
+  },{subject,body});
+  const panels=page.locator('#app details');
+  assert.equal(await panels.count(),2);
+  assert.deepEqual(await panels.locator('summary').allTextContents(),['쫀득빵','별도 YouTube 프로젝트']);
+  assert.equal(await display.isHidden(),true);
+  await panels.nth(0).locator('summary').click();
+  assert.equal(await display.isVisible(),true);
+  assert.equal(await panels.nth(1).evaluate(node=>node.open),false);
+  assert.deepEqual(await display.locator('.message').allTextContents(),[subject,body]);
+  await panels.nth(0).locator('summary').click();
+  assert.equal(await display.isHidden(),true);
+  await panels.nth(1).locator('summary').click();
+  assert.match(await panels.nth(1).locator('p').innerText(),/아직 카피가 설정되지/);
+  assert.equal(await page.locator('#app a').count(),0);
+  assert.equal(await display.locator('img, a, form, button').count(),0);
+  assert.equal(await page.locator('#app button, #app form').count(),0);
+  await page.evaluate(()=>window.hideCopy('계정 변경'));
+  assert.equal(await display.textContent(),'계정 변경');
+  await page.evaluate(async()=>{let finish;window.workspacePrimaryProjectCopy=()=>new Promise(resolve=>finish=resolve);const pending=window.openCopy();window.me={id:'new-owner'};finish({rows:[window.fixtureRow]});await pending;});
+  assert.equal(await display.locator('.message').count(),0);
+  await page.evaluate(async()=>{let finish;history.pushState(null,'','#copy');window.workspacePrimaryProjectCopy=()=>new Promise(resolve=>finish=resolve);const pending=window.openCopy();history.pushState(null,'','#settings');finish({rows:[window.fixtureRow]});await pending;});
+  assert.equal(await display.locator('.message').count(),0);
+  await page.evaluate(async()=>{history.pushState(null,'','#copy');window.workspacePrimaryProjectCopy=async()=>({rows:[window.fixtureRow,window.fixtureRow]});await window.openCopy();});
+  assert.match(await display.textContent(),/확인하지 못했습니다/);
+  await page.evaluate(async()=>{window.workspacePrimaryProjectCopy=async()=>({rows:[]});await window.openCopy();});
+  assert.match(await display.textContent(),/아직 기본 카피가 설정되지/);
  }finally{await browser.close()}
+});
+
+test('project copy uses verbatim text instead of HTML and fails closed on stale or ambiguous reads',async()=>{
+ const script=source.slice(source.indexOf('let projectCopyView ='),source.indexOf('\nconst pages = {'));
+ const app={},host={isConnected:true,removeAttribute(){},replaceChildren(...nodes){this.nodes=nodes}};
+ const c={me:{id:'a'},location:{hash:'#copy'},PROJECT_COPY_PURPOSE:'youtube_project_copy_primary',privateYoutubeLabelState:null,head:()=>'',document:{createElement:tag=>({tag})},$:selector=>selector==='#app'?app:host};
+ vm.createContext(c);vm.runInContext(script+';this.openCopy=projectCopyPage;',c);
+ const row={archived:false,data:{purpose:'youtube_project_copy_primary',channel:'이메일',subject:'[채널명] 테스트',body:'  본문\r\n\r\n<img src=x> [채널명]  '}};
+ c.workspacePrimaryProjectCopy=async(owner,active)=>{assert.equal(owner,'a');assert.equal(active(),true);return {rows:[row]}};
+ await c.openCopy();
+ assert.equal(host.nodes[1].textContent,row.data.subject);assert.equal(host.nodes[3].textContent,row.data.body);
+ assert.equal(host.nodes[3].innerHTML,undefined);
+ c.workspacePrimaryProjectCopy=async()=>({rows:[row,row]});await c.openCopy();assert.match(host.textContent,/확인하지 못했습니다/);
+ delete host.nodes;let finish;
+ c.workspacePrimaryProjectCopy=()=>new Promise(resolve=>finish=resolve);
+ const pending=c.openCopy();c.me={id:'b'};finish({rows:[row]});await pending;assert.equal(host.nodes,undefined);
+});
+
+test('built workspace routes both real project panels and the private copy without a document load or outbound writes',async()=>{
+ const {chromium}=require('@playwright/test');
+ const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
+ try{
+  const origin='https://workspace.test',owner='a2abaa22-5b41-4fb7-9966-45e24f08bf3a';
+  const user={id:owner,email:'owner@example.test',aud:'authenticated',role:'authenticated',app_metadata:{},user_metadata:{}};
+  const exp=Math.floor(Date.now()/1000)+3600;
+  const jwt=[{alg:'HS256',typ:'JWT'},{sub:owner,exp,aud:'authenticated'}].map(v=>Buffer.from(JSON.stringify(v)).toString('base64url')).join('.')+'.fixture';
+  const session={access_token:jwt,refresh_token:'fixture-only',expires_at:exp,expires_in:3600,token_type:'bearer',user};
+  const subject='[채널명] / synthetic saved subject';
+  const body='  [채널명] original\n\nfixture  ';
+  const page=await browser.newPage({viewport:{width:390,height:880}});
+  await page.addInitScript(({session})=>localStorage.setItem('sb-ofasbfpeapbdcotnptvz-auth-token',JSON.stringify(session)),{session});
+  const documentRequests=[],writes=[];
+  await page.route('**/*',async route=>{
+   const req=route.request(),url=new URL(req.url()),path=url.pathname;
+   if(req.resourceType()==='document')documentRequests.push(path);
+   if(url.origin===origin){
+    const files={'/workspace/':['public/workspace/index.html','text/html'], '/workspace/app.js':['public/workspace/app.js','text/javascript'], '/workspace/style.css':['public/workspace/style.css','text/css']};
+    if(files[path])return route.fulfill({contentType:files[path][1],body:fs.readFileSync(files[path][0],'utf8')});
+    return route.fulfill({status:404,body:'unexpected page asset'});
+   }
+   const headers={'access-control-allow-origin':origin,'access-control-allow-methods':'GET,POST,OPTIONS','access-control-allow-headers':'*'};
+   if(req.method()==='OPTIONS')return route.fulfill({status:204,headers});
+   if(url.hostname!=='ofasbfpeapbdcotnptvz.supabase.co')return route.abort();
+   const readPosts=['/rest/v1/rpc/sanji_is_member','/rest/v1/rpc/sanji_connection_status','/functions/v1/youtube-manual-mail/recent'];
+   if(req.method()!=='GET'&&!readPosts.includes(path)){writes.push(path);return route.fulfill({status:400,headers,json:{error:'unexpected write'}})}
+   let response=[];
+   if(path==='/auth/v1/user')response=user;
+   else if(path==='/rest/v1/sanji_members')response=[{user_id:owner}];
+   else if(path==='/rest/v1/rpc/sanji_is_member')response=true;
+   else if(path==='/rest/v1/rpc/sanji_connection_status')response={gmail:null,instagram:null};
+   else if(path==='/rest/v1/sanji_private_wedding_projects')response=[{owner,title:'샘플 지역 테스트홀 웨딩'}];
+   else if(path.endsWith('/template-library'))response={rows:[{archived:false,data:{purpose:'youtube_project_copy_primary',channel:'이메일',subject,body}}]};
+   else if(path.endsWith('/recent'))response={rows:[],more:false};
+   else if(path.endsWith('/schedule-status'))response={jobs:[]};
+   else if(path.endsWith('/connections'))response={gmail:{connected:false,enabled:false,reauthRequired:false},instagram:{connected:false,enabled:false}};
+   else if(path.startsWith('/functions/v1/'))response={};
+   return route.fulfill({headers,json:response});
+  });
+  await page.goto(origin+'/workspace/');
+  const host=page.locator('#youtube-email-host'),primary=host.locator('[data-youtube-project="youtube-primary"]'),nav=page.locator('#nav a');
+  try{await primary.locator('#workspace').waitFor({timeout:12000});}
+  catch(e){throw new Error(`Workspace boot fixture: ${(await page.locator('#toast,#connection-banner,#app').allTextContents()).join(' | ').slice(0,1000)}`,{cause:e});}
+  await primary.getByText('최근 이메일 발송 상태',{exact:true}).waitFor({timeout:12000});
+  await nav.nth(1).click();
+  const wedding=host.locator('[data-youtube-project="youtube-private"]');
+  await wedding.locator('#wedding-panel').waitFor({timeout:12000});
+  assert.equal(await wedding.locator('#wedding-heading').textContent(),'샘플 지역 테스트홀 웨딩');
+  assert.equal(await primary.isHidden(),true);
+  await nav.nth(2).click();await page.locator('#app summary').first().click();
+  const saved=page.locator('#youtube-primary-copy .message');
+  await saved.first().waitFor({timeout:12000});
+  assert.deepEqual(await saved.allTextContents(),[subject,body]);
+  assert.equal(await page.locator('#app a').count(),0);
+  assert.equal(await host.isHidden(),true);
+  await nav.nth(0).click();await primary.locator('#workspace').waitFor({timeout:12000});
+  assert.equal(await wedding.isHidden(),true);
+  assert.equal(await host.locator('iframe').count(),0);
+  assert.deepEqual(documentRequests,['/workspace/']);
+  assert.deepEqual(writes,[]);
+ }finally{await browser.close()}
+});
+
+test('a stale BFCache session check cannot log out a newer workspace account',async()=>{
+ const start=source.indexOf("window.addEventListener('pageshow',event=>{",source.indexOf("boot();\nwindow.addEventListener('pagehide'"));
+ const end=source.indexOf('if(typeof manualClient',start);
+ const callbacks={};let reject,resolve,auth=0,renders=0;
+ const c={YOUTUBE_DISCOVERY_AVAILABLE:true,me:{id:'same-id'},youtubeIdentityEpoch:0,youtubeBlockedOwner:null,
+  window:{addEventListener:(name,callback)=>{callbacks[name]=callback}},
+  manualClient:{auth:{getSession:()=>new Promise((a,b)=>{resolve=a;reject=b})}},authPage:()=>{auth++;},render:()=>{renders++;}};
+ vm.createContext(c);vm.runInContext(source.slice(start,end),c);
+ callbacks.pageshow({persisted:true});await Promise.resolve();
+ c.me={id:'same-id'};reject(Error('former account transport error'));
+ await new Promise(r=>setImmediate(r));assert.equal(auth,0);
+ callbacks.pageshow({persisted:true});await Promise.resolve();
+ resolve({data:{session:{user:{id:'same-id'}}}});
+ await new Promise(r=>setImmediate(r));assert.equal(renders,1);
 });

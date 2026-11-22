@@ -8,8 +8,10 @@ class Node {
  addEventListener(name,cb){this.handlers[name]=cb;}
  reset(){this.input={};}
 }
-async function harness(){
- const code=(await esbuild.build({entryPoints:[path.resolve('web/youtube-wedding.js')],bundle:true,write:false,plugins:[{
+async function harness({embedded=false}={}){
+ const entry=embedded?{stdin:{resolveDir:path.resolve('web'),contents:"import { mountYouTubeWedding } from './youtube-wedding-mount.js'; globalThis.mountFixture=mountYouTubeWedding;"}}:
+  {entryPoints:[path.resolve('web/youtube-wedding.js')]};
+ const code=(await esbuild.build({...entry,bundle:true,write:false,plugins:[{
   name:'mock-supabase',setup(build){
    build.onResolve({filter:/^@supabase\/supabase-js$/},()=>({namespace:'mock',path:'auth'}));
    build.onLoad({namespace:'mock',filter:/.*/},()=>({contents:'export const createClient=()=>mockClient'}));
@@ -18,7 +20,7 @@ async function harness(){
  const nodes={}, events={}, get=id=>nodes[id]??(nodes[id]=new Node());
  const state={actor:null,allowed:true,wait:null,sessionWait:null,requestWait:null,calls:[],rows:[],contacts:[],contactReads:[],contactWait:null,contactFailure:false,project:true,loadOthers:false,failure:false,inserts:0}; let change;
  const mockClient={auth:{
-  onAuthStateChange(cb){change=cb;cb('INITIAL_SESSION',null)},
+  onAuthStateChange(cb){change=cb;cb('INITIAL_SESSION',null);return {data:{subscription:{unsubscribe(){state.unsubscribed=true}}}}},
   async getUser(){state.calls.push('getUser');return state.wait??{data:{user:{id:state.actor}}}},
   async getSession(){const actor=state.actor;if(state.sessionWait)await state.sessionWait;return {data:{session:actor?{user:{id:actor},access_token:'fixture-token-'+actor}:null}}}
  },async rpc(name){state.calls.push(name);return {data:state.allowed}},
@@ -49,11 +51,14 @@ async function harness(){
   }
   };return q;
  }};
- vm.runInNewContext(code,{mockClient,document:{getElementById:get,createElement:()=>new Node(),createTextNode:t=>t},Option:Node,
-  URL,window:{addEventListener:(n,c)=>events[n]=c},setTimeout,FormData:class{constructor(form){return Object.entries(form.input??{});}}});
+ const root=new Node();
+ const document={getElementById:id=>id==='wedding-root'?root:get(id),createElement:()=>new Node(),createTextNode:t=>t,defaultView:{addEventListener:(n,c)=>events[n]=c}};
+ Object.assign(root,{ownerDocument:document,querySelector:sel=>get(sel.slice(1)),replaceChildren(){this.innerHTML='';}});
+ const context={mockClient,document,Option:Node,URL,setTimeout,FormData:class{constructor(form){return Object.entries(form.input??{});}}};
+ vm.runInNewContext(code,context);
  const auth=(actor)=>{state.actor=actor;change('CHANGED',actor?{user:{id:actor}}:null);};
  const tick=()=>new Promise(r=>setTimeout(r,10));
- return {get,state,auth,tick,events};
+ return {get,state,auth,tick,events,root,mount:(owner,signal)=>context.mountFixture(root,{owner,signal,client:mockClient})};
 }
 test('canonical evidence, KST date, and owner/project isolation',async()=>{
  const m=await import('../web/youtube-wedding-model.mjs');
@@ -96,16 +101,16 @@ test('stale previous owner response cannot re-open after logout',async()=>{
  assert.equal(get('wedding-heading').textContent,'별도 YouTube 프로젝트');
  assert.deepEqual(state.calls,['getUser']);
 });
-test('blank route is owner-gated, isolated from old YouTube page, and only loaded by workspace tab',()=>{
- const parent=fs.readFileSync('private/ui/app.js','utf8'),old=fs.readFileSync('public/workspace/youtube/index.html','utf8'),child=fs.readFileSync('public/workspace/youtube/wedding/index.html','utf8');
- assert.match(parent,/me = await api\("\/me"\)/);
- assert.match(parent,/id="youtube-pane-empty" role="tabpanel"[^>]+ hidden><\/div>/);
- assert.match(parent,/index===1&&!panes\[1\]\.querySelector\('iframe'\)/);
- assert.match(parent,/frame\.src='\.\/youtube\/wedding\/'/);
+test('standalone route and native panel share the same private view without send or schedule',()=>{
+ const old=fs.readFileSync('public/workspace/youtube/index.html','utf8'),child=fs.readFileSync('public/workspace/youtube/wedding/index.html','utf8');
+ assert.match(child,/id="wedding-root"/);
  assert.doesNotMatch(old,/\.\/wedding\//);
- assert.doesNotMatch(child,/mailto:|(?:id|name)="(?:send|schedule|subject|email)"/i);
- const source=fs.readFileSync('web/youtube-wedding.js','utf8');
- assert.doesNotMatch(source,/fetch\(|localStorage|sessionStorage|mailto:|youtube-manual-(?:mail|scheduler)/i);
+ const entry=fs.readFileSync('web/youtube-wedding.js','utf8');
+ assert.match(entry,/startStandaloneYouTubeWedding[(]root, client[)]/);
+ const source=fs.readFileSync('web/youtube-wedding-mount.js','utf8');
+ assert.match(source,/export function mountYouTubeWedding/);
+ assert.match(source,/root\.querySelector/);
+ assert.doesNotMatch(source,/fetch\(|localStorage|sessionStorage|mailto:|iframe|youtube-manual-(?:mail|scheduler)|(?:id|name)="(?:send|schedule|subject|email)"/i);
 });
 
 test('uncertain save blocks replay until a verified refresh; cross-owner response fails closed',async()=>{
@@ -171,26 +176,45 @@ test('installed Supabase SDK preserves explicit Authorization while its internal
  assert.equal(response.error,null);
  assert.deepEqual(requests,[{path:'/rest/v1/sanji_private_wedding_shortlist',authorization:'Bearer fixture-token-a',body:{owner:'a'}}]);
 });
-test('workspace tab mounts the authenticated project iframe once, without rebuilding the existing frame',()=>{
- const app=fs.readFileSync('private/ui/app.js','utf8');
- const logic=app.slice(app.indexOf('function mountYoutubeProjectTabs('),app.indexOf('function syncYoutubeEmailHost('));
- const tabs=['existing','empty'].map(key=>({
-  on:{},classList:{toggle(){}},
-  getAttribute(){return key},setAttribute(k,v){this[k]=v},
-  addEventListener(k,v){this.on[k]=v},focus(){this.focused=true}
- }));
- let opens=0;
- const untouchedFrame={draft:'synthetic existing draft'};
- const frame={};
- const panes={existing:{hidden:false,frame:untouchedFrame},empty:{hidden:true,querySelector(q){assert.equal(q,'iframe');return this.frame||null;},
-  append(value){assert.equal(value,frame);assert.equal(value.src,'./youtube/wedding/');opens++;this.frame=value;}}};
- const host={ownerDocument:{createElement(tag){assert.equal(tag,'iframe');return frame;}},querySelectorAll(){return tabs},querySelector(q){return panes[q.slice(1)]}};
- vm.runInNewContext(logic+'mountYoutubeProjectTabs(host)',{host});
- assert.equal(opens,0);assert.equal(panes.empty.frame,undefined);
- tabs[1].on.click();assert.equal(opens,1);assert.equal(panes.existing.hidden,true);assert.equal(panes.empty.hidden,false);
- tabs[1].on.keydown({key:'ArrowLeft',preventDefault(){}});assert.equal(tabs[0].focused,true);
- assert.equal(panes.existing.hidden,false);assert.equal(panes.empty.hidden,true);
- tabs[1].on.click();assert.equal(opens,1);assert.equal(panes.existing.frame,untouchedFrame);assert.equal(panes.empty.frame,frame);
+test('embedded view reuses explicit client and abort removes scoped content and drops a stale owner response',async()=>{
+ const {get,state,auth,tick,root,mount}=await harness({embedded:true});
+ const abort=new AbortController();
+ let finish;state.actor='a';state.wait=new Promise(r=>finish=r);
+ const cleanup=mount('a',abort.signal);
+ assert.match(root.innerHTML,/data-wedding-project/);
+ assert.deepEqual(state.calls,['getUser']);
+ abort.abort();
+ assert.equal(root.innerHTML,'');
+ assert.equal(state.unsubscribed,true);
+ finish({data:{user:{id:'a'}}});await tick();
+ assert.equal(get('wedding-panel').hidden,true);
+ assert.deepEqual(state.calls,['getUser']);
+ cleanup(); // idempotent
+ assert.equal(root.innerHTML,'');
+ const timer=new AbortController();state.wait=null;state.actor='a';
+ const destroy=mount('a',timer.signal);
+ await tick();
+ assert.equal(get('wedding-panel').hidden,false);
+ get('wedding-form').input=fixture;
+ await get('wedding-form').handlers.submit({preventDefault(){}});
+ assert.equal(get('wedding-list').children.length,1);
+ auth('b'); // The old host cannot load a second owner.
+ assert.equal(get('wedding-list').children.length,0);
+ assert.equal(get('wedding-panel').hidden,true);
+ await tick();
+ assert.equal(state.calls.filter(c=>c==='project').length,1);
+ destroy();
+});
+
+test('standalone BFCache restoration requires fresh session and owner evidence',async()=>{
+ const {get,state,auth,tick,events}=await harness();
+ auth('a');await tick();
+ assert.equal(get('wedding-panel').hidden,false);
+ events.pagehide();
+ assert.equal(get('wedding-panel').hidden,true);
+ state.actor='b';events.pageshow({persisted:true});await tick();
+ assert.equal(get('wedding-panel').hidden,false);
+ assert.equal(state.calls.filter(c=>c==='project').length,2);
 });
 
 test('owner verified list does not rename original evidence; source failure is unknown, not zero',async()=>{

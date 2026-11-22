@@ -9,7 +9,7 @@ source = source.replace("const MANUAL_INBOX_AVAILABLE = false;", "const MANUAL_I
 const start = source.indexOf("async function api("),
   end = source.indexOf("\nfunction field(", start);
 source =
-  'import {catalogSheetUrl,catalogSheetKstTime} from "./catalog-sheet-record.mjs";\nimport {catalogSheetSettingsApi,workspaceApi,workspaceYoutubeProjectTitle,integrationStatus,inboxReviewSettingsApi,manualNotesApi,creatorProposalContextApi,manualWorkspaceApi,transientInboxApi,client as manualClient,client as transientClient} from "./supabase-api.js";\nimport "../private/ui/instagram-transient-inbox-ui.js";\nimport "../private/ui/instagram-transient-products.js";\nimport "../private/ui/instagram-manual-product-binding.js";\nimport "../private/ui/instagram-reply-policy.js";\nimport "../private/ui/creator-manual-notes.js";\nimport "../private/ui/inbox-review-queue.js";\nimport "../private/ui/instagram-auto-products.js";\n' +
+  'import {mountYouTubeDiscovery} from "./youtube-discovery-mount.js";\nimport {mountYouTubeWedding} from "./youtube-wedding-mount.js";\nimport {catalogSheetUrl,catalogSheetKstTime} from "./catalog-sheet-record.mjs";\nimport {catalogSheetSettingsApi,workspaceApi,workspaceYoutubeProjectTitle,workspacePrimaryProjectCopy,integrationStatus,inboxReviewSettingsApi,manualNotesApi,creatorProposalContextApi,manualWorkspaceApi,transientInboxApi,client as manualClient,client as transientClient} from "./supabase-api.js";\nimport "../private/ui/instagram-transient-inbox-ui.js";\nimport "../private/ui/instagram-transient-products.js";\nimport "../private/ui/instagram-manual-product-binding.js";\nimport "../private/ui/instagram-reply-policy.js";\nimport "../private/ui/creator-manual-notes.js";\nimport "../private/ui/inbox-review-queue.js";\nimport "../private/ui/instagram-auto-products.js";\n' +
   source.slice(0, start) +
   'async function api(path,method="GET",body,owner,stillActive){if(path.startsWith("/creator-instagram/manual-")){if(method!=="POST")throw Error("지원하지 않는 요청입니다.");return manualWorkspaceApi(path,body,owner,stillActive)}return workspaceApi(path,method,body)}\n' +
   source.slice(end);
@@ -41,6 +41,7 @@ esbuild.buildSync({
     sourcefile: "workspace-ui.js",
   },
   bundle: true,
+  loader: {".html":"text",".css":"text"},
   outfile: "public/workspace/app.js",
   platform: "browser",
   target: "es2022",

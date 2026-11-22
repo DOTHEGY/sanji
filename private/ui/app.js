@@ -217,7 +217,7 @@ async function authPage() {
   me = null;
   privateYoutubeLabelState = null;
   csrf = "";
-  const youtubeHost=$("#youtube-email-host");if(youtubeHost){youtubeHost.replaceChildren();youtubeHost.hidden=true;youtubeHost.dataset.owner="";}
+  disposeYoutubeWorkspace();
   $("#nav").innerHTML = "";
   $("#user").textContent = "관리자 로그인";
   const status = await api("/status");
@@ -654,9 +654,10 @@ function showMatches() {
       : '<div class="empty">크리에이터와 상품을 추가하고 공개 주제를 기록하세요.</div>');
 }
 let templateLibraryRows=[];
+const PROJECT_COPY_PURPOSE = "youtube_project_copy_primary";
 async function templatesPage(){
  $('#app').innerHTML=head('템플릿','저장한 카피를 수정하거나 보관할 수 있습니다. 자동 발송 설정과 기존 예약은 별도로 유지됩니다.',button('＋ 템플릿 추가','library-add','',true))+'<div class="panel">불러오는 중…</div>';
- try{const r=await api('/template-library');templateLibraryRows=r.rows||[];const card=t=>`<article class="panel">${tag(t.data.channel)}<h3>${esc(t.data.name)}</h3><p class="sub">${esc(t.data.subject)}</p><div class="message">${esc(t.data.body)}</div>${t.archived?button('복구','library-restore',t.id):button('수정','library-edit',t.id)+' '+button('사용','library-use',t.id)+' '+button('보관','library-archive',t.id)}</article>`;const active=templateLibraryRows.filter(t=>!t.archived),archived=templateLibraryRows.filter(t=>t.archived);$('#app').innerHTML=head('템플릿','라이브러리 수정·보관은 기존 자동 발송과 예약을 바꾸지 않습니다.',button('＋ 템플릿 추가','library-add','',true))+`<div class="panel"><h2>자동 발송 본문</h2><p class="fine">저장용 템플릿과 별개로 관리합니다. 기존 예약 내용은 수정하지 않습니다.</p>${button('발송 문단 확인·변경','outbound-profile')}</div><div class="cards">${active.map(card).join('')||'<div class="panel empty">저장된 템플릿이 없습니다.</div>'}</div><details class="panel"><summary>보관된 템플릿 ${archived.length}개</summary><div class="cards">${archived.map(card).join('')||'<p class="fine">보관된 템플릿이 없습니다.</p>'}</div></details>`;}catch(e){const legacy=(data.templates||[]);$('#app').innerHTML=head('템플릿','새 라이브러리를 불러오지 못했습니다. 기존 템플릿은 읽기 전용으로 사용할 수 있습니다.')+'<p class="notice">'+esc(e.message||'템플릿을 불러오지 못했습니다.')+'</p><div class="cards">'+legacy.map(t=>'<article class="panel"><h3>'+esc(t.name)+'</h3><div class="message">'+esc(t.body)+'</div>'+button('사용','use-template',t.id)+'</article>').join('')+'</div>';}
+ try{const r=await api('/template-library');templateLibraryRows=(r.rows||[]).filter(row=>row.data?.purpose!==PROJECT_COPY_PURPOSE);const card=t=>`<article class="panel">${tag(t.data.channel)}<h3>${esc(t.data.name)}</h3><p class="sub">${esc(t.data.subject)}</p><div class="message">${esc(t.data.body)}</div>${t.archived?button('복구','library-restore',t.id):button('수정','library-edit',t.id)+' '+button('사용','library-use',t.id)+' '+button('보관','library-archive',t.id)}</article>`;const active=templateLibraryRows.filter(t=>!t.archived),archived=templateLibraryRows.filter(t=>t.archived);$('#app').innerHTML=head('템플릿','라이브러리 수정·보관은 기존 자동 발송과 예약을 바꾸지 않습니다.',button('＋ 템플릿 추가','library-add','',true))+`<div class="panel"><h2>자동 발송 본문</h2><p class="fine">저장용 템플릿과 별개로 관리합니다. 기존 예약 내용은 수정하지 않습니다.</p>${button('발송 문단 확인·변경','outbound-profile')}</div><div class="cards">${active.map(card).join('')||'<div class="panel empty">저장된 템플릿이 없습니다.</div>'}</div><details class="panel"><summary>보관된 템플릿 ${archived.length}개</summary><div class="cards">${archived.map(card).join('')||'<p class="fine">보관된 템플릿이 없습니다.</p>'}</div></details>`;}catch(e){const legacy=(data.templates||[]);$('#app').innerHTML=head('템플릿','새 라이브러리를 불러오지 못했습니다. 기존 템플릿은 읽기 전용으로 사용할 수 있습니다.')+'<p class="notice">'+esc(e.message||'템플릿을 불러오지 못했습니다.')+'</p><div class="cards">'+legacy.map(t=>'<article class="panel"><h3>'+esc(t.name)+'</h3><div class="message">'+esc(t.body)+'</div>'+button('사용','use-template',t.id)+'</article>').join('')+'</div>';}
 }
 function libraryTemplateForm(id=''){const row=templateLibraryRows.find(t=>t.id===id),t=row?.data||{channel:'이메일',purpose:'brand_proposal'};modal(`<h2>${id?'템플릿 수정':'템플릿 추가'}</h2><form id="library-template-form" data-id="${esc(id)}" data-version="${Number(row?.version||0)}">${field('name','템플릿 이름',t.name)}${field('channel','채널',t.channel,'text',['이메일','Instagram DM'])}${field('purpose','용도',t.purpose,'text',['brand_proposal','brand_reply','creator_proposal'])}${field('subject','제목',t.subject)}${field('body','본문',t.body,'textarea')}${field('signature','서명',t.signature,'textarea')}<p class="fine">저장·보관해도 자동 발송과 이미 예약된 메일은 변경되지 않습니다.</p><button class="primary" type="submit">저장</button></form>`);}
 function templateForm(id = "") {
@@ -1353,64 +1354,51 @@ function sentMailCards() {
     return '<article class="panel sent-card"><div class="mail-card-top"><h3>'+esc(c?.name||"발송 대상")+'</h3>'+tag("Gmail 서버 접수")+(bounce.length?tag('수신 주소 반송 기록 · 발송건 확인 필요','orange'):'')+(opened.has(o.id)?tag(opened.get(o.id).mode==="shared"?"열람 추정 · 복수 수신자 공용":"열람 추정"):tag(o.data?.trackingResult?.applied?"감지 정보 미확인":"추적 미적용"))+(replied(o)?tag("회신 확인 · 문자·전화 수동 기록 포함"):"")+'</div>'+(bounce.length?'<p class="notice">'+bounce.map(x=>esc(x.email)+' · '+esc(x.status)).join('<br>')+'<br>이 주소의 영구 반송 기록입니다. 같은 주소에 보낸 여러 메일 중 이 발송건의 실패인지는 원본 확인이 필요합니다.</p>':'')+'<p class="fine">'+esc(copy?.emails?.join(", ")||copy?.email||c?.contact?.email||"")+" · "+esc(localTime(o.created))+'</p><details><summary>'+esc(copy?.subject||thread?.subject||"보낸 메일")+'</summary><div class="mail-letter">'+esc(copy?.body||old?.text||"보낸 원문은 대화함에서 동기화해 확인하세요.")+'</div></details>'+(opened.has(o.id)?'<p class="fine">최초 이미지 감지 '+esc(localTime(opened.get(o.id).first_included))+' · 마지막 '+esc(localTime(opened.get(o.id).last_included))+' · 실제 읽은 시각 아님</p>':'<p class="fine">받은편지함 도착·열람 미확인 · Gmail API 발송에는 Mailsuite 확장 프로그램 추적이 자동 적용되지 않습니다.</p>')+''+button("열람 추정·메일 상세","tracking-detail",o.id)+(thread?.channel==='email'?button("이메일 대화 보기","mail-open-thread",thread.id):"")+'</article>';
   }).join("")+manualRows.map(t=>'<article class="panel sent-card"><h3>'+esc(targetName(t.target))+'</h3>'+tag(t.channel==="phone"?"전화 회신 · 수동 기록":t.channel==="sms"?"문자 회신 · 수동 기록":"운영자 보고 · 수동 기록")+'<p>'+esc(t.messages.at(-1)?.text||"")+'</p>'+button('기록 보기','mail-open-thread',t.id)+'</article>').join('')+'</div>'+(rows.length||manualRows.length?"":'<div class="panel empty"><h3>조건에 해당하는 메일이 없습니다</h3><p>실제 기록이 있는 메일만 표시합니다. 감지 없음은 미열람·수신 실패를 의미하지 않습니다.</p></div>');
 }
-function youtubeEmailPanel(){
- if(typeof YOUTUBE_DISCOVERY_AVAILABLE==='undefined'||!YOUTUBE_DISCOVERY_AVAILABLE)return '';
- return '<section class="panel email-youtube-panel"><h2>유튜브 크리에이터 이메일</h2><div class="mail-tabs" role="tablist" aria-label="YouTube 프로젝트"><button type="button" class="primary" id="youtube-tab-existing" role="tab" aria-selected="true" aria-controls="youtube-pane-existing">기존 프로젝트</button><button type="button" id="youtube-tab-empty" role="tab" aria-selected="false" aria-controls="youtube-pane-empty" tabindex="-1">별도 YouTube 프로젝트</button></div><div id="youtube-pane-existing" role="tabpanel" aria-labelledby="youtube-tab-existing"><p class="fine">저장된 크리에이터를 검토하고 선택하세요. 메일 발송 가능 상태는 아래 화면에서 확인합니다.</p><details><summary>유튜브 크리에이터 열기</summary><iframe class="email-youtube-frame" src="./youtube/" title="유튜브 크리에이터 이메일" loading="lazy" referrerpolicy="strict-origin-when-cross-origin"></iframe><p><a href="./youtube/" target="_blank" rel="noopener noreferrer">별도 창으로 열기 ↗</a></p></details></div><div id="youtube-pane-empty" role="tabpanel" aria-labelledby="youtube-tab-empty" tabindex="0" hidden></div></section>';
-}
-function mountYoutubeProjectTabs(host){
- const tabs=[...host.querySelectorAll('[role="tab"]')];
- const panes=tabs.map(tab=>host.querySelector('#'+tab.getAttribute('aria-controls')));
- if(tabs.length!==2||panes.some(pane=>!pane))return;
- const select=(index)=>{
-  if(index===1&&!panes[1].querySelector('iframe')){
-   const frame=host.ownerDocument.createElement('iframe');
-   frame.className='email-youtube-frame';
-   frame.title='별도 YouTube 프로젝트';
-   frame.loading='lazy';
-   frame.referrerPolicy='no-referrer';
-   frame.src='./youtube/wedding/';
-   panes[1].append(frame);
-  }
-  tabs.forEach((tab,i)=>{
-   const active=index===i;
-   tab.setAttribute('aria-selected',String(active));
-   tab.classList.toggle('primary',active);
-   tab.tabIndex=active?0:-1;
-   panes[i].hidden=!active;
-  });
- };
- tabs.forEach((tab,index)=>{
-  tab.addEventListener('click',()=>select(index));
-  tab.addEventListener('keydown',event=>{
-   const next={ArrowLeft:1-index,ArrowRight:1-index,Home:0,End:1}[event.key];
-   if(!Number.isInteger(next))return;
-   event.preventDefault();
-   select(next);
-   tabs[next].focus();
-  });
- });
- return select;
+// Keep a native panel mounted across menu changes, but never across accounts.
+let youtubeWorkspaceOwner=null,youtubeBlockedOwner=null,youtubeIdentityEpoch=0;
+const youtubeNativePanels=new Map();
+function disposeYoutubeWorkspace(){
+ const host=$('#youtube-email-host');
+ for(const entry of youtubeNativePanels.values()){
+  entry.controller.abort();
+  try{entry.cleanup?.();}catch{}
+ }
+ youtubeNativePanels.clear();
+ youtubeWorkspaceOwner=null;
+ if(host){host.replaceChildren();host.hidden=true;}
 }
 function syncYoutubeEmailHost(key){
  const host=$('#youtube-email-host');if(!host)return;
- const owner=me?.id||(typeof me?.email==='string'?me.email:'');
- if(!owner){host.hidden=true;return;}
- if(host.dataset.owner!==owner){host.replaceChildren();host.dataset.owner=owner;host.dataset.selectedRoute="";host.selectProject=null;}
- const direct=key==='youtube-primary'||key==='youtube-private';
- const show=(direct||key==='brands'||key==='discovery')&&typeof YOUTUBE_DISCOVERY_AVAILABLE!=='undefined'&&YOUTUBE_DISCOVERY_AVAILABLE;
- if(show&&!host.firstElementChild){host.innerHTML=youtubeEmailPanel();host.selectProject=mountYoutubeProjectTabs(host);}
- if(show){
-  const tabs=host.querySelector('[role="tablist"]');
-  if(tabs){tabs.hidden=direct;tabs.style.display=direct?'none':'';}
-  const heading=host.querySelector('.email-youtube-panel > h2');
-  if(heading)heading.hidden=direct;
-  if(direct&&host.dataset.selectedRoute!==key)host.selectProject?.(key==='youtube-primary'?0:1);
-  if(key==='youtube-primary'){
-   const details=host.querySelector('#youtube-pane-existing > details');if(details)details.open=true;
-  }
- }
- host.dataset.selectedRoute=show?key:'';
+ const owner=me?.id;
+ const show=Boolean(owner&&owner!==youtubeBlockedOwner&&typeof YOUTUBE_DISCOVERY_AVAILABLE!=='undefined'&&YOUTUBE_DISCOVERY_AVAILABLE&&(key==='youtube-primary'||key==='youtube-private'));
+ if(youtubeWorkspaceOwner&&youtubeWorkspaceOwner!==owner)disposeYoutubeWorkspace();
  host.hidden=!show;
+ if(!show)return;
+ youtubeWorkspaceOwner=owner;
+ for(const [route,entry] of youtubeNativePanels)entry.node.hidden=route!==key;
+ if(youtubeNativePanels.has(key))return;
+ const node=host.ownerDocument.createElement('div');
+ node.dataset.youtubeProject=key;
+ const entry={node,controller:new AbortController(),cleanup:null};
+ youtubeNativePanels.set(key,entry);
+ host.append(node);
+ const mount=key==='youtube-primary'
+  ? (typeof mountYouTubeDiscovery==='function'?mountYouTubeDiscovery:null)
+  : (typeof mountYouTubeWedding==='function'?mountYouTubeWedding:null);
+ const unavailable=()=>{
+  if(entry.controller.signal.aborted||youtubeNativePanels.get(key)!==entry)return;
+  node.textContent='프로젝트를 불러오지 못했습니다. 화면을 새로고침해 주세요.';
+ };
+ if(!mount){unavailable();return;}
+ try{
+  const stop=mount(node,{owner,signal:entry.controller.signal,client:typeof manualClient==='undefined'?undefined:manualClient});
+  if(typeof stop==='function')entry.cleanup=stop;
+  else if(stop?.then)void stop.then(cleanup=>{
+   if(typeof cleanup!=='function')return;
+   if(entry.controller.signal.aborted){try{cleanup();}catch{}}
+   else entry.cleanup=cleanup;
+  }).catch(unavailable);
+ }catch{unavailable();}
 }
 async function discoveryPage() {
   const discoveryRequestOwner=me,discoveryRequest=++discoveryRequestGeneration;
@@ -1738,12 +1726,38 @@ function trackingCampaignForm(id=""){
  modal('<h2>캠페인·추적 고지</h2><form id="tracking-campaign-form" data-id="'+esc(id)+'">'+field("name","캠페인 이름",c.name)+'<label class="field">영업 범위<select name="scope"><option value="brand" '+(c.scope!=="creator"?"selected":"")+'>브랜드 영업</option><option value="creator" '+(c.scope==="creator"?"selected":"")+'>크리에이터 영업</option></select></label>'+field("enabled","캠페인 추적 켜기",c.enabled,"checkbox")+field("externalTracking","Mailsuite 등 외부 추적 사용 · 이 서비스 픽셀 중복 적용 금지",c.external_tracking,"checkbox")+field("disclosure","수신자 고지 문구·HTTPS 정책 링크 (20자 이상) · 작성한 본문에 직접 포함해야 적용",c.disclosure,"textarea")+field("basisNote","처리 근거·고지/동의 검토 기록 · 공개 이메일을 추적 동의로 간주하지 않음",c.basis_note,"textarea")+'<p class="fine">카피는 자동 수정하지 않습니다. 필요한 안내와 선택 방법을 확정한 뒤 본문·템플릿에 직접 넣어 주세요. 개별 처리 중지 요청은 메일 상세의 추적 중지로 반영할 수 있습니다.</p><button type="submit">캠페인 저장</button></form>');
 }
 
-function projectCopyPage() {
-  $("#app").innerHTML=head("카피","프로젝트별로 기존 카피를 확인합니다.")+
-    '<section class="panel"><h2>쫀득빵</h2><p>후보 목록에서 각 사람의 <strong>카피 보기</strong>를 열면 실제 등록된 문안의 미리보기를 볼 수 있습니다.</p><a href="#youtube-primary">쫀득빵 후보에서 카피 보기 ↗</a></section>'+
-    '<section class="panel"><h2 id="private-youtube-copy-label">별도 YouTube 프로젝트</h2><p>아직 카피가 설정되지 않았습니다.</p></section>'+
-    '<p class="fine"><a href="#templates">기존 공통 템플릿</a></p>';
-  if(privateYoutubeLabelState?.owner===me?.id&&privateYoutubeLabelState?.label)paintPrivateYoutubeLabel(privateYoutubeLabelState.label);
+let projectCopyView = null;
+function clearProjectCopyView(message) {
+  const view=projectCopyView;
+  projectCopyView=null;
+  if(view?.host.isConnected)view.host.textContent=message;
+}
+async function projectCopyPage() {
+  const owner=me?.id;
+  if(!owner)return;
+  $("#app").innerHTML=head("카피","프로젝트를 펼쳐 기본 이메일 문안을 확인합니다.")+
+    '<details class="panel"><summary>쫀득빵</summary><div id="youtube-primary-copy" role="status">기본 카피를 불러오는 중…</div></details>'+
+    '<details class="panel"><summary id="private-youtube-copy-label">별도 YouTube 프로젝트</summary><p>아직 카피가 설정되지 않았습니다.</p></details>';
+  if(privateYoutubeLabelState?.owner===owner&&privateYoutubeLabelState?.label)paintPrivateYoutubeLabel(privateYoutubeLabelState.label);
+  const host=$("#youtube-primary-copy"),view={owner,host,account:me};
+  projectCopyView=view;
+  const current=()=>projectCopyView===view&&view.account===me&&location.hash==="#copy"&&host.isConnected;
+  try{
+    if(typeof workspacePrimaryProjectCopy!=="function")throw Error("copy_unavailable");
+    const result=await workspacePrimaryProjectCopy(owner,current);
+    if(!current())return;
+    if(!Array.isArray(result?.rows))throw Error("copy_response");
+    const rows=result.rows.filter(row=>row?.archived===false&&row?.data?.purpose===PROJECT_COPY_PURPOSE);
+    if(rows.length===0){host.textContent="아직 기본 카피가 설정되지 않았습니다.";return;}
+    if(rows.length!==1)throw Error("copy_ambiguous");
+    const {channel,subject,body}=rows[0].data;
+    if(channel!=="이메일"||typeof subject!=="string"||!subject.trim()||subject.length>200||/[\r\n]/.test(subject)||typeof body!=="string"||!body.trim()||body.length>15000||![subject,body].some(value=>value.includes("[채널명]")))throw Error("copy_invalid");
+    const title=document.createElement("h3"),subjectNode=document.createElement("p"),bodyTitle=document.createElement("h3"),bodyNode=document.createElement("div");
+    title.textContent="제목";subjectNode.className="message";subjectNode.textContent=subject;
+    bodyTitle.textContent="본문";bodyNode.className="message";bodyNode.textContent=body;
+    host.removeAttribute("role");
+    host.replaceChildren(title,subjectNode,bodyTitle,bodyNode);
+  }catch{if(current())host.textContent="기본 카피를 확인하지 못했습니다. 이 화면을 다시 열어 주세요.";}
 }
 const pages = {
   copy: projectCopyPage,
@@ -2120,6 +2134,7 @@ const actions = {
     if($('#manual-inbox-root')){manualDispose();$('#modal')?.close();}
     transientDispose();inboxEdited=false;inboxDirtyForms.clear();
     await api("/auth/logout", "POST", {});
+    if(typeof disposeYoutubeWorkspace==="function")disposeYoutubeWorkspace();
     location.reload();
   },
   "add-brand": () => candidateForm(),
@@ -2378,13 +2393,34 @@ window.addEventListener("hashchange", () => {
 window.addEventListener("beforeunload",e=>{if(manualNotesView?.hasWork()){e.preventDefault();e.returnValue="";}});
 boot();
 window.addEventListener('pagehide',()=>{
+ youtubeIdentityEpoch++;
+ disposeYoutubeWorkspace();
  privateYoutubeLabelState=null;
  paintPrivateYoutubeLabel(routes['youtube-private'][1]);
+ if(typeof clearProjectCopyView==="function")clearProjectCopyView("기본 카피를 다시 확인하세요.");
 });
-window.addEventListener('pageshow',event=>{if(event.persisted&&YOUTUBE_DISCOVERY_AVAILABLE)loadPrivateYoutubeLabel();});
+window.addEventListener('pageshow',event=>{
+ if(!event.persisted||!YOUTUBE_DISCOVERY_AVAILABLE||!me)return;
+ const account=me,epoch=++youtubeIdentityEpoch;
+ const current=()=>me===account&&epoch===youtubeIdentityEpoch;
+ void Promise.resolve().then(()=>typeof manualClient==='undefined'?null:manualClient.auth.getSession()).then(result=>{
+  if(!current())return;
+  if(result?.error||result?.data?.session?.user?.id!==account.id){void authPage();return;}
+  youtubeBlockedOwner=null;
+  render();
+ }).catch(()=>{if(current())void authPage();});
+});
 if(typeof manualClient!=="undefined")manualClient.auth.onAuthStateChange((_event,session)=>{
+ if(me?.id&&session?.user?.id!==me.id){
+  youtubeIdentityEpoch++;
+  youtubeBlockedOwner=me.id;
+  disposeYoutubeWorkspace();
+ }else if(session?.user?.id&&session.user.id===me?.id){
+  youtubeBlockedOwner=null;
+ }
  if(privateYoutubeLabelState&&session?.user?.id!==privateYoutubeLabelState.owner){
   privateYoutubeLabelState=null;
   paintPrivateYoutubeLabel(routes["youtube-private"][1]);
  }
+ if(projectCopyView&&session?.user?.id!==projectCopyView.owner)clearProjectCopyView("로그인 계정이 변경됐습니다. 다시 로그인 후 확인하세요.");
 });
