@@ -1,3 +1,4 @@
+import {partyumPhase} from './partyum-plan-diagnostic.mjs';
 export const PROJECT='private-wedding-research';
 const KEY=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const OWNER=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -50,7 +51,9 @@ export async function recomputePartyumEligibility(snapshot,scope,now){
  const {actor,projectId,day,channelIdsExcluded}=scope;
  if(!snapshot||snapshot.actor!==actor||snapshot.projectId!==projectId||snapshot.day!==day||
     snapshot.complete!==true||snapshot.duplicatesComplete!==true||!Array.isArray(snapshot.rows)||
-    snapshot.rows.length>maxRows||snapshot.mailerReady!==true)throw FAIL('SOURCE_UNVERIFIED');
+    snapshot.rows.length>maxRows||snapshot.mailerReady!==true)throw Object.assign(FAIL('SOURCE_UNVERIFIED'),{
+     partyumStage:snapshot?.mailerUnreadyStage??'snapshot_eligibility',
+    });
  const c=snapshot.copy;
  if(!c||c.actor!==actor||c.projectId!==projectId||c.purpose!=='youtube_project_copy_wedding'||
     c.active!==true||!Number.isSafeInteger(c.version)||c.version<1||typeof c.id!=='string'||!c.id||
@@ -114,7 +117,8 @@ export function createPartyumMail({secret,loadSnapshot,admitAtomic,readReplay,no
   const t=now();
   const scope=runScope(actor,input,t),scopeDigest=await hash(scope);
   if(input.action==='plan'){
-   const e=await recomputePartyumEligibility(await loadSnapshot(scope),scope,t);
+   const snapshot=await partyumPhase('snapshot',()=>loadSnapshot(scope));
+   const e=await partyumPhase('snapshot_eligibility',()=>recomputePartyumEligibility(snapshot,scope,t));
    const runAt=runAtFor(scope.mode,t),expiresAt=iso(t+ttl),recipientCount=e.recipients.length;
    const planId=await sign({scopeDigest,runAt,expiresAt,recipientCount,digest:e.digest});
    return {projectId:PROJECT,day:scope.day,mode:scope.mode,recipientCount,runAt,expiresAt,copyVersion:e.copy.version,planId};

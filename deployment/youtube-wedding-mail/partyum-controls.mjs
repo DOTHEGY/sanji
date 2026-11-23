@@ -8,14 +8,16 @@ export function createPartyumControls({pool,initTx,env}){
   if(rows.length!==1||typeof rows[0].send_enabled!=='boolean')return answer(false,'PARTYUM_CONTROL_UNAVAILABLE');
   return rows[0].send_enabled?answer(true):answer(false,'PARTYUM_DISABLED');
  }
- return async (existingTx=null)=>{
+ return async (existingTx=null,diagnose)=>{
   if(env('EMAIL_SENDING_ENABLED')!=='true')return answer(false,'GLOBAL_EMAIL_DISABLED');
   if(existingTx){try{return await read(existingTx);}catch{return answer(false,'PARTYUM_CONTROL_UNAVAILABLE');}}
-  let q;
+  let q,stage='control_connect';
   try{
    q=await pool.connect();await q.query('begin read only');await initTx(q);
+   stage='control_query';
    const value=await read(q);await q.query('commit');return value;
-  }catch{
+  }catch(e){
+   if(typeof diagnose==='function')try{diagnose(stage,e);}catch{}
    if(q)try{await q.query('rollback');}catch{}
    return answer(false,'PARTYUM_CONTROL_UNAVAILABLE');
   }finally{q?.release();}

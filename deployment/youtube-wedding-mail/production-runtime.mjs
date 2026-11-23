@@ -1,3 +1,4 @@
+import {logPlanDiagnostic,logPlanGmailEnv,partyumPhase} from './partyum-plan-diagnostic.mjs';
 import {createPartyumControls} from './partyum-controls.mjs';
 import {PROJECT,createPartyumMail} from './partyum-mail.mjs';
 import {createPartyumMailHandler} from './handler.mjs';
@@ -11,7 +12,6 @@ import {readPartyumDayStatus} from './legacy/partyum-day-status.mjs';
 import {createPartyumStatusReaders} from './legacy/partyum-source.mjs';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const encode=new TextEncoder();
 const HEAD={'Cache-Control':'no-store','Content-Type':'application/json'};
 const exactOwner=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const date=/^\d{4}-\d{2}-\d{2}$/;
@@ -20,11 +20,20 @@ const ORIGIN='https://dothegy.github.io';
 const cors={...HEAD,Vary:'Origin','Access-Control-Allow-Origin':ORIGIN,
  'Access-Control-Allow-Headers':'authorization, apikey, content-type, x-client-info','Access-Control-Allow-Methods':'POST, OPTIONS'};
 const ROLE='set local role service_role';
-async function deriveKey(master){
- if(typeof master!=='string'||master.length<16)throw Error('Partyum signing unavailable');
- const base=await crypto.subtle.importKey('raw',encode.encode(master),'HKDF',false,['deriveBits']);
- return new Uint8Array(await crypto.subtle.deriveBits({name:'HKDF',hash:'SHA-256',
- salt:encode.encode('sanji internal partyum v1'),info:encode.encode('ui plan authentication')},base,256));
+// Only the verified owner mail route calls this, after global and product gates.
+export async function readPartyumPlanKey({pool,initTx}){
+ const q=await pool.connect();
+ try{
+  await q.query('begin read only');await initTx(q);
+  await q.query("set local statement_timeout='3000ms'");
+  const {rows}=await q.query('select material from sanji_partyum_internal.partyum_plan_key where project_id=$1',[PROJECT]);
+  const material=rows.length===1?rows[0].material:null;
+  if(!(material instanceof Uint8Array)||material.byteLength!==32)
+   throw Object.assign(Error('Partyum signing unavailable'),{code:'NOT_CONFIGURED'});
+  await q.query('commit');
+  return material;
+ }catch(e){try{await q.query('rollback');}catch{}throw e;}
+ finally{q.release();}
 }
 export function makePartyumPulseConsumer({pool,initTx=q=>q.query(ROLE)}){
  return async ()=>{
@@ -104,7 +113,7 @@ export function createPartyumNativeWorkerHandler({consume,enabled,runDue,markUnh
 
 /** Separate Partyum assembly; callers supply the standard server clients, not browser credentials. */
 export async function createPartyumProductionRuntime({
- pool,sb,env,waitUntil,request=fetch,initTx=q=>q.query(ROLE),now=Date.now,
+ pool,sb,env,waitUntil,request=fetch,initTx=q=>q.query(ROLE),now=Date.now,planLog=line=>console.warn(line),
 }){
  if(!pool?.connect||!sb?.auth?.getUser||typeof env!=='function')throw Error('Partyum service missing');
  const readControl=createPartyumControls({pool,initTx,env});
@@ -130,24 +139,27 @@ export async function createPartyumProductionRuntime({
  });
  const runDue=createPartyumDueExecutor({...db,now,deliver:gmail.deliver,parallelism:POLICY.parallelism});
  const consume=makePartyumPulseConsumer({pool,initTx});
- let signingKey;
  const mail=createPartyumMailHandler({authenticate,mail:async(actor,input)=>{
-  // Only the authenticated Partyum owner receives the product/global diagnosis.
+  // Non-owners receive no diagnostics. Logging, if configured, only runs for a verified owner's plan.
   const project=await sb.from('sanji_private_wedding_projects').select('owner').eq('owner',actor).maybeSingle();
   if(project.error||project.data?.owner!==actor)throw Object.assign(Error('AUTH'),{code:'AUTH'});
-  const decision=await readControl();
-  if(!decision.allowed)throw Object.assign(Error(decision.code),{code:decision.code});
-  signingKey??=deriveKey(env('TOKEN_ENCRYPTION_KEY'));
-  const mail=createPartyumMail({secret:await signingKey,loadSnapshot:db.loadSnapshot,admitAtomic:db.admitAtomic,readReplay:db.readReplay,now});
-  const answer=await mail(actor,input);
-  // Queue already committed. Background execution cannot be reported as delivery.
-  // The verified native minute polling worker covers interrupted background calls.
-  if(answer.state==='queued'){
-   deferPartyumWork(waitUntil,async()=>{
-    if(await enabled())await runDue({limit:POLICY.immediateBatch});
-   },()=>db.heartbeat({ready:false}));
-  }
-  return answer;
+  const planning=input?.action==='plan';
+  const say=(stage,e)=>{if(planning)logPlanDiagnostic(planLog,stage,e);};
+  try{
+   const decision=await readControl(null,say);
+   if(!decision.allowed)throw Object.assign(Error(decision.code),{code:decision.code,partyumStage:'product_control'});
+   if(planning)logPlanGmailEnv(planLog,env);
+   const key=await partyumPhase('plan_signing',()=>readPartyumPlanKey({pool,initTx}));
+   const mail=createPartyumMail({secret:key,loadSnapshot:db.loadSnapshot,admitAtomic:db.admitAtomic,readReplay:db.readReplay,now});
+   const answer=await mail(actor,input);
+   if(answer.state==='queued'){
+    deferPartyumWork(waitUntil,async()=>{
+     if(await enabled())await runDue({limit:POLICY.immediateBatch});
+    },()=>db.heartbeat({ready:false}));
+   }
+   say('complete');
+   return answer;
+  }catch(e){say('snapshot',e);throw e;}
  }});
  const combined=createPartyumCombinedStatus({
   readLegacy:scope=>readPartyumDayStatus({actor:scope.actor,input:{projectId:scope.projectId,day:scope.day,channelIds:scope.channelIds},
