@@ -4,6 +4,7 @@ const fixture={name:'Synthetic Fixture <script>alert(1)</script>',channelUrl:'ht
 class Node {
  constructor(text='',value=''){this.textContent=text;this.value=value;this.children=[];this.handlers={};}
  append(...args){this.children.push(...args);}
+ setAttribute(name,value){this[name]=value;}
  replaceChildren(...args){this.children=args;}
  addEventListener(name,cb){this.handlers[name]=cb;}
  reset(){this.input={};}
@@ -223,12 +224,17 @@ test('owner verified list does not rename original evidence; source failure is u
  state.contacts.push({owner:'a',channel_id:channel,email:'partnerships@example.com',source_url:'https://creator.example.com/contact',source_kind:'official_website',verified_at:new Date(Date.now()-1800).toISOString(),expires_at:new Date(Date.now()+86400000).toISOString()});
  auth('a');await tick();
  assert.equal(get('wedding-contact-list').children.length,1);
- assert.equal(get('wedding-contact-list').children[0].children[1].textContent,'partnerships@example.com');
- assert.equal(get('wedding-contact-list').children[0].children[3].href,'https://creator.example.com/contact');
+ const group=get('wedding-contact-list').children[0];
+ assert.equal(group.children[0].textContent,'2026-11-21 · 발굴일 (KST)');
+ const row=group.children[2].children[0].children[1].children[0];
+ assert.equal(row.children[1].textContent,'partnerships@example.com');
+ assert.equal(row.children[0].children[1].children[3].href,'https://creator.example.com/contact');
+ assert.equal(row.children[2].children[0].textContent,'확인 필요');
  assert.match(get('wedding-contact-status').textContent,/확인 1개 · 조사 기록 1개/);
  assert.equal(get('wedding-list').children.length,1);
  state.contactFailure=true;await get('wedding-refresh').handlers.click();
- assert.equal(get('wedding-contact-list').children.length,0);
+ assert.equal(get('wedding-contact-list').children.length,1);
+ assert.match(get('wedding-contact-list').children[0].children[1].textContent,/확인 필요 1명/);
  assert.match(get('wedding-contact-status').textContent,/불러오지 못했습니다/);
  assert.equal(get('wedding-list').children.length,1);
 });

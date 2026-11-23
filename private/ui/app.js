@@ -1397,7 +1397,8 @@ function syncYoutubeEmailHost(key){
    const current=()=>!signal.aborted&&me?.id===owner&&node.contains(host)&&host.isConnected;
    void renderProjectCopies(owner,current,[[WEDDING_COPY_PURPOSE,host]]);
   }:undefined;
-  const stop=mount(node,{owner,signal,client:typeof manualClient==='undefined'?undefined:manualClient,mountCopy});
+  const readStatus=key==='youtube-private'&&typeof workspaceWeddingDayStatus==='function'?workspaceWeddingDayStatus:undefined;
+  const stop=mount(node,{owner,signal,client:typeof manualClient==='undefined'?undefined:manualClient,mountCopy,readStatus});
   if(typeof stop==='function')entry.cleanup=stop;
   else if(stop?.then)void stop.then(cleanup=>{
    if(typeof cleanup!=='function')return;

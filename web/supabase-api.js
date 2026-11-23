@@ -195,6 +195,18 @@ export async function transientInboxApi(body, expectedOwner) {
   if (typeof expectedOwner !== "string" || !expectedOwner) throw error("계정을 확인하세요.", 403);
   return edge("/creator-instagram/transient-inbox", "POST", body, expectedOwner);
 }
+export async function workspaceWeddingDayStatus({owner,day,channelIds,signal}) {
+  if(signal?.aborted)return null;
+  const {data,error}=await client.auth.getSession();
+  if(error||data?.session?.user?.id!==owner||!data.session.access_token||signal?.aborted)return null;
+  const response=await fetch(supabaseUrl+'/functions/v1/youtube-wedding-day-status',{
+   method:'POST',signal,cache:'no-store',
+   headers:{apikey:supabaseKey,Authorization:'Bearer '+data.session.access_token,'Content-Type':'application/json'},
+   body:JSON.stringify({projectId:'private-wedding-research',day,channelIds}),
+  });
+  if(!response.ok||signal?.aborted)throw Error('Status read failed');
+  return response.json();
+}
 export async function workspacePrimaryProjectCopy(expectedOwner, stillActive) {
   if (typeof expectedOwner !== "string" || !expectedOwner || typeof stillActive !== "function" || !stillActive()) throw error("계정과 화면을 확인하세요.", 403);
   return edge("/template-library", "GET", undefined, expectedOwner, stillActive);

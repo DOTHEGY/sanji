@@ -227,7 +227,10 @@ test('built workspace routes both real project panels and the private copy witho
   const body='  [채널명] original\n\nfixture  ';
   const page=await browser.newPage({viewport:{width:390,height:880}});
   await page.addInitScript(({session})=>localStorage.setItem('sb-ofasbfpeapbdcotnptvz-auth-token',JSON.stringify(session)),{session});
-  const documentRequests=[],writes=[];
+  const documentRequests=[],writes=[],partyumRead=[];
+  const channels=['UC'+'A'.repeat(22),'UC'+'B'.repeat(22),'UC'+'C'.repeat(22)];
+  const dates=['2026-11-21','2026-11-22','2026-11-22'];
+  const shortlist=channels.map((channel_id,i)=>({owner,channel_id,video_id:'ZXCVbnm1234',channel_name:'Fixture Channel '+i,evidence_note:'Test evidence',project_day:dates[i],added_at:'2026-11-23T01:00:00Z'}));
   await page.route('**/*',async route=>{
    const req=route.request(),url=new URL(req.url()),path=url.pathname;
    if(req.resourceType()==='document')documentRequests.push(path);
@@ -239,7 +242,7 @@ test('built workspace routes both real project panels and the private copy witho
    const headers={'access-control-allow-origin':origin,'access-control-allow-methods':'GET,POST,OPTIONS','access-control-allow-headers':'*'};
    if(req.method()==='OPTIONS')return route.fulfill({status:204,headers});
    if(url.hostname!=='ofasbfpeapbdcotnptvz.supabase.co')return route.abort();
-   const readPosts=['/rest/v1/rpc/sanji_is_member','/rest/v1/rpc/sanji_connection_status','/functions/v1/youtube-manual-mail/recent'];
+   const readPosts=['/rest/v1/rpc/sanji_is_member','/rest/v1/rpc/sanji_connection_status','/functions/v1/youtube-manual-mail/recent','/functions/v1/youtube-wedding-day-status'];
    if(req.method()!=='GET'&&!readPosts.includes(path)){writes.push(path);return route.fulfill({status:400,headers,json:{error:'unexpected write'}})}
    let response=[];
    if(path==='/auth/v1/user')response=user;
@@ -247,6 +250,15 @@ test('built workspace routes both real project panels and the private copy witho
    else if(path==='/rest/v1/rpc/sanji_is_member')response=true;
    else if(path==='/rest/v1/rpc/sanji_connection_status')response={gmail:null,instagram:null};
    else if(path==='/rest/v1/sanji_private_wedding_projects')response=[{owner,title:'샘플 지역 테스트홀 웨딩'}];
+   else if(path==='/rest/v1/sanji_private_wedding_shortlist')response=shortlist;
+   else if(path==='/rest/v1/sanji_private_wedding_contacts')response=channels.map((channel_id,i)=>({owner,channel_id,email:'channel'+i+'@example.test',source_url:'https://www.youtube.com/channel/'+channel_id,source_kind:'official_channel',verified_at:'2026-11-20T01:00:00Z',expires_at:'2031-12-01T01:00:00Z'}));
+   else if(path==='/functions/v1/youtube-wedding-day-status'){
+     const scope=req.postDataJSON();
+     partyumRead.push(scope);
+     assert.equal(scope.projectId,'private-wedding-research');
+     const outcome=['found_only','scheduled','sent'];
+     response={projectId:scope.projectId,day:scope.day,items:scope.channelIds.map(channelId=>({channelId,status:outcome[channels.indexOf(channelId)],at:channelId===channels[0]?null:'2026-11-24T01:00:00Z',completeForCandidate:true}))};
+   }
    else if(path.endsWith('/template-library'))response={rows:[{archived:false,data:{purpose:'youtube_project_copy_primary',channel:'이메일',subject,body}},{archived:false,data:{purpose:'youtube_project_copy_wedding',channel:'이메일',subject:'가상 웨딩 카피 제목',body:'가상 웨딩 원문 <img src=x>'}}]};
    else if(path.endsWith('/recent'))response={rows:[],more:false};
    else if(path.endsWith('/schedule-status'))response={jobs:[]};
@@ -263,6 +275,12 @@ test('built workspace routes both real project panels and the private copy witho
   const wedding=host.locator('[data-youtube-project="youtube-private"]');
   await wedding.locator('#wedding-panel').waitFor({timeout:12000});
   assert.equal(await wedding.locator('#wedding-heading').textContent(),'샘플 지역 테스트홀 웨딩');
+  await wedding.locator('.creator-mail-sent').waitFor({timeout:12000});
+  assert.deepEqual(await wedding.locator('.creator-project-day h4').allTextContents(),['2026-11-22 · 발굴일 (KST)','2026-11-21 · 발굴일 (KST)']);
+  assert.equal(await wedding.locator('.creator-mail-scheduled').textContent(),'발송 예약');
+  assert.equal(await wedding.locator('.creator-mail-found_only').textContent(),'찾기만 함');
+  assert.equal(await wedding.locator('.creator-mail-sent').textContent(),'발송 완료');
+  assert.equal(partyumRead.length,2);
   await wedding.locator('#wedding-copy-panel summary').click();
   const weddingInline=wedding.locator('#wedding-copy-panel .message');
   await weddingInline.first().waitFor({timeout:12000});
