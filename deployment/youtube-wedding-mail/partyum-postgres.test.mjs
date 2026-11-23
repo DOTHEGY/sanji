@@ -15,6 +15,7 @@ const copy={id:copyId,version:1,subject:'Synthetic title',body:'Synthetic body'}
 const setup=`
 create role anon;create role authenticated;create role service_role bypassrls;
 create table public.sanji_members(user_id uuid primary key);
+create table public.sanji_private_wedding_projects(owner uuid primary key);
 create table public.sanji_private_wedding_shortlist(owner uuid,channel_id text,project_day date, primary key(owner,channel_id));
 create table public.sanji_private_wedding_contacts(owner uuid,channel_id text,email text,source_kind text,source_url text,verified_at timestamptz,expires_at timestamptz,revoked_at timestamptz,affiliation_status text,affiliation_source_url text,affiliation_checked_at timestamptz,primary key(owner,channel_id));
 create table public.sanji_template_library(id uuid primary key,owner uuid,version integer,data jsonb,archived boolean);
@@ -25,6 +26,7 @@ create table public.sanji_outbox(owner uuid,channel text,data jsonb);
 create table public.sanji_records(owner uuid,kind text,data jsonb);
 grant usage on schema public to service_role;
 grant select,update on all tables in schema public to service_role;
+revoke all on public.sanji_private_wedding_contacts from service_role;
 `;
 const key=()=>crypto.randomUUID();
 const base=(s={})=>({projectId:PROJECT,day,mode:'now',channelIdsExcluded:[],...s});
@@ -37,8 +39,12 @@ async function fixture(t){
  const {PGlite}=await import(pathToFileURL(process.env.PARTYUM_PGLITE));
  const db=new PGlite();t.after(()=>db.close());
  await db.exec(setup);
- await db.exec(await fs.readFile(new URL('./0001_partyum_ledger.unapplied.sql',import.meta.url),'utf8'));
+ for(const file of ['0001_partyum_ledger.unapplied.sql','0002_partyum_native_scheduler.unapplied.sql','0003_partyum_runtime_control.unapplied.sql','0004_partyum_verified_contact_reader.unapplied.sql']){
+  await db.exec(await fs.readFile(new URL('./'+file,import.meta.url),'utf8'));
+ }
+ await db.exec('update sanji_partyum_internal.partyum_runtime_controls set send_enabled=true');
  await db.query('insert into public.sanji_members values($1)',[owner]);
+ await db.query('insert into public.sanji_private_wedding_projects values($1)',[owner]);
  await db.query('insert into public.sanji_template_library values($1,$2,1,$3::jsonb,false)',[copyId,owner,JSON.stringify({...copy,purpose:'youtube_project_copy_wedding'})]);
  for(let i=0;i<ids.length;i++){
   await db.query('insert into public.sanji_private_wedding_shortlist values($1,$2,$3::date)',[owner,ids[i],day]);
@@ -46,6 +52,8 @@ async function fixture(t){
    values($1,$2,$3,'official_channel','https://example.test/',clock_timestamp()-interval '1 day',clock_timestamp()+interval '1 day',null,'reviewed_no_agency_found','https://example.test/about',clock_timestamp()-interval '1 day')`,[owner,ids[i],String(i)+'@example.test']);
  }
  await db.query('insert into public.sanji_suppression values($1,$2)',[owner,'email:2@example.test']);
+ const reviewed=await partyumCopyDigest(copy);
+ await db.query("insert into sanji_partyum_internal.copy_attestations(owner,content_digest,decision_ref) values($1,$2,'fixture approval')",[owner,reviewed]);
  await db.exec('set role service_role;');
  let active=Promise.resolve();
  const pool={connect:async()=>{
@@ -53,10 +61,9 @@ async function fixture(t){
   active=new Promise(resolve=>{release=resolve;});await prior;
   return {query:db.query.bind(db),release};
  }};
- const reviewed=await partyumCopyDigest(copy);
  let senderRef='sender-v1';
  const ad=createPartyumPostgres({pool,resolveSender:async()=>({verified:true,owner,senderRef}),
-   reviewedCopyDigest:async()=>reviewed,readHoldingLegacyEvidence:readPartyumHoldingLegacyEvidence});
+   reviewedCopyDigest:async(q,actor,digest)=>(await q.query('select content_digest from sanji_partyum_internal.copy_attestations where owner=$1 and content_digest=$2',[actor,digest])).rows[0]?.content_digest,readHoldingLegacyEvidence:readPartyumHoldingLegacyEvidence});
  const mail=createPartyumMail({secret:new Uint8Array(32).fill(3),loadSnapshot:ad.loadSnapshot,admitAtomic:ad.admitAtomic,readReplay:ad.readReplay});
  return {db,pool,ad,mail,setSender:v=>{senderRef=v;}};
 }
@@ -128,4 +135,21 @@ test('local entrypoint performs actual Postgres wake and combined UI state with 
   do{result=(await getStatus()).items[0].status;if(result!=='sent')await new Promise(r=>setTimeout(r,20));}while(result!=='sent'&&Date.now()<completeBy);
   assert.equal(result,'sent');assert.equal(notified,1);assert.equal(sent,1);
  }finally{stop();await new Promise(r=>setTimeout(r,50));}
+});
+
+test('narrow contact reader matches actual restrictive role graph and exact whitelisted cohort',async t=>{
+ const x=await fixture(t);if(!x)return;
+ const read=(project=PROJECT,actor=owner,date=day,channels=[ids[0]])=>x.db.query('select channel_id from sanji_partyum_internal.read_partyum_verified_contacts($1,$2,$3::date,$4::text[])',[project,actor,date,channels]);
+ await assert.rejects(()=>x.db.query('select channel_id from public.sanji_private_wedding_contacts'),/permission denied/);
+ await assert.rejects(()=>x.db.query('select content_digest from sanji_partyum_internal.copy_attestations for share'),/permission denied/);
+ assert.equal((await read()).rows[0].channel_id,ids[0]);
+ for(const [project,actor,date,channels] of [
+   ['chewy',owner,day,[ids[0]]], [PROJECT,'00000000-0000-0000-0000-000000000031',day,[ids[0]]],
+   [PROJECT,owner,'2026-11-21',[ids[0]]], [PROJECT,owner,day,[ids[0],ids[0]]],[PROJECT,owner,day,['UC'+'z'.repeat(22)]],
+ ])await assert.rejects(()=>read(project,actor,date,channels),/contact scope unavailable/);
+ await x.db.exec('set role authenticated');await assert.rejects(()=>read(),/permission denied/);await x.db.exec('reset role');
+ await x.db.exec("update public.sanji_private_wedding_contacts set revoked_at=clock_timestamp() where channel_id='"+ids[0]+"'");
+ await x.db.exec('set role service_role');assert.equal((await read()).rows.length,0);
+ await x.db.exec('reset role');await x.db.exec('update sanji_partyum_internal.partyum_runtime_controls set send_enabled=false');
+ await x.db.exec('set role service_role');await assert.rejects(()=>read(),/contact scope unavailable/);
 });
