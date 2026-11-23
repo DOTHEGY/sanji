@@ -2,6 +2,104 @@
 import { createClient } from "npm:@supabase/supabase-js@2.118.0";
 import pg from "npm:pg@8.16.3";
 
+// partyum-plan-diagnostic.mjs
+var stages = /* @__PURE__ */ new Set([
+  "owner_project",
+  "product_control",
+  "control_connect",
+  "control_query",
+  "plan_signing",
+  "snapshot",
+  "snapshot_member",
+  "snapshot_shortlist",
+  "snapshot_contacts",
+  "snapshot_prior",
+  "snapshot_suppression",
+  "snapshot_legacy",
+  "snapshot_copy",
+  "snapshot_attestation",
+  "snapshot_sender",
+  "snapshot_heartbeat",
+  "snapshot_eligibility",
+  "complete"
+]);
+var codes = /* @__PURE__ */ new Set([
+  "OK",
+  "AUTH",
+  "SCOPE",
+  "SOURCE_UNVERIFIED",
+  "COPY_UNAVAILABLE",
+  "COPY_REVIEW_REQUIRED",
+  "INVALID_EXCLUSION",
+  "GLOBAL_EMAIL_DISABLED",
+  "PARTYUM_DISABLED",
+  "PARTYUM_CONTROL_UNAVAILABLE",
+  "NOT_CONFIGURED",
+  "TYPE_ERROR",
+  "RANGE_ERROR",
+  "42501",
+  "42703",
+  "42P01",
+  "42883",
+  "22P02",
+  "40001",
+  "57014",
+  "53300",
+  "57P01",
+  "08001",
+  "08006",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ENETUNREACH",
+  "ETIMEDOUT",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "ERR_TLS_CERT_ALTNAME_INVALID"
+]);
+function safePlanCode(err2) {
+  if (codes.has(err2?.code)) return err2.code;
+  if (err2 instanceof TypeError) return "TYPE_ERROR";
+  if (err2 instanceof RangeError) return "RANGE_ERROR";
+  return "OTHER";
+}
+function logPlanDiagnostic(logger, stage, err2) {
+  const phase = stages.has(err2?.partyumStage) ? err2.partyumStage : stages.has(stage) ? stage : "snapshot";
+  const code = err2 ? safePlanCode(err2) : "OK";
+  try {
+    logger(JSON.stringify({ event: "partyum_plan_diagnostic", phase, code }));
+  } catch {
+  }
+}
+async function partyumPhase(phase, run) {
+  try {
+    return await run();
+  } catch (e) {
+    if (stages.has(e?.partyumStage)) throw e;
+    const out = Object.assign(new Error("Partyum operation did not complete"), { code: e?.code, partyumStage: phase });
+    if (e instanceof TypeError && !e.code) out.code = "TYPE_ERROR";
+    if (e instanceof RangeError && !e.code) out.code = "RANGE_ERROR";
+    throw out;
+  }
+}
+function logPlanGmailEnv(logger, env2) {
+  const present = (n) => {
+    const v = env2(n);
+    return typeof v === "string" && v.trim().length > 0;
+  };
+  try {
+    logger(JSON.stringify({
+      event: "partyum_plan_gmail_env",
+      tokenKeyPresent: present("TOKEN_ENCRYPTION_KEY"),
+      googleClientIdPresent: present("GOOGLE_CLIENT_ID"),
+      googleClientSecretPresent: present("GOOGLE_CLIENT_SECRET")
+    }));
+  } catch {
+  }
+}
+
 // partyum-mail.mjs
 var PROJECT = "private-wedding-research";
 var KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -47,7 +145,9 @@ function auth(actor) {
 }
 async function recomputePartyumEligibility(snapshot, scope, now) {
   const { actor, projectId, day, channelIdsExcluded } = scope;
-  if (!snapshot || snapshot.actor !== actor || snapshot.projectId !== projectId || snapshot.day !== day || snapshot.complete !== true || snapshot.duplicatesComplete !== true || !Array.isArray(snapshot.rows) || snapshot.rows.length > maxRows || snapshot.mailerReady !== true) throw FAIL("SOURCE_UNVERIFIED");
+  if (!snapshot || snapshot.actor !== actor || snapshot.projectId !== projectId || snapshot.day !== day || snapshot.complete !== true || snapshot.duplicatesComplete !== true || !Array.isArray(snapshot.rows) || snapshot.rows.length > maxRows || snapshot.mailerReady !== true) throw Object.assign(FAIL("SOURCE_UNVERIFIED"), {
+    partyumStage: snapshot?.mailerUnreadyStage ?? "snapshot_eligibility"
+  });
   const c = snapshot.copy;
   if (!c || c.actor !== actor || c.projectId !== projectId || c.purpose !== "youtube_project_copy_wedding" || c.active !== true || !Number.isSafeInteger(c.version) || c.version < 1 || typeof c.id !== "string" || !c.id || typeof c.subject !== "string" || !c.subject.trim() || c.subject.length > 200 || /[\r\n]/.test(c.subject) || typeof c.body !== "string" || !c.body.trim() || c.body.length > 2e4) throw FAIL("COPY_UNAVAILABLE");
   const copyDigest = await hash([c.id, c.version, c.subject, c.body]);
@@ -106,7 +206,8 @@ function createPartyumMail({ secret, loadSnapshot, admitAtomic, readReplay, now 
     const t = now();
     const scope = runScope(actor, input, t), scopeDigest = await hash(scope);
     if (input.action === "plan") {
-      const e2 = await recomputePartyumEligibility(await loadSnapshot(scope), scope, t);
+      const snapshot = await partyumPhase("snapshot", () => loadSnapshot(scope));
+      const e2 = await partyumPhase("snapshot_eligibility", () => recomputePartyumEligibility(snapshot, scope, t));
       const runAt = runAtFor(scope.mode, t), expiresAt = iso(t + ttl), recipientCount = e2.recipients.length;
       const planId = await sign({ scopeDigest, runAt, expiresAt, recipientCount, digest: e2.digest });
       return { projectId: PROJECT, day: scope.day, mode: scope.mode, recipientCount, runAt, expiresAt, copyVersion: e2.copy.version, planId };
@@ -148,7 +249,7 @@ function createPartyumControls({ pool: pool2, initTx, env: env2 }) {
     if (rows.length !== 1 || typeof rows[0].send_enabled !== "boolean") return answer(false, "PARTYUM_CONTROL_UNAVAILABLE");
     return rows[0].send_enabled ? answer(true) : answer(false, "PARTYUM_DISABLED");
   }
-  return async (existingTx = null) => {
+  return async (existingTx = null, diagnose) => {
     if (env2("EMAIL_SENDING_ENABLED") !== "true") return answer(false, "GLOBAL_EMAIL_DISABLED");
     if (existingTx) {
       try {
@@ -157,15 +258,20 @@ function createPartyumControls({ pool: pool2, initTx, env: env2 }) {
         return answer(false, "PARTYUM_CONTROL_UNAVAILABLE");
       }
     }
-    let q;
+    let q, stage = "control_connect";
     try {
       q = await pool2.connect();
       await q.query("begin read only");
       await initTx(q);
+      stage = "control_query";
       const value = await read(q);
       await q.query("commit");
       return value;
-    } catch {
+    } catch (e) {
+      if (typeof diagnose === "function") try {
+        diagnose(stage, e);
+      } catch {
+      }
       if (q) try {
         await q.query("rollback");
       } catch {
@@ -338,7 +444,7 @@ function createPartyumPostgres({
     if (rows.length !== 1) return null;
     const x = rows[0], copy = { id: x.id, actor: x.owner, projectId: PROJECT, active: true, version: x.version, purpose: x.purpose, subject: x.subject, body: x.body };
     const digest = await partyumCopyDigest(copy);
-    copy.factualityReviewedDigest = await reviewedCopyDigest(q, scope.actor, digest);
+    copy.factualityReviewedDigest = await partyumPhase("snapshot_attestation", () => reviewedCopyDigest(q, scope.actor, digest));
     return copy;
   }
   async function verifiedContacts(q, { actor, day }, ids) {
@@ -349,25 +455,25 @@ function createPartyumPostgres({
   }
   async function readLocked(q, scope, t) {
     if (!allowed(scope)) throw fail("SCOPE");
-    await members(q, scope.actor);
-    const { rows: people } = await q.query(`select channel_id from public.sanji_private_wedding_shortlist
-       where owner=$1 and project_day=$2::date order by channel_id limit 101 for share`, [scope.actor, scope.day]);
+    await partyumPhase("snapshot_member", () => members(q, scope.actor));
+    const { rows: people } = await partyumPhase("snapshot_shortlist", () => q.query(`select channel_id from public.sanji_private_wedding_shortlist
+       where owner=$1 and project_day=$2::date order by channel_id limit 101 for share`, [scope.actor, scope.day]));
     if (people.length > 100) throw fail("SOURCE_UNVERIFIED");
     const ids = people.map((x) => x.channel_id);
     if (!ids.every((x) => channel.test(x))) throw fail("SOURCE_UNVERIFIED");
-    const records = await verifiedContacts(q, scope, ids);
+    const records = await partyumPhase("snapshot_contacts", () => verifiedContacts(q, scope, ids));
     const contacts = new Map(records.map((x) => [x.channel_id, x]));
     const addresses = records.map((x) => partyumRecipientKey(x.email)).filter(Boolean);
-    const { rows: prior } = await q.query(`select channel_id,recipient_key,state from ${tables}attempts
-       where owner=$1 and project_id=$2 and (channel_id=any($3::text[]) or recipient_key=any($4::text[]))`, [scope.actor, PROJECT, ids, addresses]);
+    const { rows: prior } = await partyumPhase("snapshot_prior", () => q.query(`select channel_id,recipient_key,state from ${tables}attempts
+       where owner=$1 and project_id=$2 and (channel_id=any($3::text[]) or recipient_key=any($4::text[]))`, [scope.actor, PROJECT, ids, addresses]));
     const allKeys = [...new Set(ids.flatMap((id) => identitiesFor(id, norm(contacts.get(id)?.email))))];
-    const { rows: holds } = await q.query(`select identity from public.sanji_suppression where owner=$1 and lower(identity)=any($2::text[]) for share`, [scope.actor, allKeys]);
+    const { rows: holds } = await partyumPhase("snapshot_suppression", () => q.query(`select identity from public.sanji_suppression where owner=$1 and lower(identity)=any($2::text[]) for share`, [scope.actor, allKeys]));
     const holdSet = new Set(holds.map((x) => x.identity.toLowerCase()));
-    const legacy = await readHoldingLegacyEvidence(q, { ...scope, channelIds: ids });
-    if (legacy?.complete !== true || !Array.isArray(legacy.channels) || !legacy.channels.every((x) => ids.includes(x))) throw fail("SOURCE_UNVERIFIED");
+    const legacy = await partyumPhase("snapshot_legacy", () => readHoldingLegacyEvidence(q, { ...scope, channelIds: ids }));
+    if (legacy?.complete !== true || !Array.isArray(legacy.channels) || !legacy.channels.every((x) => ids.includes(x))) throw Object.assign(fail("SOURCE_UNVERIFIED"), { partyumStage: "snapshot_legacy" });
     const legacyIds = new Set(legacy.channels);
-    const [copy, senderRef] = [await activeCopy(q, scope), await sender(q, scope)];
-    const wakeOk = !!(await q.query(`select 1 from ${tables}worker_health where project_id=$1 and wake_ready and ${sinceSql}`, [PROJECT])).rows.length;
+    const [copy, senderRef] = [await partyumPhase("snapshot_copy", () => activeCopy(q, scope)), await partyumPhase("snapshot_sender", () => sender(q, scope))];
+    const wakeOk = !!(await partyumPhase("snapshot_heartbeat", () => q.query(`select 1 from ${tables}worker_health where project_id=$1 and wake_ready and ${sinceSql}`, [PROJECT]))).rows.length;
     return {
       scope,
       copy,
@@ -377,6 +483,7 @@ function createPartyumPostgres({
       complete: true,
       duplicatesComplete: true,
       mailerReady: !!senderRef && wakeOk,
+      mailerUnreadyStage: !senderRef ? "snapshot_sender" : !wakeOk ? "snapshot_heartbeat" : null,
       senderRef,
       rows: people.map(({ channel_id: channelId }) => {
         const c = contacts.get(channelId), email = norm(c?.email), verified = trustedContact(c, t);
@@ -992,7 +1099,6 @@ function createPartyumStatusReaders(client) {
 
 // production-runtime.mjs
 var UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-var encode = new TextEncoder();
 var HEAD = { "Cache-Control": "no-store", "Content-Type": "application/json" };
 var exactOwner = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 var date = /^\d{4}-\d{2}-\d{2}$/;
@@ -1006,15 +1112,27 @@ var cors = {
   "Access-Control-Allow-Methods": "POST, OPTIONS"
 };
 var ROLE = "set local role service_role";
-async function deriveKey(master) {
-  if (typeof master !== "string" || master.length < 16) throw Error("Partyum signing unavailable");
-  const base = await crypto.subtle.importKey("raw", encode.encode(master), "HKDF", false, ["deriveBits"]);
-  return new Uint8Array(await crypto.subtle.deriveBits({
-    name: "HKDF",
-    hash: "SHA-256",
-    salt: encode.encode("sanji internal partyum v1"),
-    info: encode.encode("ui plan authentication")
-  }, base, 256));
+async function readPartyumPlanKey({ pool: pool2, initTx }) {
+  const q = await pool2.connect();
+  try {
+    await q.query("begin read only");
+    await initTx(q);
+    await q.query("set local statement_timeout='3000ms'");
+    const { rows } = await q.query("select material from sanji_partyum_internal.partyum_plan_key where project_id=$1", [PROJECT]);
+    const material = rows.length === 1 ? rows[0].material : null;
+    if (!(material instanceof Uint8Array) || material.byteLength !== 32)
+      throw Object.assign(Error("Partyum signing unavailable"), { code: "NOT_CONFIGURED" });
+    await q.query("commit");
+    return material;
+  } catch (e) {
+    try {
+      await q.query("rollback");
+    } catch {
+    }
+    throw e;
+  } finally {
+    q.release();
+  }
 }
 function makePartyumPulseConsumer({ pool: pool2, initTx = (q) => q.query(ROLE) }) {
   return async () => {
@@ -1129,7 +1247,8 @@ async function createPartyumProductionRuntime({
   waitUntil: waitUntil2,
   request = fetch,
   initTx = (q) => q.query(ROLE),
-  now = Date.now
+  now = Date.now,
+  planLog = (line) => console.warn(line)
 }) {
   if (!pool2?.connect || !sb2?.auth?.getUser || typeof env2 !== "function") throw Error("Partyum service missing");
   const readControl = createPartyumControls({ pool: pool2, initTx, env: env2 });
@@ -1159,21 +1278,31 @@ async function createPartyumProductionRuntime({
   });
   const runDue = createPartyumDueExecutor({ ...db, now, deliver: gmail.deliver, parallelism: PARTYUM_WORK_POLICY.parallelism });
   const consume = makePartyumPulseConsumer({ pool: pool2, initTx });
-  let signingKey;
   const mail = createPartyumMailHandler({ authenticate, mail: async (actor, input) => {
     const project2 = await sb2.from("sanji_private_wedding_projects").select("owner").eq("owner", actor).maybeSingle();
     if (project2.error || project2.data?.owner !== actor) throw Object.assign(Error("AUTH"), { code: "AUTH" });
-    const decision = await readControl();
-    if (!decision.allowed) throw Object.assign(Error(decision.code), { code: decision.code });
-    signingKey ??= deriveKey(env2("TOKEN_ENCRYPTION_KEY"));
-    const mail2 = createPartyumMail({ secret: await signingKey, loadSnapshot: db.loadSnapshot, admitAtomic: db.admitAtomic, readReplay: db.readReplay, now });
-    const answer2 = await mail2(actor, input);
-    if (answer2.state === "queued") {
-      deferPartyumWork(waitUntil2, async () => {
-        if (await enabled()) await runDue({ limit: PARTYUM_WORK_POLICY.immediateBatch });
-      }, () => db.heartbeat({ ready: false }));
+    const planning = input?.action === "plan";
+    const say = (stage, e) => {
+      if (planning) logPlanDiagnostic(planLog, stage, e);
+    };
+    try {
+      const decision = await readControl(null, say);
+      if (!decision.allowed) throw Object.assign(Error(decision.code), { code: decision.code, partyumStage: "product_control" });
+      if (planning) logPlanGmailEnv(planLog, env2);
+      const key = await partyumPhase("plan_signing", () => readPartyumPlanKey({ pool: pool2, initTx }));
+      const mail2 = createPartyumMail({ secret: key, loadSnapshot: db.loadSnapshot, admitAtomic: db.admitAtomic, readReplay: db.readReplay, now });
+      const answer2 = await mail2(actor, input);
+      if (answer2.state === "queued") {
+        deferPartyumWork(waitUntil2, async () => {
+          if (await enabled()) await runDue({ limit: PARTYUM_WORK_POLICY.immediateBatch });
+        }, () => db.heartbeat({ ready: false }));
+      }
+      say("complete");
+      return answer2;
+    } catch (e) {
+      say("snapshot", e);
+      throw e;
     }
-    return answer2;
   } });
   const combined = createPartyumCombinedStatus({
     readLegacy: (scope) => readPartyumDayStatus({

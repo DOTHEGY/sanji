@@ -1,4 +1,5 @@
 import {PROJECT,recomputePartyumEligibility,partyumCopyDigest,partyumRecipientKey} from './partyum-mail.mjs';
+import {partyumPhase} from './partyum-plan-diagnostic.mjs';
 import {PARTYUM_WORK_POLICY as POLICY} from './worker-policy.mjs';
 const fail=code=>Object.assign(Error(code),{code});
 const iso=v=>new Date(v).toISOString();
@@ -69,7 +70,7 @@ export function createPartyumPostgres({
   if(rows.length!==1)return null;
   const x=rows[0],copy={id:x.id,actor:x.owner,projectId:PROJECT,active:true,version:x.version,purpose:x.purpose,subject:x.subject,body:x.body};
   const digest=await partyumCopyDigest(copy);
-  copy.factualityReviewedDigest=await reviewedCopyDigest(q,scope.actor,digest);
+  copy.factualityReviewedDigest=await partyumPhase('snapshot_attestation',()=>reviewedCopyDigest(q,scope.actor,digest));
   return copy;
  }
  async function verifiedContacts(q,{actor,day},ids){
@@ -80,26 +81,26 @@ export function createPartyumPostgres({
  }
  async function readLocked(q,scope,t){
   if(!allowed(scope))throw fail('SCOPE');
-  await members(q,scope.actor);
-  const {rows:people}=await q.query(`select channel_id from public.sanji_private_wedding_shortlist
-       where owner=$1 and project_day=$2::date order by channel_id limit 101 for share`,[scope.actor,scope.day]);
+  await partyumPhase('snapshot_member',()=>members(q,scope.actor));
+  const {rows:people}=await partyumPhase('snapshot_shortlist',()=>q.query(`select channel_id from public.sanji_private_wedding_shortlist
+       where owner=$1 and project_day=$2::date order by channel_id limit 101 for share`,[scope.actor,scope.day]));
   if(people.length>100)throw fail('SOURCE_UNVERIFIED');
   const ids=people.map(x=>x.channel_id);
   if(!ids.every(x=>channel.test(x)))throw fail('SOURCE_UNVERIFIED');
-  const records=await verifiedContacts(q,scope,ids);
+  const records=await partyumPhase('snapshot_contacts',()=>verifiedContacts(q,scope,ids));
   const contacts=new Map(records.map(x=>[x.channel_id,x]));
   const addresses=records.map(x=>partyumRecipientKey(x.email)).filter(Boolean);
-  const {rows:prior}=await q.query(`select channel_id,recipient_key,state from ${tables}attempts
-       where owner=$1 and project_id=$2 and (channel_id=any($3::text[]) or recipient_key=any($4::text[]))`,[scope.actor,PROJECT,ids,addresses]);
+  const {rows:prior}=await partyumPhase('snapshot_prior',()=>q.query(`select channel_id,recipient_key,state from ${tables}attempts
+       where owner=$1 and project_id=$2 and (channel_id=any($3::text[]) or recipient_key=any($4::text[]))`,[scope.actor,PROJECT,ids,addresses]));
   const allKeys=[...new Set(ids.flatMap(id=>identitiesFor(id,norm(contacts.get(id)?.email))))];
-  const {rows:holds}=await q.query(`select identity from public.sanji_suppression where owner=$1 and lower(identity)=any($2::text[]) for share`,[scope.actor,allKeys]);
+  const {rows:holds}=await partyumPhase('snapshot_suppression',()=>q.query(`select identity from public.sanji_suppression where owner=$1 and lower(identity)=any($2::text[]) for share`,[scope.actor,allKeys]));
   const holdSet=new Set(holds.map(x=>x.identity.toLowerCase()));
-  const legacy=await readHoldingLegacyEvidence(q,{...scope,channelIds:ids});
-  if(legacy?.complete!==true||!Array.isArray(legacy.channels)||!legacy.channels.every(x=>ids.includes(x)))throw fail('SOURCE_UNVERIFIED');
+  const legacy=await partyumPhase('snapshot_legacy',()=>readHoldingLegacyEvidence(q,{...scope,channelIds:ids}));
+  if(legacy?.complete!==true||!Array.isArray(legacy.channels)||!legacy.channels.every(x=>ids.includes(x)))throw Object.assign(fail('SOURCE_UNVERIFIED'),{partyumStage:'snapshot_legacy'});
   const legacyIds=new Set(legacy.channels);
-  const [copy,senderRef]=[await activeCopy(q,scope),await sender(q,scope)];
-  const wakeOk=!!(await q.query(`select 1 from ${tables}worker_health where project_id=$1 and wake_ready and ${sinceSql}`,[PROJECT])).rows.length;
-  return {scope,copy,actor:scope.actor,projectId:PROJECT,day:scope.day,complete:true,duplicatesComplete:true,mailerReady:!!senderRef&&wakeOk,senderRef,
+  const [copy,senderRef]=[await partyumPhase('snapshot_copy',()=>activeCopy(q,scope)),await partyumPhase('snapshot_sender',()=>sender(q,scope))];
+  const wakeOk=!!(await partyumPhase('snapshot_heartbeat',()=>q.query(`select 1 from ${tables}worker_health where project_id=$1 and wake_ready and ${sinceSql}`,[PROJECT]))).rows.length;
+  return {scope,copy,actor:scope.actor,projectId:PROJECT,day:scope.day,complete:true,duplicatesComplete:true,mailerReady:!!senderRef&&wakeOk,mailerUnreadyStage:!senderRef?'snapshot_sender':!wakeOk?'snapshot_heartbeat':null,senderRef,
    rows:people.map(({channel_id:channelId})=>{
     const c=contacts.get(channelId),email=norm(c?.email),verified=trustedContact(c,t);
     const used=legacyIds.has(channelId)||prior.some(x=>x.channel_id===channelId||x.recipient_key===partyumRecipientKey(email));
