@@ -257,7 +257,11 @@ test('built workspace routes both real project panels and the private copy witho
      partyumRead.push(scope);
      assert.equal(scope.projectId,'private-wedding-research');
      const outcome=['found_only','scheduled','sent'];
-     response={projectId:scope.projectId,day:scope.day,items:scope.channelIds.map(channelId=>({channelId,status:outcome[channels.indexOf(channelId)],at:channelId===channels[0]?null:'2026-11-24T01:00:00Z',completeForCandidate:true}))};
+     response={projectId:scope.projectId,day:scope.day,items:scope.channelIds.map(channelId=>{
+       const i=channels.indexOf(channelId);
+       return {channelId,status:outcome[i],at:i===0?null:'2026-11-24T01:00:00Z',completeForCandidate:true,
+         subscriberEligibility:i===2?'below_minimum':'eligible',subscriberCount:[50000,50100,49900][i]};
+     })};
    }
    else if(path.endsWith('/template-library'))response={rows:[{archived:false,data:{purpose:'youtube_project_copy_primary',channel:'이메일',subject,body}},{archived:false,data:{purpose:'youtube_project_copy_wedding',channel:'이메일',subject:'가상 웨딩 카피 제목',body:'가상 웨딩 원문 <img src=x>'}}]};
    else if(path.endsWith('/recent'))response={rows:[],more:false};
@@ -275,7 +279,12 @@ test('built workspace routes both real project panels and the private copy witho
   const wedding=host.locator('[data-youtube-project="youtube-private"]');
   await wedding.locator('#wedding-panel').waitFor({timeout:12000});
   assert.equal(await wedding.locator('#wedding-heading').textContent(),'샘플 지역 테스트홀 웨딩');
-  await wedding.locator('.creator-mail-sent').waitFor({timeout:12000});
+  await wedding.locator('.creator-mail-scheduled').waitFor({timeout:12000});
+  const sent=wedding.locator('.creator-mail-sent');
+  assert.equal(await sent.count(),1);
+  assert.equal(await sent.isHidden(),true);
+  await wedding.locator('.creator-history > summary').click();
+  await sent.waitFor({timeout:12000});
   assert.deepEqual(await wedding.locator('.creator-project-day h4').allTextContents(),['2026-11-22 · 발굴일 (KST)','2026-11-21 · 발굴일 (KST)']);
   assert.equal(await wedding.locator('.creator-mail-scheduled').textContent(),'발송 예약');
   assert.equal(await wedding.locator('.creator-mail-found_only').textContent(),'찾기만 함');
