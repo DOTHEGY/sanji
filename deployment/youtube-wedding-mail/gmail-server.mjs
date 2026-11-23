@@ -37,8 +37,8 @@ export function partyumMime({from,to,subject,body,intentId}){
 }
 
 /** Only use as an injected server-side service in a Partyum-specific worker. */
-export function createPartyumGmail({env,readConnection,request=fetch,now=Date.now}){
- if(typeof env!=='function'||typeof readConnection!=='function')throw err('GMAIL_UNCONFIGURED');
+export function createPartyumGmail({env,readConnection,isEnabled,request=fetch,now=Date.now}){
+ if(typeof env!=='function'||typeof readConnection!=='function'||typeof isEnabled!=='function')throw err('GMAIL_UNCONFIGURED');
  async function remote(url,options={}){
   if(![TOKEN,API+'/profile',API+'/messages/send'].includes(url))throw err('GMAIL_DESTINATION_DENIED');
   let response;
@@ -65,7 +65,7 @@ export function createPartyumGmail({env,readConnection,request=fetch,now=Date.no
  }
  const resolveSender=async(q,owner)=>{
   const r=await checkedConnection(q,owner);
-  const ready=r&&env('PARTYUM_MAIL_ENABLED')==='true'&&env('EMAIL_SENDING_ENABLED')==='true'&&
+  const ready=r&&await isEnabled(q)&&
    nonempty(env('TOKEN_ENCRYPTION_KEY'))&&nonempty(env('GOOGLE_CLIENT_ID'))&&nonempty(env('GOOGLE_CLIENT_SECRET'));
   return ready?{owner,verified:true,senderRef:r.senderRef}:null;
  };
@@ -88,7 +88,7 @@ export function createPartyumGmail({env,readConnection,request=fetch,now=Date.no
  async function deliver({actor,projectId,from,to,subject,body,intentId}){
   // A callable worker adapter is never exposed to a browser. It is invoked only
   // by the due executor after the pending intent has been committed.
-  if(projectId!==PROJECT||env('PARTYUM_MAIL_ENABLED')!=='true'||env('EMAIL_SENDING_ENABLED')!=='true'||
+  if(projectId!==PROJECT||!await isEnabled()||
      !localId.test(intentId??''))throw err('GMAIL_SEND_DISABLED');
   const row=await checkedConnection(null,actor);
   if(!row||row.senderRef!==from)throw err('GMAIL_ACCOUNT_CHANGED');
@@ -97,6 +97,7 @@ export function createPartyumGmail({env,readConnection,request=fetch,now=Date.no
   if(norm(profile?.emailAddress)!==row.email)throw err('GMAIL_ACCOUNT_CHANGED');
   if((await checkedConnection(null,actor))?.senderRef!==from)throw err('GMAIL_ACCOUNT_CHANGED');
   const raw=partyumMime({from:row.email,to,subject,body,intentId});
+  if(!await isEnabled())throw err('GMAIL_SEND_DISABLED');
   const receipt=await remote(API+'/messages/send',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({raw})});
   if(!providerId.test(receipt?.id??'')||!providerId.test(receipt?.threadId??''))throw err('GMAIL_OUTCOME_UNKNOWN');
   return {kind:'accepted',intentId,providerId:receipt.id,at:new Date(now()).toISOString()};

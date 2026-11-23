@@ -1,3 +1,4 @@
+import {createPartyumControls} from './partyum-controls.mjs';
 import {PROJECT,createPartyumMail} from './partyum-mail.mjs';
 import {createPartyumMailHandler} from './handler.mjs';
 import {createPartyumPostgres} from './partyum-postgres.mjs';
@@ -93,7 +94,7 @@ export function createPartyumNativeWorkerHandler({consume,enabled,runDue,markUnh
   // Healthy heartbeat and consume commit together before provider work.
   try{if(!await consume())return new Response(null,{status:202,headers:HEAD});}
   catch{return json({error:'WORKER'},503);}
-  if(enabled()&&!deferPartyumWork(waitUntil,()=>runDue({limit:POLICY.nativeBatch}),markUnhealthy)){
+  if(await enabled()&&!deferPartyumWork(waitUntil,()=>runDue({limit:POLICY.nativeBatch}),markUnhealthy)){
    try{await markUnhealthy();}catch{}
    return json({error:'WORKER'},503);
   }
@@ -106,13 +107,14 @@ export async function createPartyumProductionRuntime({
  pool,sb,env,waitUntil,request=fetch,initTx=q=>q.query(ROLE),now=Date.now,
 }){
  if(!pool?.connect||!sb?.auth?.getUser||typeof env!=='function')throw Error('Partyum service missing');
- const enabled=()=>env('PARTYUM_MAIL_ENABLED')==='true'&&env('EMAIL_SENDING_ENABLED')==='true';
+ const readControl=createPartyumControls({pool,initTx,env});
+ const enabled=async q=>(await readControl(q)).allowed;
  const legacy=createPartyumStatusReaders(sb);
  const authenticate=async token=>{
   const who=await legacy.authenticate(token);
   return exactOwner.test(who??'')?who:null;
  };
- const gmail=createPartyumGmail({env,request,now,readConnection:async(q,owner)=>{
+ const gmail=createPartyumGmail({env,request,now,isEnabled:enabled,readConnection:async(q,owner)=>{
   if(!UUID.test(owner??''))return null;
   if(q){
    const {rows}=await q.query(`select owner,provider,encrypted,summary from public.sanji_connections
@@ -130,14 +132,20 @@ export async function createPartyumProductionRuntime({
  const consume=makePartyumPulseConsumer({pool,initTx});
  let signingKey;
  const mail=createPartyumMailHandler({authenticate,mail:async(actor,input)=>{
-  if(!enabled())throw Object.assign(Error('NOT_ENABLED'),{code:'NOT_ENABLED'});
+  // Only the authenticated Partyum owner receives the product/global diagnosis.
+  const project=await sb.from('sanji_private_wedding_projects').select('owner').eq('owner',actor).maybeSingle();
+  if(project.error||project.data?.owner!==actor)throw Object.assign(Error('AUTH'),{code:'AUTH'});
+  const decision=await readControl();
+  if(!decision.allowed)throw Object.assign(Error(decision.code),{code:decision.code});
   signingKey??=deriveKey(env('TOKEN_ENCRYPTION_KEY'));
   const mail=createPartyumMail({secret:await signingKey,loadSnapshot:db.loadSnapshot,admitAtomic:db.admitAtomic,readReplay:db.readReplay,now});
   const answer=await mail(actor,input);
   // Queue already committed. Background execution cannot be reported as delivery.
   // The verified native minute polling worker covers interrupted background calls.
   if(answer.state==='queued'){
-   deferPartyumWork(waitUntil,()=>runDue({limit:POLICY.immediateBatch}),()=>db.heartbeat({ready:false}));
+   deferPartyumWork(waitUntil,async()=>{
+    if(await enabled())await runDue({limit:POLICY.immediateBatch});
+   },()=>db.heartbeat({ready:false}));
   }
   return answer;
  }});
@@ -164,7 +172,9 @@ export async function createPartyumProductionRuntime({
      new Set(input.channelIds).size!==input.channelIds.length)return json({error:'SCOPE'},400);
   try{return json(await combined({actor,...input}));}catch{return json({error:'READ'},503);}
  };
- const worker=createPartyumNativeWorkerHandler({consume,enabled,runDue,waitUntil,
+ const worker=createPartyumNativeWorkerHandler({consume,enabled,waitUntil,runDue:async options=>{
+   if(await enabled())return runDue(options);
+  },
   markUnhealthy:()=>db.heartbeat({ready:false}),
  });
  return {handleMail:mail,handleStatus:status,handleWorker:worker};

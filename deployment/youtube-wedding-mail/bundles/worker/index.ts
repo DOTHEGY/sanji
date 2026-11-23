@@ -138,6 +138,45 @@ function projectResult(r, scope, claim) {
   return { projectId: PROJECT, day: r.day, mode: r.mode, recipientCount: r.recipientCount, runAt: r.runAt, batchId: r.batchId, state: r.state };
 }
 
+// partyum-controls.mjs
+var query = "select send_enabled from sanji_partyum_internal.partyum_runtime_controls where project_id=$1";
+var answer = (allowed2, code = null) => Object.freeze({ allowed: allowed2, code });
+function createPartyumControls({ pool: pool2, initTx, env: env2 }) {
+  if (!pool2?.connect || typeof initTx !== "function" || typeof env2 !== "function") throw Error("Partyum controls unavailable");
+  async function read(q) {
+    const { rows } = await q.query(query, [PROJECT]);
+    if (rows.length !== 1 || typeof rows[0].send_enabled !== "boolean") return answer(false, "PARTYUM_CONTROL_UNAVAILABLE");
+    return rows[0].send_enabled ? answer(true) : answer(false, "PARTYUM_DISABLED");
+  }
+  return async (existingTx = null) => {
+    if (env2("EMAIL_SENDING_ENABLED") !== "true") return answer(false, "GLOBAL_EMAIL_DISABLED");
+    if (existingTx) {
+      try {
+        return await read(existingTx);
+      } catch {
+        return answer(false, "PARTYUM_CONTROL_UNAVAILABLE");
+      }
+    }
+    let q;
+    try {
+      q = await pool2.connect();
+      await q.query("begin read only");
+      await initTx(q);
+      const value = await read(q);
+      await q.query("commit");
+      return value;
+    } catch {
+      if (q) try {
+        await q.query("rollback");
+      } catch {
+      }
+      return answer(false, "PARTYUM_CONTROL_UNAVAILABLE");
+    } finally {
+      q?.release();
+    }
+  };
+}
+
 // handler.mjs
 var ORIGIN = "https://dothegy.github.io";
 var headers = {
@@ -160,6 +199,9 @@ var errors = Object.freeze({
   COPY_REVIEW_REQUIRED: 409,
   ADMISSION_UNVERIFIED: 503,
   NOT_CONFIGURED: 503,
+  PARTYUM_DISABLED: 503,
+  GLOBAL_EMAIL_DISABLED: 503,
+  PARTYUM_CONTROL_UNAVAILABLE: 503,
   DUPLICATE: 409,
   NOT_ENABLED: 503,
   REQUEST: 400,
@@ -625,8 +667,8 @@ function partyumMime({ from, to, subject, body, intentId }) {
     ""
   ].join("\r\n")));
 }
-function createPartyumGmail({ env: env2, readConnection, request = fetch, now = Date.now }) {
-  if (typeof env2 !== "function" || typeof readConnection !== "function") throw err("GMAIL_UNCONFIGURED");
+function createPartyumGmail({ env: env2, readConnection, isEnabled, request = fetch, now = Date.now }) {
+  if (typeof env2 !== "function" || typeof readConnection !== "function" || typeof isEnabled !== "function") throw err("GMAIL_UNCONFIGURED");
   async function remote(url2, options = {}) {
     if (![TOKEN, API + "/profile", API + "/messages/send"].includes(url2)) throw err("GMAIL_DESTINATION_DENIED");
     let response2;
@@ -658,7 +700,7 @@ function createPartyumGmail({ env: env2, readConnection, request = fetch, now = 
   }
   const resolveSender = async (q, owner) => {
     const r = await checkedConnection(q, owner);
-    const ready = r && env2("PARTYUM_MAIL_ENABLED") === "true" && env2("EMAIL_SENDING_ENABLED") === "true" && nonempty(env2("TOKEN_ENCRYPTION_KEY")) && nonempty(env2("GOOGLE_CLIENT_ID")) && nonempty(env2("GOOGLE_CLIENT_SECRET"));
+    const ready = r && await isEnabled(q) && nonempty(env2("TOKEN_ENCRYPTION_KEY")) && nonempty(env2("GOOGLE_CLIENT_ID")) && nonempty(env2("GOOGLE_CLIENT_SECRET"));
     return ready ? { owner, verified: true, senderRef: r.senderRef } : null;
   };
   async function tokenFor(r) {
@@ -684,7 +726,7 @@ function createPartyumGmail({ env: env2, readConnection, request = fetch, now = 
     return fresh.access_token;
   }
   async function deliver({ actor, projectId, from, to, subject, body, intentId }) {
-    if (projectId !== PROJECT || env2("PARTYUM_MAIL_ENABLED") !== "true" || env2("EMAIL_SENDING_ENABLED") !== "true" || !localId.test(intentId ?? "")) throw err("GMAIL_SEND_DISABLED");
+    if (projectId !== PROJECT || !await isEnabled() || !localId.test(intentId ?? "")) throw err("GMAIL_SEND_DISABLED");
     const row = await checkedConnection(null, actor);
     if (!row || row.senderRef !== from) throw err("GMAIL_ACCOUNT_CHANGED");
     const accessToken = await tokenFor(row), headers2 = { Authorization: "Bearer " + accessToken };
@@ -692,6 +734,7 @@ function createPartyumGmail({ env: env2, readConnection, request = fetch, now = 
     if (norm2(profile?.emailAddress) !== row.email) throw err("GMAIL_ACCOUNT_CHANGED");
     if ((await checkedConnection(null, actor))?.senderRef !== from) throw err("GMAIL_ACCOUNT_CHANGED");
     const raw = partyumMime({ from: row.email, to, subject, body, intentId });
+    if (!await isEnabled()) throw err("GMAIL_SEND_DISABLED");
     const receipt = await remote(API + "/messages/send", { method: "POST", headers: { ...headers2, "Content-Type": "application/json" }, body: JSON.stringify({ raw }) });
     if (!providerId.test(receipt?.id ?? "") || !providerId.test(receipt?.threadId ?? "")) throw err("GMAIL_OUTCOME_UNKNOWN");
     return { kind: "accepted", intentId, providerId: receipt.id, at: new Date(now()).toISOString() };
@@ -843,9 +886,9 @@ var unique = (items, key) => new Set(items.map(key)).size === items.length;
 function unready() {
   return new Error("Status source unavailable");
 }
-async function bounded(query, maximum2) {
+async function bounded(query2, maximum2) {
   maximum2 = Math.min(499, maximum2);
-  const { data, error } = await query.limit(maximum2 + 1);
+  const { data, error } = await query2.limit(maximum2 + 1);
   if (error || !Array.isArray(data) || data.length > maximum2) throw unready();
   return data;
 }
@@ -1067,7 +1110,7 @@ function createPartyumNativeWorkerHandler({ consume, enabled, runDue, markUnheal
     } catch {
       return json({ error: "WORKER" }, 503);
     }
-    if (enabled() && !deferPartyumWork(waitUntil2, () => runDue({ limit: PARTYUM_WORK_POLICY.nativeBatch }), markUnhealthy)) {
+    if (await enabled() && !deferPartyumWork(waitUntil2, () => runDue({ limit: PARTYUM_WORK_POLICY.nativeBatch }), markUnhealthy)) {
       try {
         await markUnhealthy();
       } catch {
@@ -1087,13 +1130,14 @@ async function createPartyumProductionRuntime({
   now = Date.now
 }) {
   if (!pool2?.connect || !sb2?.auth?.getUser || typeof env2 !== "function") throw Error("Partyum service missing");
-  const enabled = () => env2("PARTYUM_MAIL_ENABLED") === "true" && env2("EMAIL_SENDING_ENABLED") === "true";
+  const readControl = createPartyumControls({ pool: pool2, initTx, env: env2 });
+  const enabled = async (q) => (await readControl(q)).allowed;
   const legacy = createPartyumStatusReaders(sb2);
   const authenticate = async (token) => {
     const who = await legacy.authenticate(token);
     return exactOwner.test(who ?? "") ? who : null;
   };
-  const gmail = createPartyumGmail({ env: env2, request, now, readConnection: async (q, owner) => {
+  const gmail = createPartyumGmail({ env: env2, request, now, isEnabled: enabled, readConnection: async (q, owner) => {
     if (!UUID.test(owner ?? "")) return null;
     if (q) {
       const { rows } = await q.query(`select owner,provider,encrypted,summary from public.sanji_connections
@@ -1115,14 +1159,19 @@ async function createPartyumProductionRuntime({
   const consume = makePartyumPulseConsumer({ pool: pool2, initTx });
   let signingKey;
   const mail = createPartyumMailHandler({ authenticate, mail: async (actor, input) => {
-    if (!enabled()) throw Object.assign(Error("NOT_ENABLED"), { code: "NOT_ENABLED" });
+    const project2 = await sb2.from("sanji_private_wedding_projects").select("owner").eq("owner", actor).maybeSingle();
+    if (project2.error || project2.data?.owner !== actor) throw Object.assign(Error("AUTH"), { code: "AUTH" });
+    const decision = await readControl();
+    if (!decision.allowed) throw Object.assign(Error(decision.code), { code: decision.code });
     signingKey ??= deriveKey(env2("TOKEN_ENCRYPTION_KEY"));
     const mail2 = createPartyumMail({ secret: await signingKey, loadSnapshot: db.loadSnapshot, admitAtomic: db.admitAtomic, readReplay: db.readReplay, now });
-    const answer = await mail2(actor, input);
-    if (answer.state === "queued") {
-      deferPartyumWork(waitUntil2, () => runDue({ limit: PARTYUM_WORK_POLICY.immediateBatch }), () => db.heartbeat({ ready: false }));
+    const answer2 = await mail2(actor, input);
+    if (answer2.state === "queued") {
+      deferPartyumWork(waitUntil2, async () => {
+        if (await enabled()) await runDue({ limit: PARTYUM_WORK_POLICY.immediateBatch });
+      }, () => db.heartbeat({ ready: false }));
     }
-    return answer;
+    return answer2;
   } });
   const combined = createPartyumCombinedStatus({
     readLegacy: (scope) => readPartyumDayStatus({
@@ -1163,8 +1212,10 @@ async function createPartyumProductionRuntime({
   const worker = createPartyumNativeWorkerHandler({
     consume,
     enabled,
-    runDue,
     waitUntil: waitUntil2,
+    runDue: async (options) => {
+      if (await enabled()) return runDue(options);
+    },
     markUnhealthy: () => db.heartbeat({ ready: false })
   });
   return { handleMail: mail, handleStatus: status, handleWorker: worker };

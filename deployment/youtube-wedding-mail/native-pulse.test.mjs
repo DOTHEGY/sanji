@@ -15,7 +15,7 @@ test('native Cron creates a non-secret no-input hint and one service-only privat
  language sql as $$ insert into net.http_request_queue values(headers,body,timeout_milliseconds) returning 1::bigint $$;
  grant usage on schema net to public;
  grant select on net.http_request_queue to public;`);
- for(const file of ['0001_partyum_ledger.unapplied.sql','0002_partyum_native_scheduler.unapplied.sql']){
+ for(const file of ['0001_partyum_ledger.unapplied.sql','0002_partyum_native_scheduler.unapplied.sql','0003_partyum_runtime_control.unapplied.sql']){
   await db.exec(await fs.readFile(new URL(file,import.meta.url),'utf8'));
  }
  const endpoint='https://abcdefghijklmnopqrst.supabase.co/functions/v1/youtube-wedding-mail-worker';
@@ -46,12 +46,12 @@ test('native Cron creates a non-secret no-input hint and one service-only privat
  assert.equal(await consume(),false);
  // No browser/owner admission and no existing queue: a legitimate Cron grant
  // may update health; even repeated/fabricated wake hints cannot call the provider.
- await db.exec('delete from sanji_partyum_internal.worker_pulses; delete from sanji_partyum_internal.worker_health');
+ await db.exec('delete from sanji_partyum_internal.worker_pulses; delete from sanji_partyum_internal.worker_health; update sanji_partyum_internal.partyum_runtime_controls set send_enabled=true');
  let externalCalls=0;const registered=[];
  const runtime=await createPartyumProductionRuntime({
   pool:{connect:async()=>({query:db.query.bind(db),release(){}})},
   sb:{auth:{getUser:async()=>({error:true})}},
-  env:k=>['PARTYUM_MAIL_ENABLED','EMAIL_SENDING_ENABLED'].includes(k)?'true':'',
+  env:k=>k==='EMAIL_SENDING_ENABLED'?'true':'',
   waitUntil:p=>{registered.push(p);},
   request:async()=>{externalCalls++;throw Error('not expected');},
  });
