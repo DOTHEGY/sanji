@@ -207,6 +207,22 @@ export async function workspaceWeddingDayStatus({owner,day,channelIds,signal}) {
   if(!response.ok||signal?.aborted)throw Error('Status read failed');
   return response.json();
 }
+// Partyum campaign action only. The server determines the actor from the
+// authenticated session; neither contact data nor an owner goes in the body.
+export async function workspaceWeddingMail({owner,body,stillActive}) {
+  if(typeof owner!=='string'||!owner||typeof stillActive!=='function'||!stillActive())throw Error('Inactive Partyum session');
+  const approved=await member();
+  const latest=await client.auth.getSession(), current=latest?.data?.session;
+  if(latest?.error||approved.user?.id!==owner||current?.user?.id!==owner||!approved.access_token||
+    current.access_token!==approved.access_token||!stillActive())throw Error('Inactive Partyum session');
+  const response=await fetch(supabaseUrl+'/functions/v1/youtube-wedding-mail',{
+    method:'POST',cache:'no-store',
+    headers:{apikey:supabaseKey,Authorization:'Bearer '+approved.access_token,'Content-Type':'application/json'},
+    body:JSON.stringify(body),
+  });
+  if(!response.ok||!stillActive())throw Error('Unverified Partyum response');
+  return response.json();
+}
 export async function workspacePrimaryProjectCopy(expectedOwner, stillActive) {
   if (typeof expectedOwner !== "string" || !expectedOwner || typeof stillActive !== "function" || !stillActive()) throw error("계정과 화면을 확인하세요.", 403);
   return edge("/template-library", "GET", undefined, expectedOwner, stillActive);

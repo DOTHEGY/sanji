@@ -52,14 +52,14 @@ async function harness({embedded=false}={}){
   }
   };return q;
  }};
- const root=new Node();
+ const root=Object.assign(new Node(),{isConnected:true});
  const document={getElementById:id=>id==='wedding-root'?root:get(id),createElement:()=>new Node(),createTextNode:t=>t,defaultView:{addEventListener:(n,c)=>events[n]=c}};
  Object.assign(root,{ownerDocument:document,querySelector:sel=>get(sel.slice(1)),replaceChildren(){this.innerHTML='';}});
  const context={mockClient,document,Option:Node,URL,setTimeout,FormData:class{constructor(form){return Object.entries(form.input??{});}}};
  vm.runInNewContext(code,context);
  const auth=(actor)=>{state.actor=actor;change('CHANGED',actor?{user:{id:actor}}:null);};
  const tick=()=>new Promise(r=>setTimeout(r,10));
- return {get,state,auth,tick,events,root,mount:(owner,signal)=>context.mountFixture(root,{owner,signal,client:mockClient})};
+ return {get,state,auth,tick,events,root,mount:(owner,signal,options={})=>context.mountFixture(root,{owner,signal,client:mockClient,...options})};
 }
 test('canonical evidence, KST date, and owner/project isolation',async()=>{
  const m=await import('../web/youtube-wedding-model.mjs');
@@ -249,4 +249,29 @@ test('late owner contact read is discarded after account changes',async()=>{
  assert.equal(get('wedding-contact-list').children.length,0);
  assert.match(get('wedding-contact-status').textContent,/확인 0개 · 조사 기록 0개/);
  assert.equal(state.inserts,0);
+});
+
+
+test('native Partyum actions only expose the owner verified email and keep research without eligible mail inert',async()=>{
+ const {get,state,tick,mount}=await harness({embedded:true});
+ const day='2026-11-21',email='verified@example.test',expired='expired@example.test',foreign='foreign@example.test';
+ const keys=['a','b','c'].map(x=>'UC'+x.repeat(22));
+ for(const [i,key] of keys.entries())state.rows.push({owner:i===2?'other':'a',channel_id:key,channel_name:'Synthetic '+i,video_id:'ZXCVbnm1234',project_day:day,added_at:'2026-11-21T14:00:00Z',evidence_note:'Synthetic research only'});
+ state.contacts.push(...[email,expired,foreign].map((address,i)=>({owner:i===2?'other':'a',channel_id:keys[i],email:address,source_url:'https://creator.example.com/contact',source_kind:'official_website',verified_at:new Date(Date.now()-3600000).toISOString(),expires_at:new Date(Date.now()+(i===1?-36000:86400000)).toISOString()})));
+ const abort=new AbortController(),requests=[];
+ const scan=(x)=>[x,...(x?.children??[]).filter(k=>typeof k==='object').flatMap(scan)];
+ state.actor='a';
+ const stop=mount('a',abort.signal,{readMailCopy:async()=>null,mailRequest:async body=>{requests.push(body);throw Error('Synthetic only');},mailStorage:{getItem:()=>null,setItem:()=>{throw Error('Must not submit');}}});
+ await tick();
+ const nodes=scan(get('wedding-contact-list'));
+ assert.equal(nodes.filter(n=>n.textContent===email).length,1);
+ assert.equal(nodes.filter(n=>[expired,foreign].includes(n.textContent)).length,0);
+ assert.equal(nodes.filter(n=>n.type==='checkbox').length,1);
+ assert.equal(nodes.filter(n=>n.className==='wedding-mail-actions').length,1);
+ assert.deepEqual(requests,[]);
+ const action=nodes.find(n=>n.textContent==='지금 발송 대상 확인');assert.equal(action.disabled,false);action.handlers.click();await tick();
+ assert.equal(requests.length,1);assert.equal(requests[0].body.action,'plan');assert.equal(requests[0].body.day,day);
+ assert.equal(requests[0].body.projectId,'private-wedding-research');
+ assert.ok(nodes.find(n=>n.textContent==='표시된 인원 지금 발송 확정').disabled);
+ stop();
 });

@@ -1398,7 +1398,16 @@ function syncYoutubeEmailHost(key){
    void renderProjectCopies(owner,current,[[WEDDING_COPY_PURPOSE,host]]);
   }:undefined;
   const readStatus=key==='youtube-private'&&typeof workspaceWeddingDayStatus==='function'?workspaceWeddingDayStatus:undefined;
-  const stop=mount(node,{owner,signal,client:typeof manualClient==='undefined'?undefined:manualClient,mountCopy,readStatus});
+  const mailRequest=key==='youtube-private'&&typeof workspaceWeddingMail==='function'?workspaceWeddingMail:undefined;
+  const readMailCopy=mailRequest?async (actor,stillActive)=>{
+   const result=await workspacePrimaryProjectCopy(actor,stillActive);
+   const rows=Array.isArray(result?.rows)?result.rows.filter(row=>row?.archived===false&&row?.data?.purpose===WEDDING_COPY_PURPOSE):[];
+   if(rows.length!==1||rows[0].data.channel!=='이메일'||!stillActive())return null;
+   return {version:rows[0].version,subject:rows[0].data.subject,body:rows[0].data.body};
+  }:undefined;
+  let mailStorage;
+  if(mailRequest){try{mailStorage=node.ownerDocument.defaultView?.localStorage;}catch{}}
+  const stop=mount(node,{owner,signal,client:typeof manualClient==='undefined'?undefined:manualClient,mountCopy,readStatus,mailRequest,readMailCopy,mailStorage});
   if(typeof stop==='function')entry.cleanup=stop;
   else if(stop?.then)void stop.then(cleanup=>{
    if(typeof cleanup!=='function')return;
