@@ -32,7 +32,7 @@ test('selected KST minute preserves 15:00 and midnight boundaries without a sile
  for(const time of ['10:00'])assert.throws(()=>chosenTimeSeoul('2026-11-12',time,now),/지나지 않은/);
  assert.throws(()=>chosenTimeSeoul('2026-02-30','15:00',now));
  const source=require('node:fs').readFileSync('web/youtube-saved.mjs','utf8');
- assert.ok(source.includes("const sendTime=node('select')"));assert.ok(source.includes('sendTime:sendTime.value'));assert.ok(!source.includes('오전 10시'));
+ assert.ok(source.includes("const sendTime=node('select')"));assert.ok(source.includes("sendTime:quick?'10:00':sendTime.value"));assert.ok(source.includes('내일 오전 10시 예약 대상 확인'));
 });
 
 test('explicit afternoon is not silently replaced when send day uses the default',async()=>{const {reviewProjectReservation}=await import('../web/youtube-schedule-preview.mjs');const options={rows:[],projectId:'gs-bbangteojineunjip-chewy-bread',day:'2026-11-12',now:'2026-11-12T02:00:00Z'};assert.equal(reviewProjectReservation({...options,sendTime:'15:00'}).runAt,'2026-11-13T06:00:00.000Z');assert.throws(()=>reviewProjectReservation({...options,sendTime:'14:00'}));});

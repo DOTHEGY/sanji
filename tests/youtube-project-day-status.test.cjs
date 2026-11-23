@@ -50,8 +50,8 @@ test('saved candidate DOM keeps each status under its discovery cohort, and igno
  const client={auth:{getSession:async()=>({data:{session:{user:{id:account},access_token:'fixture'}}})},
   from(){let requested;const q={select:()=>q,eq:(k,v)=>{if(k==='owner')requested=v;return q;},order:()=>q,limit:()=>q,setHeader:()=>q,
     then:(resolve)=>resolve({data:rows.filter(r=>r.owner===requested)})};return q;}};
- const container=new Element('div'),readDayStatus=(scope,c)=>{calls.push({...scope,...c});return lookup(scope);};
- const controller=mountYoutubeSaved({container,client,getOwner:()=>account,isCurrent:o=>account===o,readDayStatus});
+ const reviews=[],container=new Element('div'),readDayStatus=(scope,c)=>{calls.push({...scope,...c});return lookup(scope);};
+ const controller=mountYoutubeSaved({container,client,getOwner:()=>account,isCurrent:o=>account===o,readDayStatus,onReview:(rows,runAt,scope)=>reviews.push({rows,runAt,scope})});
  try {
    await controller.load();await new Promise(setImmediate);
    const groups=container.find(x=>x.className==='creator-project-day');
@@ -62,12 +62,20 @@ test('saved candidate DOM keeps each status under its discovery cohort, and igno
    assert.match(known.textContent,/찾기만 함/);
    assert.match(groups.find(x=>x!==known).textContent,/확인 필요/);
    assert.deepEqual([...calls[0].ids,...calls[1].ids].sort(),[U(1),U(2),U(3),U(4)]);
+   const quick=known.find(x=>x.attrs['aria-label']===day+' 내일 오전 10시 예약 대상 확인')[0];
+   assert.equal(quick.disabled,false);
+   quick.click();
+   assert.deepEqual(reviews[0].rows.map(r=>r.id),[U(3)]);
+   assert.deepEqual(reviews[0].scope,{projectId,day});
+   assert.match(reviews[0].runAt,/T01:00:00\.000Z$/);
+   const checkbox=known.find(x=>x.attrs['aria-label']==='합성 후보 2 예약에서 제외')[0];
+   checkbox.checked=true;checkbox.change();assert.equal(quick.disabled,true);
    const resolvers=[];lookup=scope=>new Promise(resolve=>resolvers.push(()=>resolve({...scope,items:scope.ids.map(id=>({candidateId:id,state:'sent',at}))})));
    await controller.load();await new Promise(setImmediate);
    assert.equal(resolvers.length,2);
    const old=container.find(x=>x.className==='creator-project-day');
    account=U(91);controller.clear();resolvers.forEach(resolve=>resolve());await new Promise(setImmediate);
    assert.equal(container.find(x=>x.className==='creator-project-day').length,0);
-   assert.equal(old.some(g=>g.textContent.includes('발송 완료')),false);
+   assert.equal(old.some(g=>g.find(x=>x.className==='creator-mail-state creator-mail-sent').length>0),false);
  }finally{global.document=prior;}
 });

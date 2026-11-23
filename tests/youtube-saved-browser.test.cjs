@@ -5,9 +5,9 @@ test.before(async()=>{const bundle=(await esbuild.build({stdin:{contents:`import
 server=http.createServer((req,res)=>{res.setHeader('Content-Type',req.url==='/app.js'?'text/javascript; charset=utf-8':'text/html; charset=utf-8');res.end(req.url==='/app.js'?bundle:'<div id="saved"></div><script src="/app.js"></script>');});await new Promise(r=>server.listen(0,'127.0.0.1',r));base=`http://127.0.0.1:${server.address().port}`;browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});});
 test.after(async()=>{await browser?.close();if(server)await new Promise(r=>server.close(r));});
 async function page(){const p=await browser.newPage();await p.goto(base);await p.evaluate(()=>{
-window.owner='owner-a';window.rows=[];window.reads=0;window.saves=0;window.changes=0;window.selectionChanges=0;window.gate=null;window.saveGate=null;
+window.owner='owner-a';window.rows=[];window.reads=0;window.saves=0;window.changes=0;window.selectionChanges=0;window.reviews=[];window.gate=null;window.saveGate=null;
 const client={auth:{getSession:async()=>({data:{session:{user:{id:window.owner},access_token:'fixture-token'}}})},from:table=>{if(table!=='sanji_records')throw Error('Wrong table');let requested;const q={select:()=>q,eq:(k,v)=>{if(k==='owner')requested=v;return q;},order:()=>q,limit:()=>q,setHeader:()=>q,gt:()=>q,then:async(resolve,reject)=>{window.reads++;const captured=window.rows.filter(r=>r.owner===requested);if(window.gate)await window.gate;resolve({data:captured});}};return q;},rpc:(name,args)=>({setHeader:()=>({then:async(resolve)=>{window.saves++;if(window.saveGate)await window.saveGate;if(window.rows.some(r=>r.owner===window.owner&&r.data.companyKey===args.p_data.companyKey)){resolve({error:{code:'23505'}});return;}window.rows.push({id:'00000000-0000-0000-0000-000000000001',owner:window.owner,version:1,updated:'2026-11-09T00:00:00Z',kind:'candidate',data:args.p_data});resolve({data:window.rows.at(-1)});}})})};
-window.controller=window.mountYoutubeSaved({container:document.querySelector('#saved'),client,getOwner:()=>window.owner,isCurrent:o=>window.owner===o,onChange:()=>window.changes++,onSelectionChange:()=>window.selectionChanges++,readDayStatus:(scope,context)=>window.mailEvidence?.(scope,context)??Promise.resolve(null)});
+window.controller=window.mountYoutubeSaved({container:document.querySelector('#saved'),client,getOwner:()=>window.owner,isCurrent:o=>window.owner===o,onChange:()=>window.changes++,onSelectionChange:()=>window.selectionChanges++,onReview:(rows,runAt,scope)=>window.reviews.push({rows,runAt,scope}),readDayStatus:(scope,context)=>window.mailEvidence?.(scope,context)??Promise.resolve(null)});
 });return p;}
 const profile='https://www.youtube.com/channel/UC'+'a'.repeat(22);
 test('saved reads are owner bound and a late former-owner result never appears',async()=>{const p=await page();try{await p.evaluate(profile=>{window.rows=[{id:'00000000-0000-0000-0000-000000000001',owner:'owner-a',version:1,updated:'2026-11-09T00:00:00Z',kind:'candidate',data:{kind:'크리에이터',name:'OLD PRIVATE',profile}}];window.gate=new Promise(r=>window.release=r);window.loading=window.controller.load();},profile);await p.waitForFunction(()=>window.reads>0);await p.evaluate(()=>{window.owner='owner-b';window.controller.clear();window.release();window.gate=null;});await p.evaluate(()=>window.loading);assert.equal(await p.getByText('OLD PRIVATE').count(),0);await p.evaluate(()=>window.controller.load());assert.match(await p.locator('#saved').textContent(),/산지 저장 0명/);}finally{await p.close();}});
@@ -63,4 +63,37 @@ test('per-row campaign mail statuses keep discovery dates, recorded send and res
   assert.equal(await p.evaluate(()=>window.statusCalls.length),2);
   assert.equal(await p.evaluate(()=>window.saves),0);
  }finally{await p.close();}
+});
+
+test('Chewy daily review verifies counts and exclusions without scheduling on desktop or mobile',async()=>{
+ for(const width of [390,1280]){
+  const p=await page();try{
+   await p.setViewportSize({width,height:880});
+   await p.evaluate(profile=>{
+    const projectId='gs-bbangteojineunjip-chewy-bread',day='2026-11-15';
+    const states=['found_only','found_only','scheduled','sent','unknown','found_only'];
+    window.rows=states.map((_,i)=>({id:'00000000-0000-0000-0000-'+String(i+1).padStart(12,'0'),owner:window.owner,version:1,kind:'candidate',updated:'2026-11-15T00:00:00Z',
+     data:{kind:'크리에이터',name:'예약 가상 '+i,followers:32000,profile:profile.replace(/a{22}/,String.fromCharCode(97+i).repeat(22)),
+      contact:{email:'fixture-'+i+'@example.test'},youtubeResearch:{projects:[{id:projectId,addedAt:day+'T01:00:00Z',assignedDay:i===5?'2026-11-16':day}]}}}));
+    window.mailEvidence=async scope=>({...scope,items:scope.ids.map(id=>{const i=Number(id.slice(-2))-1;return {candidateId:id,state:states[i],
+      at:i===2||i===3?'2026-11-16T01:00:00Z':null,completeForCandidate:states[i]==='found_only'};})});
+    return window.controller.load();
+   },profile);
+   const quick=p.getByRole('button',{name:'2026-11-15 내일 오전 10시 예약 대상 확인'});
+   const box=p.getByRole('checkbox',{name:'예약 가상 0 예약에서 제외'});
+   const group=p.locator('.creator-project-day').filter({hasText:'2026-11-15 · 프로젝트 분류일'});
+   await group.getByText('찾기만 함 2명 · 발송 예약 1명 · 발송 완료 1명 · 발송 실패 0명 · 확인 필요 1명').waitFor();
+   await box.check();
+   await group.getByText('예약 대상 확인 가능 1명 · 선택 제외 1명').waitFor();
+   await quick.click();
+   const got=await p.evaluate(()=>({reviews:window.reviews,saves:window.saves}));
+   assert.deepEqual(got.reviews[0].rows.map(r=>r.email),['fixture-1@example.test']);
+   assert.deepEqual(got.reviews[0].scope,{projectId:'gs-bbangteojineunjip-chewy-bread',day:'2026-11-15'});
+   assert.match(got.reviews[0].runAt,/T01:00:00\.000Z$/);
+   assert.match(await p.getByLabel('예약 대상 준비').textContent(),/아직 예약하지 않았습니다/);
+   await p.getByRole('button',{name:'2026-11-15 예약·발송 상태 새로고침'}).click();
+   assert.equal(await box.isChecked(),true);
+   assert.equal(got.saves,0);
+  }finally{await p.close();}
+ }
 });

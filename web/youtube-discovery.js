@@ -61,7 +61,7 @@ const campaign={async load(offset=0){
   }});if(!current())return;
   if(!prepared.total){host.replaceChildren(summary(),el('p','예약할 대상이 없습니다. 이메일은 발송하지 않았습니다.'));return;}
   const scheduledLabel=new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',dateStyle:'long',timeStyle:'short'}).format(new Date(expectedRunAt));
-  const heading=el('h3',`예약할 대상 ${prepared.total}명`),note=el('p','아래 수신자와 문안을 선택한 시각으로 한 번에 예약합니다. 수신거부·중복·제외 대상은 포함하지 않습니다. 공개 주소는 협업 동의를 뜻하지 않으며, Gmail 수락은 실제 전달 완료를 뜻하지 않습니다.');
+  const heading=el('h3',`${scope.day} 분류 · 예약할 대상 ${prepared.total}명`),note=el('p','아래 수신자와 문안을 선택한 시각으로 한 번에 예약합니다. 수신거부·중복·제외 대상은 포함하지 않습니다. 공개 주소는 협업 동의를 뜻하지 않으며, Gmail 수락은 실제 전달 완료를 뜻하지 않습니다.');
   const send=el('button',`준비된 ${prepared.total}명에게 이 문안으로 ${scheduledLabel} 예약`);send.type='button';
   const state=el('div');state.setAttribute('role','status');state.append(el('p',`예정 시각: ${scheduledLabel} · 아직 예약하지 않았습니다.`));
   host.replaceChildren(heading,summary(),el('p',`전체 ${prepared.total}명 · 시스템 처리 ${prepared.batches.length}묶음`),note,...[...new Set(prepared.batches.map(b=>b.result.warning).filter(Boolean))].map(w=>el('p',w)),checks,send,state);
@@ -70,7 +70,7 @@ const campaign={async load(offset=0){
     const labels={not_requested:'예약 요청 안 함',stopped:'중단 · 예약 요청 안 함',expired:'준비 유효시간 만료 · 예약 요청 안 함',confirming:'승인 처리 중',confirm_unknown:'승인 처리 결과 미확인 · 예약 요청 안 함',confirmed_not_scheduled:'승인 완료 · 예약 요청 안 함',scheduling:'예약 요청 중',schedule_unknown:'예약 결과 미확인 · 다시 요청하지 마세요',scheduled:'예약 완료'};
     const count=key=>states.filter(x=>x.state===key).reduce((n,x)=>n+x.count,0),scheduled=count('scheduled'),uncertain=count('schedule_unknown')+count('scheduling');
     state.replaceChildren(el('p',`예약 완료 ${scheduled}명 · 예약 결과 미확인/처리 중 ${uncertain}명 · 예약 요청 전 ${prepared.total-scheduled-uncertain}명`),...states.map((x,i)=>el('p',`${i+1}번째 묶음 ${x.count}명 · ${labels[x.state]}`)));
-   }});}finally{sendInFlight=false;}
+   }});}finally{sendInFlight=false;if(current())saved.refreshDayStatuses();}
   });
  }catch(error){if(current())host.replaceChildren(summary(),el('p',error?.code==='PREPARATION_EXPIRED'?'준비 유효시간이 지났습니다. 다시 준비한 뒤 예약하세요. 아직 예약하지 않았습니다.':'문안 준비를 완료하지 못했습니다. 연락처·계정·서버 상태를 확인하세요. 아직 예약하지 않았습니다.'));}
 },async previewRecipient(creatorKey){

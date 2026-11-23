@@ -39,10 +39,18 @@ export function youtubeMatchesFilters(data,query,from,to){
   if(!from&&!to)return true;
   const day=youtubeObservationDay(data);return Boolean(day&&(!from||day>=from)&&(!to||day<=to));
 }
+export function chewyStatusCounts(rows,proofs){
+  const counts={found_only:0,scheduled:0,sent:0,failed:0,unknown:0};
+  for(const row of rows)counts[dayStatusText(proofs.get(row.id)).state]++;
+  return counts;
+}
+export function chewyFoundForReview(candidates,proofs){
+  return candidates.filter(row=>proofs?.get(row.id)?.status==='found_only');
+}
 function node(tag,text){const e=document.createElement(tag);if(text!==undefined)e.textContent=text;return e;}
 function sourceLink(text,value){const url=https(value);if(!url)return node('span',text);const a=node('a',text);a.href=url;a.target='_blank';a.rel='noopener noreferrer';return a;}
 export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=()=>{},onPreview=()=>{},onReview=()=>{},onSelectionChange=()=>{},readDayStatus=null}) {
-  let statusRead=null;
+  let statusRead=null, dayViews=new Map();
   let revision=0,busy=false,records=[],saveOperation=0,selected=DEFAULT_YOUTUBE_COLLECTION,drafts=[],loaded=false,uncertain=false,selectedRecipients=new Set(),projectMode=false;
   const heading=node('h2','YouTube 크리에이터');
   const projectPanel=node('section'),projectHeading=node('h3','프로젝트'),projectButton=node('button',FIRST_PROJECT.name),allButton=node('button','기존 후보 전체'),projectInfo=node('p'),projectDays=node('div');projectButton.type='button';allButton.type='button';projectInfo.setAttribute('role','status');projectDays.setAttribute('aria-label','프로젝트 날짜별 후보');
@@ -94,10 +102,10 @@ export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=
     dateNote.textContent=projectMode?'프로젝트 분류 날짜 기준입니다. 실제 조사일과 다를 수 있습니다.':'조사 확인일 기준입니다. 기간을 선택하면 확인일이 없는 후보는 제외됩니다.';
     const projectRows=projectMode?stats.rows:collectionStats(records,selected).rows;const rows=projectRows.filter(r=>{if(!projectMode)return youtubeMatchesFilters(r.data,search.value,from.value,to.value);if(!youtubeMatchesFilters(r.data,search.value,'',''))return false;const m=projectMemberships(r.data).find(p=>p.id===FIRST_PROJECT.id);const day=projectDay(m);return (!from.value||day>=from.value)&&(!to.value||day<=to.value);});
     selectionStatus.textContent=`예약에서 제외 ${selectedRecipients.size}명 · 다른 조건에서 선택한 사람도 유지됩니다.`;
+    statusRead?.abort();dayViews=new Map();
     if(from.value&&to.value&&from.value>to.value){status.textContent='시작일이 종료일보다 늦습니다. 날짜를 확인하세요.';list.replaceChildren();return;}
     const hasAddress=row=>!youtubeSelectionExclusion(row).excluded&&savedEmailDisplay(row.data).email!==null;const current=rows.filter(hasAddress),history=rows.filter(r=>!hasAddress(r));
     list.replaceChildren();status.textContent=`산지 저장 ${records.length}명 · 표시 ${rows.length}명 · 공개 주소 후보 ${current.length}명 (검증 주소 수가 아닙니다)`;
-    statusRead?.abort();
     const controller=new AbortController();statusRead=controller;
     const tables=new Map(),statusRequests=[];
     const dayOf=r=>projectMode?projectDay(projectMemberships(r.data).find(p=>p.id===FIRST_PROJECT.id)):'';
@@ -111,18 +119,46 @@ export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=
       }
       head.append(hr);const body=node('tbody');table.append(head,body);wrap.append(table);return {wrap,body};
     }
+    function updateDay(day){
+      const view=dayViews.get(day);
+      if(!view)return;
+      const rollup=chewyStatusCounts(view.rows,view.proofs);
+      view.summary.textContent=`찾기만 함 ${rollup.found_only}명 · 발송 예약 ${rollup.scheduled}명 · 발송 완료 ${rollup.sent}명 · 발송 실패 ${rollup.failed}명 · 확인 필요 ${rollup.unknown}명`;
+      const selectedCount=view.rows.filter(row=>selectedRecipients.has(row.id)).length;
+      let eligible=0;
+      try{eligible=reviewForDay(day,true,new Date()).candidates.length;}catch{/* Invalid day is never a target. */}
+      view.actions.textContent=`예약 대상 확인 가능 ${eligible}명 · 선택 제외 ${selectedCount}명${search.value.trim()?' · 현재 검색 결과 기준':''}`;
+      view.quick.disabled=!eligible;
+    }
     for(const day of days){
-      const group=projectMode?node('section'):list;
-      if(projectMode){group.className='creator-project-day';group.append(node('h4',day+' · 프로젝트 분류일 (KST)'));list.append(group);}
+      const group=projectMode?node('section'):list;let summary;
+      if(projectMode){
+        group.className='creator-project-day';
+        const label=node('h4',day+' · 프로젝트 분류일 (KST)');summary=node('p');
+        summary.className='chewy-day-status';summary.setAttribute('role','status');
+        group.append(label,summary);list.append(group);
+      }
       const groupRows=rows.filter(r=>dayOf(r)===day);
       const activeTable=table('공개 주소가 기록된 YouTube 후보');group.append(activeTable.wrap);
       if(!groupRows.some(hasAddress)) group.append(node('p','이 모음에 예약할 공개 주소가 기록된 채널이 없습니다. 이메일 미확인·기존 조사 기록은 아래에 보존되어 있습니다.'));
       const historyBox=node('details');historyBox.className='creator-history';
       historyBox.append(node('summary',`제외·이메일 미확인 기록 (${groupRows.filter(r=>!hasAddress(r)).length}명)`),node('p','기존 후보·주소·주제 모음을 그대로 보존합니다. 이메일 미확인·기존 제외 기록은 예약 대상에 포함하지 않습니다.'));
-      const oldTable=table('기존 YouTube 조사 기록');historyBox.append(oldTable.wrap);group.append(historyBox);
+      const oldTable=table('기존 YouTube 조사 기록');historyBox.append(oldTable.wrap);
       const cells=new Map();
       tables.set(day,{activeTable,oldTable,cells});
-      if(projectMode&&validDay(day))statusRequests.push({day,cells});
+      if(projectMode&&validDay(day)){
+        const actions=node('p'), quick=node('button','내일 오전 10시 예약 대상 확인'), recheck=node('button','예약·발송 상태 새로고침');
+        quick.type='button';quick.disabled=true;recheck.type='button';
+        quick.setAttribute('aria-label',day+' 내일 오전 10시 예약 대상 확인');
+        recheck.setAttribute('aria-label',day+' 예약·발송 상태 새로고침');
+        quick.addEventListener('click',()=>{if(!quick.disabled)drawSelectionReview(day,true);});
+        recheck.addEventListener('click',()=>{if(!loaded||busy)return;selectionReview.replaceChildren();onSelectionChange();draw();});
+        const controls=node('div');controls.className='chewy-day-actions';controls.append(actions,quick,recheck);
+        group.append(controls);
+        dayViews.set(day,{rows:groupRows,proofs:new Map(),summary,actions,quick,update:()=>updateDay(day)});
+        updateDay(day);statusRequests.push({day,cells});
+      }
+      group.append(historyBox);
     }
     if(!days.length)list.append(node('p','날짜와 검색어에 맞는 프로젝트 후보가 없습니다.'));
     function showMailStatus(cell,value){
@@ -133,7 +169,7 @@ export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=
     }
     for(const r of rows){const d=r.data,card=node('details');card.className='creator-detail';const summary=node('summary','상세 근거');card.append(summary,sourceLink('YouTube 채널 원문',d.profile));
       const tr=node('tr'),name=node('td'),email=node('td'),audience=node('td'),contact=savedEmailDisplay(d);
-      const choose=node('input');choose.type='checkbox';choose.checked=selectedRecipients.has(r.id);choose.disabled=!contact.email||youtubeSelectionExclusion(r).excluded;choose.setAttribute('aria-label',`${d.name} 예약에서 제외`);choose.addEventListener('change',()=>{if(choose.checked)selectedRecipients.add(r.id);else selectedRecipients=new Set([...selectedRecipients].filter(id=>id!==r.id));selectionReview.replaceChildren();selectionStatus.textContent=`예약에서 제외 ${selectedRecipients.size}명 · 다른 조건에서 선택한 사람도 유지됩니다.`;onSelectionChange();});
+      const choose=node('input');choose.type='checkbox';choose.checked=selectedRecipients.has(r.id);choose.disabled=!contact.email||youtubeSelectionExclusion(r).excluded;choose.setAttribute('aria-label',`${d.name} 예약에서 제외`);choose.addEventListener('change',()=>{if(choose.checked)selectedRecipients.add(r.id);else selectedRecipients=new Set([...selectedRecipients].filter(id=>id!==r.id));selectionReview.replaceChildren();selectionStatus.textContent=`예약에서 제외 ${selectedRecipients.size}명 · 다른 조건에서 선택한 사람도 유지됩니다.`;for(const view of dayViews.values())view.update();onSelectionChange();});
       name.append(choose,sourceLink(d.name,d.profile));const observed=youtubeObservationDay(d);if(projectMode&&observed&&observed!==dayOf(r))name.append(node('small','조사 확인일: '+observed+' (KST)'));const exclusion=youtubeSelectionExclusion(r);if(exclusion.excluded){name.append(node('small','신규 예약 제외: '+exclusion.reason));card.append(node('p','신규 예약 제외: '+exclusion.reason+(exclusion.organizationName?' · '+exclusion.organizationName:'')));for(const evidence of exclusion.evidence||[])card.append(sourceLink('제외 근거',evidence.sourceUrl));}const key=youtubeProfile(d.profile)?.match(/\/channel\/(UC[A-Za-z0-9_-]{22})$/)?.[1];
       const preview=node('button','카피 보기');preview.type='button';preview.className='compact secondary';preview.disabled=!key;preview.setAttribute('aria-label',`${d.name} 개별 카피 보기`);const owner=getOwner(),ticket=revision;preview.addEventListener('click',()=>{if(!loaded||busy||ticket!==revision||!isCurrent(owner)||getOwner()!==owner||!key)return;onPreview('youtube:'+key);});name.append(preview,card);
       email.append(node('span',contact.email||'미확인'));const hint=node('small',contact.email?'공개 주소 기록 · 수신 동의 미확인':contact.label);hint.className='muted';email.append(hint);if(contact.otherCount)card.append(node('p',`추가 주소 근거 ${contact.otherCount}개는 아래에 보존합니다. 수신자는 크리에이터당 최대 1개 주소만 선택하며 플랫폼 간 공유 수신함도 중복 제외합니다.`));
@@ -162,7 +198,11 @@ export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=
         try{
           const value=await readDayStatus(scope,{owner:account,signal:controller.signal});
           if(!current())return;
-          for(const [id,status] of decodeDayStatus(value,scope))showMailStatus(cells.get(id),status);
+          const view=dayViews.get(day);
+          for(const [id,result] of decodeDayStatus(value,scope)){
+            showMailStatus(cells.get(id),result);view.proofs.set(id,result);
+          }
+          view.update();
         }catch{/* Verification gap remains visibly unknown. */}
       }};
       const workers=Math.min(3,queue.length);for(let i=0;i<workers;i++)void update();
@@ -172,7 +212,7 @@ export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=
     const r=await client.auth.getSession();if(r.error||r.data?.session?.user?.id!==owner||ticket!==revision||!isCurrent(owner))throw Error('STALE');return r.data.session;
   }
   async function load(afterSave=false){
-    statusRead?.abort();
+    statusRead?.abort();dayViews=new Map();
     if(busy&&afterSave!==true)return;
     onSelectionChange();
     const owner=getOwner(),ticket=++revision;records=[];selectedRecipients.clear();selectionReview.replaceChildren();loaded=false;list.replaceChildren();drawCollections();onChange();
@@ -187,14 +227,35 @@ export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=
     }catch(e){if(ticket===revision&&isCurrent(owner)&&e.message!=='STALE')status.textContent=e.message;}
     finally{if(ticket===revision)controls();}
   }
-  refresh.addEventListener('click',()=>load());search.addEventListener('input',()=>{if(loaded)draw();});existing.addEventListener('change',controls);
+  refresh.addEventListener('click',()=>load());search.addEventListener('input',()=>{onSelectionChange();if(loaded)draw();});existing.addEventListener('change',controls);
   projectButton.addEventListener('click',()=>{projectMode=true;onSelectionChange();if(loaded)draw();});allButton.addEventListener('click',()=>{projectMode=false;onSelectionChange();if(loaded)draw();});
   projectAdd.addEventListener('click',async()=>{if(busy||!loaded||uncertain)return;const row=records.find(r=>r.id===projectChoice.value),owner=getOwner(),ticket=revision;if(!row||row.owner!==owner)return;const operation=++saveOperation;busy=true;projectAdd.disabled=true;projectInfo.textContent='프로젝트에 추가 중…';try{const data=addProjectMembership(row.data,FIRST_PROJECT.id,new Date().toISOString());if(!data)throw Error('이미 이 프로젝트에 추가된 후보입니다.');const session=await checkedSession(owner,ticket);uncertain=true;const result=await client.rpc('sanji_save_record',{p_kind:'candidate',p_id:row.id,p_version:row.version,p_data:data}).setHeader('Authorization','Bearer '+session.access_token);await checkedSession(owner,ticket);const value=Array.isArray(result.data)?result.data[0]:result.data;if(result.error||!value||value.owner!==owner||value.id!==row.id||value.version!==row.version+1||!projectMemberships(value.data).some(p=>p.id===FIRST_PROJECT.id))throw Error('저장 결과를 확인하지 못했습니다. 목록을 새로고침하세요.');await load(true);}catch(e){if(ticket===revision&&isCurrent(owner)&&e.message!=='STALE')projectInfo.textContent=e.message;}finally{if(operation===saveOperation){busy=false;projectAdd.disabled=false;controls();}}});
   for(const input of [from,to])input.addEventListener('change',()=>{onSelectionChange();if(loaded)draw();});
   resetFilters.addEventListener('click',()=>{search.value='';from.value='';to.value='';onSelectionChange();if(loaded)draw();});
-  function drawSelectionReview(){selectionReview.replaceChildren();if(!loaded||!projectMode||!from.value||from.value!==to.value){selectionReview.append(node('p','프로젝트의 날짜 버튼을 하나 선택하세요.'));return;}try{const preview=reviewProjectReservation({rows:records,projectId:FIRST_PROJECT.id,day:from.value,excludedIds:[...selectedRecipients],now:new Date(),sendDay:sendDate.value,sendTime:sendTime.value});if(!preview.candidates.length){selectionReview.append(node('p','예약할 대상이 없습니다.'));return;}selectionReview.append(node('p',`${from.value} 분류 · ${sendDate.value} ${sendTime.value}(한국 시간) 예약 · 예약 준비 ${preview.candidates.length}명 · 제외 ${selectedRecipients.size}명 · 자동 보류 ${preview.held.length}명`));const items=node('ul');for(const row of preview.candidates)items.append(node('li',`${row.name} · ${row.email}`));selectionReview.append(items);onReview(preview.candidates.map(({id,version,email})=>({id,version,email})),preview.runAt,{projectId:FIRST_PROJECT.id,day:from.value});}catch(e){selectionReview.append(node('p',e.message||'날짜와 대상을 확인하지 못했습니다. 목록을 다시 불러오세요.'));}}
+  function reviewForDay(day,quick,now){
+    const view=dayViews.get(day);
+    const preview=reviewProjectReservation({rows:records,projectId:FIRST_PROJECT.id,day,excludedIds:[...selectedRecipients],now,
+      sendDay:quick?undefined:sendDate.value,sendTime:quick?'10:00':sendTime.value});
+    // No UI eligibility from contacts alone: a matching authoritative status
+    // must prove this candidate was only found, never sent or already reserved.
+    const candidates=chewyFoundForReview(preview.candidates,view?.proofs);
+    return {...preview,candidates,notReady:preview.candidates.length-candidates.length};
+  }
+  function drawSelectionReview(day,quick=false){
+    selectionReview.replaceChildren();onSelectionChange();
+    if(!loaded||busy||!projectMode||!validDay(day)){selectionReview.append(node('p','프로젝트의 날짜 버튼을 하나 선택하세요.'));return;}
+    try{
+      const now=new Date(),preview=reviewForDay(day,quick,now);
+      if(!preview.candidates.length){selectionReview.append(node('p','예약할 대상이 없습니다. 예약·발송 또는 확인이 필요한 건은 대상에 포함하지 않습니다.'));return;}
+      const local=new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',dateStyle:'medium',timeStyle:'short'}).format(new Date(preview.runAt));
+      const excluded=dayViews.get(day).rows.filter(row=>selectedRecipients.has(row.id)).length;
+      selectionReview.append(node('p',`${day} 분류 · ${local} (KST) · 예약 준비 ${preview.candidates.length}명 · 선택 제외 ${excluded}명 · 추가 확인/보류 ${preview.held.length+preview.notReady}명. 아직 예약하지 않았습니다.`));
+      const items=node('ul');for(const row of preview.candidates)items.append(node('li',`${row.name} · ${row.email}`));selectionReview.append(items);
+      onReview(preview.candidates.map(({id,version,email})=>({id,version,email})),preview.runAt,{projectId:FIRST_PROJECT.id,day});
+    }catch(e){selectionReview.append(node('p',e.message||'날짜와 대상을 확인하지 못했습니다. 목록을 다시 불러오세요.'));}
+  }
   for(const input of [sendDate,sendTime])input.addEventListener('change',()=>{selectionReview.replaceChildren();onSelectionChange();});
-  reviewSelection.addEventListener('click',drawSelectionReview);
+  reviewSelection.addEventListener('click',()=>drawSelectionReview(from.value&&from.value===to.value?from.value:''));
   createForm.addEventListener('submit',event=>{event.preventDefault();if(busy||!loaded)return;try{const name=collectionName(collectionInput.value),names=collectionNames(records,drafts);if(!names.includes(name)){if(names.length>=100)throw Error('모음은 최대 100개까지 만들 수 있습니다.');drafts.push(name);}selected=name;collectionInput.value='';collectionStatus.textContent='모음을 선택했습니다. 첫 후보를 저장하면 다른 기기에서도 이 모음을 볼 수 있습니다.';draw();}catch(e){collectionStatus.textContent=e.message;}});
   async function addMembership(row,name,owner,ticket){
     if(!row||row.owner!==owner||!Number.isInteger(row.version)||row.version<1)throw Error('현재 후보를 다시 불러오세요.');
@@ -236,6 +297,6 @@ export function mountYoutubeSaved({container,client,getOwner,isCurrent,onChange=
   });
   const getSavedIds=()=>new Set(records.map(r=>youtubeProfile(r.data.profile)?.match(/\/channel\/(UC[A-Za-z0-9_-]{22})$/)?.[1]).filter(Boolean));
   drawCollections();
-  return {load,getSavedIds,excludeRecipient(id){selectedRecipients.add(id);selectionReview.replaceChildren();if(loaded)draw();onSelectionChange();},getSelectedRecipients(){if(!projectMode||!from.value||from.value!==to.value)return [];try{return reviewProjectReservation({rows:records,projectId:FIRST_PROJECT.id,day:from.value,excludedIds:[...selectedRecipients],now:new Date(),sendDay:sendDate.value,sendTime:sendTime.value}).candidates.map(({id,version,email})=>({id,version,email}));}catch{return [];}},hasChannelId:id=>typeof id==='string'&&getSavedIds().has(id),clear(){statusRead?.abort();onSelectionChange();revision++;saveOperation++;records=[];selectedRecipients.clear();selectionReview.replaceChildren();selectionStatus.textContent='예약에서 제외 0명';projectInfo.textContent='';projectChoice.replaceChildren();projectMode=false;busy=false;loaded=false;uncertain=false;selected=DEFAULT_YOUTUBE_COLLECTION;drafts=[];list.replaceChildren();form.reset();search.value='';from.value='';to.value='';sendTime.value='10:00';sendDate.value=tomorrowTenSeoul(new Date()).slice(0,10);collectionInput.value='';collectionStatus.textContent='';saveStatus.textContent='';status.textContent='로그인 후 저장한 후보를 불러옵니다.';drawCollections();onChange();}};
+  return {load,getSavedIds,excludeRecipient(id){selectedRecipients.add(id);selectionReview.replaceChildren();if(loaded)draw();onSelectionChange();},refreshDayStatuses(){if(loaded&&!busy)draw();},getSelectedRecipients(){if(!projectMode||!from.value||from.value!==to.value)return [];try{return reviewForDay(from.value,false,new Date()).candidates.map(({id,version,email})=>({id,version,email}));}catch{return [];}},hasChannelId:id=>typeof id==='string'&&getSavedIds().has(id),clear(){statusRead?.abort();dayViews=new Map();onSelectionChange();revision++;saveOperation++;records=[];selectedRecipients.clear();selectionReview.replaceChildren();selectionStatus.textContent='예약에서 제외 0명';projectInfo.textContent='';projectChoice.replaceChildren();projectMode=false;busy=false;loaded=false;uncertain=false;selected=DEFAULT_YOUTUBE_COLLECTION;drafts=[];list.replaceChildren();form.reset();search.value='';from.value='';to.value='';sendTime.value='10:00';sendDate.value=tomorrowTenSeoul(new Date()).slice(0,10);collectionInput.value='';collectionStatus.textContent='';saveStatus.textContent='';status.textContent='로그인 후 저장한 후보를 불러옵니다.';drawCollections();onChange();}};
 }
 
