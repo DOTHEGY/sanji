@@ -276,3 +276,24 @@ test('native Partyum actions only expose the owner verified email and keep resea
  assert.ok(nodes.find(n=>n.textContent==='표시된 인원 지금 발송 확정').disabled);
  stop();
 });
+
+test('owner explicitly refreshes subscriber proof once and then reloads status without any mail action',async()=>{
+ const {get,state,tick,mount}=await harness({embedded:true}),channel='UC'+'a'.repeat(22);
+ const day='2026-11-21',actions=[],reads=[];
+ state.rows.push({owner:'a',channel_id:channel,channel_name:'Synthetic',video_id:'ZXCVbnm1234',project_day:day,added_at:'2026-11-21T15:00:00Z',evidence_note:'Research only'});
+ let finish;
+ state.actor='a';
+ const stop=mount('a',new AbortController().signal,{
+   refreshSubscribers(options){actions.push(options);return new Promise(r=>{finish=r;});},
+   readStatus(scope){reads.push(scope.day);return {projectId:'private-wedding-research',day:scope.day,items:[]};},
+   mailRequest(){throw Error('unexpected mail action');},
+ });
+ const button=get('wedding-subscriber-refresh'),message=get('wedding-subscriber-result');
+ await tick();assert.equal(button.hidden,false);assert.equal(actions.length,0);assert.equal(reads.length,1);
+ const refreshing=button.handlers.click();await button.handlers.click();
+ assert.equal(actions.length,1);assert.equal(actions[0].owner,'a');assert.equal(actions[0].stillActive(),true);assert.equal(button.disabled,true);
+ finish({projectId:'private-wedding-research',subscriberMinimum:50000,total:1,eligible:1,belowMinimum:0,unknown:0,materialized:1});
+ await refreshing;await tick();assert.equal(reads.length,2);assert.match(message.textContent,/5만 이상 1명/);assert.equal(button.disabled,false);
+ const stale=button.handlers.click();stop();finish({raw:'private details'});await stale;
+ assert.equal(message.textContent,'');assert.equal(reads.length,2);
+});

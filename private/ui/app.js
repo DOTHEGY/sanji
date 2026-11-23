@@ -1398,6 +1398,7 @@ function syncYoutubeEmailHost(key){
    void renderProjectCopies(owner,current,[[WEDDING_COPY_PURPOSE,host]]);
   }:undefined;
   const readStatus=key==='youtube-private'&&typeof workspaceWeddingDayStatus==='function'?workspaceWeddingDayStatus:undefined;
+  const refreshSubscribers=key==='youtube-private'&&typeof workspaceWeddingSubscriberRefresh==='function'?workspaceWeddingSubscriberRefresh:undefined;
   const mailRequest=key==='youtube-private'&&typeof workspaceWeddingMail==='function'?workspaceWeddingMail:undefined;
   const readMailCopy=mailRequest?async (actor,stillActive)=>{
    const result=await workspacePrimaryProjectCopy(actor,stillActive);
@@ -1407,7 +1408,7 @@ function syncYoutubeEmailHost(key){
   }:undefined;
   let mailStorage;
   if(mailRequest){try{mailStorage=node.ownerDocument.defaultView?.localStorage;}catch{}}
-  const stop=mount(node,{owner,signal,client:typeof manualClient==='undefined'?undefined:manualClient,mountCopy,readStatus,mailRequest,readMailCopy,mailStorage});
+  const stop=mount(node,{owner,signal,client:typeof manualClient==='undefined'?undefined:manualClient,mountCopy,readStatus,refreshSubscribers,mailRequest,readMailCopy,mailStorage});
   if(typeof stop==='function')entry.cleanup=stop;
   else if(stop?.then)void stop.then(cleanup=>{
    if(typeof cleanup!=='function')return;

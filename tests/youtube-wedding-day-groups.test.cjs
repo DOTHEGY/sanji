@@ -48,3 +48,13 @@ test('only scoped official subscriber proof at or above cutoff is eligible; arch
  assert.equal(g.history.find(x=>x.row===list[1]).status.state,'sent');
  assert.equal(g.counts.sent,1);
 });
+
+test('subscriber refresh only trusts coherent authoritative evidence aggregates',async()=>{
+ const {decodeWeddingSubscriberRefresh,subscriberRefreshError}=await import('../web/youtube-wedding-status-client.mjs');
+ const receipt={projectId,subscriberMinimum:50000,total:2,eligible:1,belowMinimum:0,unknown:1,materialized:2};
+ assert.deepEqual(decodeWeddingSubscriberRefresh(receipt),{total:2,eligible:1,belowMinimum:0,unknown:1,materialized:2});
+ for(const bad of [{projectId:'chewy'},{subscriberMinimum:1000},{materialized:1},{unknown:0},{eligible:'1'}])
+   assert.equal(decodeWeddingSubscriberRefresh({...receipt,...bad}),null);
+ assert.match(subscriberRefreshError('YOUTUBE_NOT_CONFIGURED'),/기존 확인 기록/);
+ assert.doesNotMatch(subscriberRefreshError('raw secret string'),/raw secret/);
+});

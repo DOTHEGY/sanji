@@ -208,6 +208,28 @@ export async function workspaceWeddingDayStatus({owner,day,channelIds,signal}) {
   if(!response.ok||signal?.aborted)throw Error('Status read failed');
   return response.json();
 }
+// Explicit Partyum owner operation. No channel IDs, owner data, mail, or keys
+// beyond the existing public app key and verified member session go to the Edge.
+export async function workspaceWeddingSubscriberRefresh({owner,stillActive}) {
+  if(typeof owner!=='string'||!owner||typeof stillActive!=='function'||!stillActive())throw Error('Inactive Partyum session');
+  const approved=await member();
+  const latest=await client.auth.getSession(), current=latest?.data?.session;
+  if(latest?.error||approved.user?.id!==owner||current?.user?.id!==owner||!approved.access_token||
+    current.access_token!==approved.access_token||!stillActive())throw Error('Inactive Partyum session');
+  const response=await fetch(supabaseUrl+'/functions/v1/youtube-wedding-day-status',{
+    method:'POST',cache:'no-store',signal:AbortSignal.timeout(20000),
+    headers:{apikey:supabaseKey,Authorization:'Bearer '+approved.access_token,'Content-Type':'application/json'},
+    body:JSON.stringify({action:'subscriber_backfill_refresh',projectId:'private-wedding-research'}),
+  });
+  if(!stillActive())throw Error('Inactive Partyum session');
+  const body=await response.json().catch(()=>null);
+  if(!response.ok){
+    const known={SCOPE:403,SUBSCRIBER_SCOPE:503,YOUTUBE_NOT_CONFIGURED:503,YOUTUBE_SUBSCRIBERS_UNVERIFIED:503};
+    const code=typeof body?.error==='string'&&Object.hasOwn(known,body.error)&&known[body.error]===response.status?body.error:null;
+    const e=Error('Subscriber refresh not verified');e.partyumSubscriberCode=code;throw e;
+  }
+  return body;
+}
 // Partyum campaign action only. The server determines the actor from the
 // authenticated session; neither contact data nor an owner goes in the body.
 export async function workspaceWeddingMail({owner,body,stillActive}) {
