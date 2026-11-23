@@ -3,6 +3,8 @@ import { verifiedContactsForDay, readVerifiedProjectContacts } from './youtube-v
 import { weddingDayGroups } from './youtube-wedding-day-groups.mjs';
 import {decodeWeddingStatus,MAX_WEDDING_STATUS_IDS} from './youtube-wedding-status-client.mjs';
 
+import {createWeddingMailUi} from './youtube-wedding-mail-ui.mjs';
+
 const markup = `<div data-wedding-project>
 <style>
 [data-wedding-project] { min-width:0; }
@@ -30,6 +32,11 @@ const markup = `<div data-wedding-project>
 [data-wedding-project] .creator-mail-scheduled{color:#234fa5}
 [data-wedding-project] .creator-mail-found_only{color:#4c5768}
 [data-wedding-project] :is(.creator-mail-unknown,.creator-mail-failed){color:#8a400d}
+[data-wedding-project] .wedding-mail-actions{display:flex;flex-wrap:wrap;gap:.45rem;align-items:center;margin:.65rem 0}
+[data-wedding-project] .wedding-mail-actions :is(p,section){width:100%;margin:.25rem 0}
+[data-wedding-project] .wedding-mail-copy{font-size:.9rem;padding:.65rem;border:1px solid #dbe4da;border-radius:.35rem;max-height:18rem;overflow:auto}
+[data-wedding-project] .wedding-mail-copy p{white-space:pre-wrap}
+[data-wedding-project] input.wedding-mail-exclude{width:auto;margin:0 .4rem 0 0;vertical-align:middle}
 [data-wedding-project] [hidden] { display:none!important; }
 </style>
 <header><h2 id="wedding-heading">별도 YouTube 프로젝트</h2></header>
@@ -59,7 +66,7 @@ const markup = `<div data-wedding-project>
 </section>
 </div>`;
 
-function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus}){
+function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus,mailRequest,readMailCopy,mailStorage}){
  root.innerHTML=markup;
  const document=root.ownerDocument;
  const $ = id => root.querySelector('#'+id);
@@ -67,12 +74,14 @@ function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus}
    status=$('wedding-status'), filter=$('wedding-day'), list=$('wedding-list'), refresh=$('wedding-refresh'),
    contactStatus=$('wedding-contact-status'), contactList=$('wedding-contact-list');
  const generic='별도 YouTube 프로젝트', projectTable='sanji_private_wedding_projects', shortlistTable='sanji_private_wedding_shortlist';
+ const mailByDay=new Map();
  let statusReader=null,copyDetails=null,owner=null, epoch=0, rows=[], contacts=null,statusByDay=new Map(), disposed=false, saving=false, uncertain=false, refreshing=false;
  const element=(tag,text)=>{const node=document.createElement(tag);node.textContent=text;return node;};
  const link=(label,address)=>{const node=element('a',label);node.href=address;node.target='_blank';node.rel='noopener noreferrer';return node;};
  const current=(actor,ticket)=>!disposed&&ticket===epoch&&owner===actor;
  function clear(){
    statusReader?.abort();statusReader=null;
+   for(const ctl of mailByDay.values())ctl.revoke();mailByDay.clear();
    owner=null;rows=[];contacts=null;statusByDay=new Map();copyDetails?.remove();copyDetails=null;panel.hidden=true;heading.textContent=generic;saving=false;uncertain=false;refreshing=false;
    status.textContent='';contactStatus.textContent='';contactList.replaceChildren();form.reset();filter.replaceChildren(new Option('전체',''));list.replaceChildren();
  }
@@ -87,7 +96,7 @@ function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus}
      ? '주소 확인 목록을 불러오지 못했습니다. 조사 원본은 아래에서 볼 수 있습니다.'
      : `공개 비즈니스 주소 확인 ${verified.length}개 · 조사 기록 ${visible.length}개`;
    const groups=weddingDayGroups({owner,rows:visible,verified,statusByDay,day:filter.value});
-   function buildTable(rows,label){
+   function buildTable(rows,label,exclusions=null){
      const wrap=element('div','');wrap.className='creator-table-wrap';
      const table=element('table','');table.className='creator-table';table.setAttribute('aria-label',label);
      const head=element('thead',''), header=element('tr',''),body=element('tbody','');
@@ -100,6 +109,10 @@ function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus}
        const details=element('details','');details.className='creator-detail';
        details.append(element('summary','상세 근거'),element('p',row.note),link('영상 근거',row.evidenceUrl));
        if(contact)details.append(link('주소 확인 출처',contact.sourceUrl),element('small','주소 확인일 '+researchDay(contact.verifiedAt)));
+       if(contact&&exclusions){
+         const box=element('input','');box.type='checkbox';box.className='wedding-mail-exclude';box.setAttribute('aria-label',row.name+' 발송에서 제외');
+         exclusions.push([box,row.channelID]);candidate.append(box);
+       }
        candidate.append(link(row.name,row.channelUrl),details);
        const badge=element('span',status.label);badge.className='creator-mail-state creator-mail-'+status.state;state.append(badge);
        if(status.detail)state.append(element('small',status.detail));
@@ -111,7 +124,22 @@ function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus}
      const section=element('section','');section.className='creator-project-day';
      const {counts}=group;
      section.append(element('h4',group.day+' · 발굴일 (KST)'),element('p',`확인된 기록: 찾기만 함 ${counts.found_only}명 · 발송 예약 ${counts.scheduled}명 · 발송 완료 ${counts.sent}명 · 발송 실패 ${counts.failed}명 · 확인 필요 ${counts.unknown}명`));
-     if(group.active.length)section.append(buildTable(group.active,'공개 주소가 확인된 YouTube 후보'));
+     const hasMail=typeof mailRequest==='function'&&typeof readMailCopy==='function';
+     const exclusions=hasMail?[]:null;
+     if(group.active.length)section.append(buildTable(group.active,'공개 주소가 확인된 YouTube 후보',exclusions));
+     if(hasMail){
+       const actor=owner, scope=group.day;
+       if(!mailByDay.has(scope)){
+         const sessionActive=()=>!disposed&&owner===actor&&!root.hidden&&root.isConnected;
+         mailByDay.set(scope,createWeddingMailUi({owner:actor,day:scope,storage:mailStorage,sessionActive,
+           request:({body,stillActive})=>mailRequest({owner:actor,body,stillActive}),
+           readCopy:stillActive=>readMailCopy(actor,stillActive),
+           refreshStatus:()=>refreshMailStatuses(actor,epoch),
+         }));
+       }
+       const host=element('div','');host.className='wedding-mail-actions';
+       section.append(host);mailByDay.get(scope).bind({host,exclusions,eligibleCount:group.active.length,document});
+     }
      if(group.history.length){
        const history=element('details','');history.className='creator-history';
        history.append(element('summary',`이메일 미확인·조사 기록 (${group.history.length}명)`),buildTable(group.history,'기존 YouTube 조사 기록'));
@@ -181,6 +209,7 @@ function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus}
  }
  async function verify(session){
    statusReader?.abort();statusReader=null;statusByDay=new Map();
+   for(const ctl of mailByDay.values())ctl.refreshed();
    const ticket=++epoch, requested=session?.user?.id;
    if(disposed)return;
    if(!requested||(expectedOwner&&requested!==expectedOwner)){clear();auth.textContent='로그인 후 이용하세요.';return;}
@@ -206,7 +235,7 @@ function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus}
      catch { /* An unavailable evidence query must not look like zero verified contacts. */ }
      if(!current(requested,ticket))return;
      rows=next;contacts=nextContacts;uncertain=false;saving=false;heading.textContent=project.data.title;
-     auth.textContent='비즈니스 주소 확인 · 발송 기능 없음';panel.hidden=false;draw();refreshMailStatuses(requested,ticket);
+     auth.textContent=mailRequest&&readMailCopy?'공개 업무 이메일 확인 · 날짜별 발송·예약':'비즈니스 주소 확인 · 발송 기능 없음';panel.hidden=false;draw();refreshMailStatuses(requested,ticket);
      if(mountCopy){
        const details=element('details','');
        details.id='wedding-copy-panel';
@@ -299,10 +328,10 @@ function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus}
 
 // The host supplies its verified owner and existing Supabase Auth client. The view
 // re-verifies that owner and still applies the existing server-side RLS checks.
-export function mountYouTubeWedding(root,{owner,signal,client,mountCopy,readStatus}={}){
+export function mountYouTubeWedding(root,{owner,signal,client,mountCopy,readStatus,mailRequest,readMailCopy,mailStorage}={}){
  if(signal?.aborted)return ()=>{};
  if(!root||!owner||!client)return ()=>{};
- const view=createWeddingView(root,{client,expectedOwner:owner,mountCopy,readStatus});
+ const view=createWeddingView(root,{client,expectedOwner:owner,mountCopy,readStatus,mailRequest,readMailCopy,mailStorage});
  const auth=client.auth.onAuthStateChange(view.authChanged);
  let stopped=false;
  const cleanup=()=>{
