@@ -20,3 +20,16 @@ test('existing PostgreSQL lower-companyKey index deduplicates concurrent saves w
  assert.equal((await db.query('SELECT count(*)::int AS count FROM sanji_records')).rows[0].count,2);
  }finally{await db.close();}
 });
+
+test('Chewy daily totals and review use scoped evidence and never infer eligibility from subscriber count',async()=>{
+ const {chewyStatusCounts,chewyFoundForReview}=await load();
+ const rows=[{id:'new-low',followers:31000},{id:'reserved'},{id:'sent'},{id:'failed'},{id:'missing'},{id:'invalid'}];
+ const proofs=new Map([
+  ['new-low',{status:'found_only'}],['reserved',{status:'scheduled',at:'2026-11-25T01:00:00Z'}],
+  ['sent',{status:'sent',at:'2026-11-25T01:00:00Z'}],['failed',{status:'failed'}],['invalid',{status:'scheduled'}],
+  ['different-day',{status:'found_only'}],
+ ]);
+ assert.deepEqual(chewyStatusCounts(rows,proofs),{found_only:1,scheduled:1,sent:1,failed:1,unknown:2});
+ assert.deepEqual(chewyFoundForReview(rows,proofs),[rows[0]]);
+ assert.deepEqual(chewyFoundForReview(rows,undefined),[]);
+});
