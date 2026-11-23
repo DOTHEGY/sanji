@@ -126,7 +126,7 @@ export async function createPartyumProductionRuntime({
  }});
  const db=createPartyumPostgres({pool,initTx,resolveSender:gmail.resolveSender,readHoldingLegacyEvidence:readPartyumHoldingLegacyEvidence,
   reviewedCopyDigest:async(q,owner,digest)=>(await q.query(`select content_digest from sanji_partyum_internal.copy_attestations
-   where owner=$1 and content_digest=$2 for share`,[owner,digest])).rows[0]?.content_digest??null,
+   where owner=$1 and content_digest=$2`,[owner,digest])).rows[0]?.content_digest??null,
  });
  const runDue=createPartyumDueExecutor({...db,now,deliver:gmail.deliver,parallelism:POLICY.parallelism});
  const consume=makePartyumPulseConsumer({pool,initTx});

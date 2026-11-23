@@ -341,6 +341,12 @@ function createPartyumPostgres({
     copy.factualityReviewedDigest = await reviewedCopyDigest(q, scope.actor, digest);
     return copy;
   }
+  async function verifiedContacts(q, { actor, day }, ids) {
+    if (!ids.length) return [];
+    return (await q.query(`select channel_id,email,source_kind,source_url,verified_at,expires_at,revoked_at,
+    affiliation_status,affiliation_source_url,affiliation_checked_at
+    from ${tables}read_partyum_verified_contacts($1,$2,$3::date,$4::text[])`, [PROJECT, actor, day, ids])).rows;
+  }
   async function readLocked(q, scope, t) {
     if (!allowed(scope)) throw fail("SCOPE");
     await members(q, scope.actor);
@@ -349,9 +355,7 @@ function createPartyumPostgres({
     if (people.length > 100) throw fail("SOURCE_UNVERIFIED");
     const ids = people.map((x) => x.channel_id);
     if (!ids.every((x) => channel.test(x))) throw fail("SOURCE_UNVERIFIED");
-    const { rows: records } = await q.query(`select channel_id,email,source_kind,source_url,verified_at,expires_at,revoked_at,
-       affiliation_status,affiliation_source_url,affiliation_checked_at
-       from public.sanji_private_wedding_contacts where owner=$1 and channel_id=any($2::text[]) for share`, [scope.actor, ids]);
+    const records = await verifiedContacts(q, scope, ids);
     const contacts = new Map(records.map((x) => [x.channel_id, x]));
     const addresses = records.map((x) => partyumRecipientKey(x.email)).filter(Boolean);
     const { rows: prior } = await q.query(`select channel_id,recipient_key,state from ${tables}attempts
@@ -442,9 +446,7 @@ function createPartyumPostgres({
     const x = { actor: r.owner, projectId: PROJECT, day: r.day };
     const { rows: member } = await q.query("select 1 from public.sanji_private_wedding_shortlist where owner=$1 and channel_id=$2 and project_day=$3::date for share", [r.owner, r.channel_id, r.day]);
     if (member.length !== 1) return null;
-    const { rows } = await q.query(`select channel_id,email,source_kind,source_url,verified_at,expires_at,revoked_at,affiliation_status,
-       affiliation_source_url,affiliation_checked_at from public.sanji_private_wedding_contacts
-       where owner=$1 and channel_id=$2 for share`, [r.owner, r.channel_id]);
+    const rows = await verifiedContacts(q, x, [r.channel_id]);
     const c = rows[0];
     if (!trustedContact(c, t) || contactRevision(c) !== r.contact_revision || norm(c.email) !== r.recipient) return null;
     const suppress = identitiesFor(r.channel_id, r.recipient);
@@ -1153,7 +1155,7 @@ async function createPartyumProductionRuntime({
     resolveSender: gmail.resolveSender,
     readHoldingLegacyEvidence: readPartyumHoldingLegacyEvidence,
     reviewedCopyDigest: async (q, owner, digest) => (await q.query(`select content_digest from sanji_partyum_internal.copy_attestations
-   where owner=$1 and content_digest=$2 for share`, [owner, digest])).rows[0]?.content_digest ?? null
+   where owner=$1 and content_digest=$2`, [owner, digest])).rows[0]?.content_digest ?? null
   });
   const runDue = createPartyumDueExecutor({ ...db, now, deliver: gmail.deliver, parallelism: PARTYUM_WORK_POLICY.parallelism });
   const consume = makePartyumPulseConsumer({ pool: pool2, initTx });
