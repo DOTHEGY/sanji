@@ -44,7 +44,7 @@ const markup = `<div data-wedding-project>
 </section>
 </div>`;
 
-function createWeddingView(root,{client,expectedOwner=null}){
+function createWeddingView(root,{client,expectedOwner=null,mountCopy}){
  root.innerHTML=markup;
  const document=root.ownerDocument;
  const $ = id => root.querySelector('#'+id);
@@ -52,12 +52,12 @@ function createWeddingView(root,{client,expectedOwner=null}){
    status=$('wedding-status'), filter=$('wedding-day'), list=$('wedding-list'), refresh=$('wedding-refresh'),
    contactStatus=$('wedding-contact-status'), contactList=$('wedding-contact-list');
  const generic='별도 YouTube 프로젝트', projectTable='sanji_private_wedding_projects', shortlistTable='sanji_private_wedding_shortlist';
- let owner=null, epoch=0, rows=[], contacts=null, disposed=false, saving=false, uncertain=false, refreshing=false;
+ let copyDetails=null,owner=null, epoch=0, rows=[], contacts=null, disposed=false, saving=false, uncertain=false, refreshing=false;
  const element=(tag,text)=>{const node=document.createElement(tag);node.textContent=text;return node;};
  const link=(label,address)=>{const node=element('a',label);node.href=address;node.target='_blank';node.rel='noopener noreferrer';return node;};
  const current=(actor,ticket)=>!disposed&&ticket===epoch&&owner===actor;
  function clear(){
-   owner=null;rows=[];contacts=null;panel.hidden=true;heading.textContent=generic;saving=false;uncertain=false;refreshing=false;
+   owner=null;rows=[];contacts=null;copyDetails?.remove();copyDetails=null;panel.hidden=true;heading.textContent=generic;saving=false;uncertain=false;refreshing=false;
    status.textContent='';contactStatus.textContent='';contactList.replaceChildren();form.reset();filter.replaceChildren(new Option('전체',''));list.replaceChildren();
  }
  function draw(){
@@ -135,6 +135,16 @@ function createWeddingView(root,{client,expectedOwner=null}){
      if(!current(requested,ticket))return;
      rows=next;contacts=nextContacts;uncertain=false;saving=false;heading.textContent=project.data.title;
      auth.textContent='비즈니스 주소 확인 · 발송 기능 없음';panel.hidden=false;draw();
+     if(mountCopy){
+       const details=element('details','');
+       details.id='wedding-copy-panel';
+       const host=element('div','기본 카피를 불러오는 중…');
+       host.setAttribute('role','status');
+       details.append(element('summary','기본 이메일 카피'),host);
+       copyDetails?.remove();copyDetails=details;
+       panel.prepend(details);
+       mountCopy(host);
+     }
    }catch{if(!disposed&&ticket===epoch){clear();auth.textContent='워크스페이스 권한 또는 목록을 확인하지 못했습니다. 화면을 다시 열어 주세요.';}}
  }
  // Do not make Supabase calls inside the SDK's auth-event callback.
@@ -217,10 +227,10 @@ function createWeddingView(root,{client,expectedOwner=null}){
 
 // The host supplies its verified owner and existing Supabase Auth client. The view
 // re-verifies that owner and still applies the existing server-side RLS checks.
-export function mountYouTubeWedding(root,{owner,signal,client}={}){
+export function mountYouTubeWedding(root,{owner,signal,client,mountCopy}={}){
  if(signal?.aborted)return ()=>{};
  if(!root||!owner||!client)return ()=>{};
- const view=createWeddingView(root,{client,expectedOwner:owner});
+ const view=createWeddingView(root,{client,expectedOwner:owner,mountCopy});
  const auth=client.auth.onAuthStateChange(view.authChanged);
  let stopped=false;
  const cleanup=()=>{

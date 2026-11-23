@@ -655,9 +655,10 @@ function showMatches() {
 }
 let templateLibraryRows=[];
 const PROJECT_COPY_PURPOSE = "youtube_project_copy_primary";
+const WEDDING_COPY_PURPOSE = "youtube_project_copy_wedding";
 async function templatesPage(){
  $('#app').innerHTML=head('템플릿','저장한 카피를 수정하거나 보관할 수 있습니다. 자동 발송 설정과 기존 예약은 별도로 유지됩니다.',button('＋ 템플릿 추가','library-add','',true))+'<div class="panel">불러오는 중…</div>';
- try{const r=await api('/template-library');templateLibraryRows=(r.rows||[]).filter(row=>row.data?.purpose!==PROJECT_COPY_PURPOSE);const card=t=>`<article class="panel">${tag(t.data.channel)}<h3>${esc(t.data.name)}</h3><p class="sub">${esc(t.data.subject)}</p><div class="message">${esc(t.data.body)}</div>${t.archived?button('복구','library-restore',t.id):button('수정','library-edit',t.id)+' '+button('사용','library-use',t.id)+' '+button('보관','library-archive',t.id)}</article>`;const active=templateLibraryRows.filter(t=>!t.archived),archived=templateLibraryRows.filter(t=>t.archived);$('#app').innerHTML=head('템플릿','라이브러리 수정·보관은 기존 자동 발송과 예약을 바꾸지 않습니다.',button('＋ 템플릿 추가','library-add','',true))+`<div class="panel"><h2>자동 발송 본문</h2><p class="fine">저장용 템플릿과 별개로 관리합니다. 기존 예약 내용은 수정하지 않습니다.</p>${button('발송 문단 확인·변경','outbound-profile')}</div><div class="cards">${active.map(card).join('')||'<div class="panel empty">저장된 템플릿이 없습니다.</div>'}</div><details class="panel"><summary>보관된 템플릿 ${archived.length}개</summary><div class="cards">${archived.map(card).join('')||'<p class="fine">보관된 템플릿이 없습니다.</p>'}</div></details>`;}catch(e){const legacy=(data.templates||[]);$('#app').innerHTML=head('템플릿','새 라이브러리를 불러오지 못했습니다. 기존 템플릿은 읽기 전용으로 사용할 수 있습니다.')+'<p class="notice">'+esc(e.message||'템플릿을 불러오지 못했습니다.')+'</p><div class="cards">'+legacy.map(t=>'<article class="panel"><h3>'+esc(t.name)+'</h3><div class="message">'+esc(t.body)+'</div>'+button('사용','use-template',t.id)+'</article>').join('')+'</div>';}
+ try{const r=await api('/template-library');templateLibraryRows=(r.rows||[]).filter(row=>![PROJECT_COPY_PURPOSE,WEDDING_COPY_PURPOSE].includes(row.data?.purpose));const card=t=>`<article class="panel">${tag(t.data.channel)}<h3>${esc(t.data.name)}</h3><p class="sub">${esc(t.data.subject)}</p><div class="message">${esc(t.data.body)}</div>${t.archived?button('복구','library-restore',t.id):button('수정','library-edit',t.id)+' '+button('사용','library-use',t.id)+' '+button('보관','library-archive',t.id)}</article>`;const active=templateLibraryRows.filter(t=>!t.archived),archived=templateLibraryRows.filter(t=>t.archived);$('#app').innerHTML=head('템플릿','라이브러리 수정·보관은 기존 자동 발송과 예약을 바꾸지 않습니다.',button('＋ 템플릿 추가','library-add','',true))+`<div class="panel"><h2>자동 발송 본문</h2><p class="fine">저장용 템플릿과 별개로 관리합니다. 기존 예약 내용은 수정하지 않습니다.</p>${button('발송 문단 확인·변경','outbound-profile')}</div><div class="cards">${active.map(card).join('')||'<div class="panel empty">저장된 템플릿이 없습니다.</div>'}</div><details class="panel"><summary>보관된 템플릿 ${archived.length}개</summary><div class="cards">${archived.map(card).join('')||'<p class="fine">보관된 템플릿이 없습니다.</p>'}</div></details>`;}catch(e){const legacy=(data.templates||[]);$('#app').innerHTML=head('템플릿','새 라이브러리를 불러오지 못했습니다. 기존 템플릿은 읽기 전용으로 사용할 수 있습니다.')+'<p class="notice">'+esc(e.message||'템플릿을 불러오지 못했습니다.')+'</p><div class="cards">'+legacy.map(t=>'<article class="panel"><h3>'+esc(t.name)+'</h3><div class="message">'+esc(t.body)+'</div>'+button('사용','use-template',t.id)+'</article>').join('')+'</div>';}
 }
 function libraryTemplateForm(id=''){const row=templateLibraryRows.find(t=>t.id===id),t=row?.data||{channel:'이메일',purpose:'brand_proposal'};modal(`<h2>${id?'템플릿 수정':'템플릿 추가'}</h2><form id="library-template-form" data-id="${esc(id)}" data-version="${Number(row?.version||0)}">${field('name','템플릿 이름',t.name)}${field('channel','채널',t.channel,'text',['이메일','Instagram DM'])}${field('purpose','용도',t.purpose,'text',['brand_proposal','brand_reply','creator_proposal'])}${field('subject','제목',t.subject)}${field('body','본문',t.body,'textarea')}${field('signature','서명',t.signature,'textarea')}<p class="fine">저장·보관해도 자동 발송과 이미 예약된 메일은 변경되지 않습니다.</p><button class="primary" type="submit">저장</button></form>`);}
 function templateForm(id = "") {
@@ -1391,7 +1392,12 @@ function syncYoutubeEmailHost(key){
  };
  if(!mount){unavailable();return;}
  try{
-  const stop=mount(node,{owner,signal:entry.controller.signal,client:typeof manualClient==='undefined'?undefined:manualClient});
+  const signal=entry.controller.signal;
+  const mountCopy=key==='youtube-private'?host=>{
+   const current=()=>!signal.aborted&&me?.id===owner&&node.contains(host)&&host.isConnected;
+   void renderProjectCopies(owner,current,[[WEDDING_COPY_PURPOSE,host]]);
+  }:undefined;
+  const stop=mount(node,{owner,signal,client:typeof manualClient==='undefined'?undefined:manualClient,mountCopy});
   if(typeof stop==='function')entry.cleanup=stop;
   else if(stop?.then)void stop.then(cleanup=>{
    if(typeof cleanup!=='function')return;
@@ -1730,34 +1736,50 @@ let projectCopyView = null;
 function clearProjectCopyView(message) {
   const view=projectCopyView;
   projectCopyView=null;
-  if(view?.host.isConnected)view.host.textContent=message;
+  for(const host of view?.hosts||[])if(host.isConnected)host.textContent=message;
+}
+async function renderProjectCopies(owner,current,slots) {
+  let rows;
+  try{
+    if(!current())return;
+    if(typeof workspacePrimaryProjectCopy!=="function")throw Error("copy_unavailable");
+    const result=await workspacePrimaryProjectCopy(owner,current);
+    if(!current())return;
+    if(!Array.isArray(result?.rows))throw Error("copy_response");
+    rows=result.rows;
+  }catch{
+    if(current())for(const [,host] of slots)host.textContent="기본 카피를 확인하지 못했습니다. 이 화면을 다시 열어 주세요.";
+    return;
+  }
+  for(const [purpose,host] of slots){
+    if(!current())return;
+    try {
+      const matching=rows.filter(row=>row?.archived===false&&row?.data?.purpose===purpose);
+      if(matching.length===0){host.textContent="아직 기본 카피가 설정되지 않았습니다.";continue;}
+      if(matching.length!==1)throw Error("copy_ambiguous");
+      const {channel,subject,body}=matching[0].data;
+      if(channel!=="이메일"||typeof subject!=="string"||!subject.trim()||subject.length>200||/[\r\n]/.test(subject)||typeof body!=="string"||!body.trim()||body.length>15000||(purpose===PROJECT_COPY_PURPOSE&&![subject,body].some(value=>value.includes("[채널명]"))))throw Error("copy_invalid");
+      const doc=host.ownerDocument;
+      const title=doc.createElement("h3"),subjectNode=doc.createElement("p"),bodyTitle=doc.createElement("h3"),bodyNode=doc.createElement("div");
+      title.textContent="제목";subjectNode.className="message";subjectNode.textContent=subject;
+      bodyTitle.textContent="본문";bodyNode.className="message";bodyNode.textContent=body;
+      host.removeAttribute("role");
+      host.replaceChildren(title,subjectNode,bodyTitle,bodyNode);
+    }catch{if(current())host.textContent="기본 카피를 확인하지 못했습니다. 이 화면을 다시 열어 주세요.";}
+  }
 }
 async function projectCopyPage() {
   const owner=me?.id;
   if(!owner)return;
   $("#app").innerHTML=head("카피","프로젝트를 펼쳐 기본 이메일 문안을 확인합니다.")+
     '<details class="panel"><summary>쫀득빵</summary><div id="youtube-primary-copy" role="status">기본 카피를 불러오는 중…</div></details>'+
-    '<details class="panel"><summary id="private-youtube-copy-label">별도 YouTube 프로젝트</summary><p>아직 카피가 설정되지 않았습니다.</p></details>';
+    '<details class="panel"><summary id="private-youtube-copy-label">별도 YouTube 프로젝트</summary><div id="youtube-wedding-copy" role="status">기본 카피를 불러오는 중…</div></details>';
   if(privateYoutubeLabelState?.owner===owner&&privateYoutubeLabelState?.label)paintPrivateYoutubeLabel(privateYoutubeLabelState.label);
-  const host=$("#youtube-primary-copy"),view={owner,host,account:me};
+  const slots=[[PROJECT_COPY_PURPOSE,$("#youtube-primary-copy")],[WEDDING_COPY_PURPOSE,$("#youtube-wedding-copy")]];
+  const hosts=slots.map(([,host])=>host),view={owner,hosts,account:me};
   projectCopyView=view;
-  const current=()=>projectCopyView===view&&view.account===me&&location.hash==="#copy"&&host.isConnected;
-  try{
-    if(typeof workspacePrimaryProjectCopy!=="function")throw Error("copy_unavailable");
-    const result=await workspacePrimaryProjectCopy(owner,current);
-    if(!current())return;
-    if(!Array.isArray(result?.rows))throw Error("copy_response");
-    const rows=result.rows.filter(row=>row?.archived===false&&row?.data?.purpose===PROJECT_COPY_PURPOSE);
-    if(rows.length===0){host.textContent="아직 기본 카피가 설정되지 않았습니다.";return;}
-    if(rows.length!==1)throw Error("copy_ambiguous");
-    const {channel,subject,body}=rows[0].data;
-    if(channel!=="이메일"||typeof subject!=="string"||!subject.trim()||subject.length>200||/[\r\n]/.test(subject)||typeof body!=="string"||!body.trim()||body.length>15000||![subject,body].some(value=>value.includes("[채널명]")))throw Error("copy_invalid");
-    const title=document.createElement("h3"),subjectNode=document.createElement("p"),bodyTitle=document.createElement("h3"),bodyNode=document.createElement("div");
-    title.textContent="제목";subjectNode.className="message";subjectNode.textContent=subject;
-    bodyTitle.textContent="본문";bodyNode.className="message";bodyNode.textContent=body;
-    host.removeAttribute("role");
-    host.replaceChildren(title,subjectNode,bodyTitle,bodyNode);
-  }catch{if(current())host.textContent="기본 카피를 확인하지 못했습니다. 이 화면을 다시 열어 주세요.";}
+  const current=()=>projectCopyView===view&&view.account===me&&location.hash==="#copy"&&hosts.every(host=>host?.isConnected);
+  await renderProjectCopies(owner,current,slots);
 }
 const pages = {
   copy: projectCopyPage,
