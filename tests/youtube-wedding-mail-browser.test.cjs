@@ -1,6 +1,9 @@
 const fs=require('node:fs'),assert=require('node:assert/strict'),{test}=require('node:test');
 const {chromium}=require('@playwright/test');
-const fixture=fs.readFileSync('web/youtube-wedding-mail-ui.mjs','utf8').replace(/^export /gm,'');
+const fixture=[
+ fs.readFileSync('web/youtube-wedding-mail-errors.mjs','utf8'),
+ fs.readFileSync('web/youtube-wedding-mail-ui.mjs','utf8'),
+].join('\n').replace(/^import .*?;$/gm,'').replace(/^export /gm,'');
 const run='2026-11-24T01:00:00.000Z', expiry='2026-11-23T12:00:00.000Z';
 async function mount(page){
   await page.route('https://fixture.invalid/**',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><section id="one"></section><section id="two"></section>'}));
@@ -18,7 +21,7 @@ async function mount(page){
        request:async({body})=>{
          window.requests.push(body);
          return {projectId:'private-wedding-research',day,mode:body.mode,recipientCount:1,runAt:run,
-          ...(body.action==='plan'?{expiresAt:expiry,copyVersion:1,planId:'syntheticPlanFixture.'+'Z'.repeat(43)}:{batchId:'syntheticBatchFixture',state:'scheduled'})};
+          ...(body.action==='plan'?{expiresAt:expiry,subscriberMinimum:50000,copyVersion:1,planId:'syntheticPlanFixture.'+'Z'.repeat(43)}:{batchId:'syntheticBatchFixture',state:'scheduled'})};
        }
       }).bind({host,exclusions:[[box,'UC'+ch.repeat(22)]],eligibleCount:1,document});
     }

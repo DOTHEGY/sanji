@@ -1,3 +1,7 @@
+import {weddingMailPlanErrorMessage} from "./youtube-wedding-mail-errors.mjs";
+
+import {WEDDING_SUBSCRIBER_MINIMUM} from './youtube-wedding-status-client.mjs';
+
 const projectId = 'private-wedding-research';
 const channelRE = /^UC[A-Za-z0-9_-]{22}$/;
 const tokenRE = /^[A-Za-z0-9_-]{12,240}$/;
@@ -28,7 +32,7 @@ function copySummary(copy){
  return {subject:copy.subject,body:copy.body,version:copy.version};
 }
 export function validateWeddingMailPlan(value,requested,now=Date.now()){
- if(!sameScope(value,requested)||!Number.isSafeInteger(value.recipientCount)||value.recipientCount<0||value.recipientCount>100||
+ if(!sameScope(value,requested)||value.subscriberMinimum!==WEDDING_SUBSCRIBER_MINIMUM||!Number.isSafeInteger(value.recipientCount)||value.recipientCount<0||value.recipientCount>100||
     typeof value.planId!=='string'||!planRE.test(value.planId)||!instant(value.runAt)||!instant(value.expiresAt)||!Number.isSafeInteger(value.copyVersion)||value.copyVersion<1)throw Error('invalid plan');
  const expiry=Date.parse(value.expiresAt), run=Date.parse(value.runAt);
  if(expiry<=now||expiry>now+3600000)throw Error('invalid plan expiry');
@@ -43,7 +47,7 @@ export function validateWeddingMailSubmit(value,requested,plan){
 }
 export function createWeddingMailUi({owner,day,storage,request,readCopy,sessionActive,refreshStatus,now=Date.now,id=()=>crypto.randomUUID()}){
  const key='sanji:partyum:submit:v1:'+owner+':'+day;
- const model={excluded:new Set(),pending:null,view:null,plan:null,prepareVersion:0,locked:false,message:'',options:null};
+ const model={excluded:new Set(),pending:null,view:null,plan:null,prepareVersion:0,locked:false,message:'',options:null,eligibleKey:null,eligibleCount:0};
  if(storage){try{model.locked=storage.getItem(key)!==null;}catch{storage=null;}}
  if(model.locked)model.message='이 날짜의 기존 요청을 먼저 확인해야 합니다. 발송·예약 상태를 확인하고 관리자에게 문의해 주세요.';
  function sync(){
@@ -52,7 +56,7 @@ export function createWeddingMailUi({owner,day,storage,request,readCopy,sessionA
   v.notice.textContent=model.message;
   const hasPlan=!!model.plan;
   v.confirm.hidden=!hasPlan;
-  v.confirm.disabled=model.locked||!!model.pending||!hasPlan||model.plan?.recipientCount===0;
+  v.confirm.disabled=model.locked||!!model.pending||!hasPlan||model.plan?.recipientCount===0||!model.eligibleCount;
   v.confirm.textContent=model.options?.mode==='tomorrow'?'표시된 인원 예약 확정':'표시된 인원 지금 발송 확정';
   v.controls.forEach(b=>{b.disabled=model.locked||!!model.pending||!storage;});
   v.exclusions.forEach(([box,channel])=>{box.checked=model.excluded.has(channel);box.disabled=!!model.pending||model.locked||!storage;});
@@ -71,11 +75,15 @@ export function createWeddingMailUi({owner,day,storage,request,readCopy,sessionA
   let options;
   try{options=weddingMailPlanInput(day,mode,model.excluded);}catch{model.message='선택 범위를 확인할 수 없습니다. 제외한 후보 수를 확인해 주세요.';sync();return;}
   model.pending='plan';model.message='대상과 카피 확인 중…';sync();
+  let stage='request';
   try{
    const raw=await request({body:options,stillActive:()=>sessionActive()&&model.prepareVersion===revision});
    if(!sessionActive()||revision!==model.prepareVersion)return;
+   stage='response';
    const plan=validateWeddingMailPlan(raw,options,now());
+   if(plan.recipientCount>model.eligibleCount)throw Error('eligible count mismatch');
    if(plan.recipientCount===0){model.message='발송할 수 있는 대상이 없습니다.';return;}
+   stage='copy';
    const visible=copySummary(await readCopy?.(()=>sessionActive()&&model.prepareVersion===revision));
    if(!sessionActive()||revision!==model.prepareVersion)return;
    if(!visible||plan.copyVersion!==visible.version)throw Error('copy mismatch');
@@ -83,7 +91,7 @@ export function createWeddingMailUi({owner,day,storage,request,readCopy,sessionA
    model.plan=plan;model.options=options;model.visibleCopy=visible;
    model.planText=day+' 발굴 · 대상 '+plan.recipientCount+'명 · '+(mode==='now'?'지금 발송':'예약')+' · '+kstTime.format(new Date(plan.runAt))+' (한국시간)';
    model.message='아래 내용과 대상 수를 확인한 뒤 확정하세요.';
-  }catch{if(sessionActive()&&revision===model.prepareVersion)model.message='대상, 날짜 또는 적용 카피를 확인하지 못했습니다. 아직 요청하지 않았습니다.';}
+  }catch(e){if(sessionActive()&&revision===model.prepareVersion)model.message=weddingMailPlanErrorMessage(stage==='request'?e?.partyumPlanCode:null,stage);}
   finally{model.pending=null;sync();}
  }
  async function submit(){
@@ -116,6 +124,12 @@ export function createWeddingMailUi({owner,day,storage,request,readCopy,sessionA
  }
  return {
   bind({host,exclusions,eligibleCount,document}){
+   const eligibleKey=exclusions.map(([,channel])=>channel).sort().join(',');
+   if(model.eligibleKey!==null&&model.eligibleKey!==eligibleKey&&model.pending!=='submit'){
+    invalidate();
+    if(!model.locked)model.message='구독자 확인 대상이 바뀌었습니다. 대상 수를 다시 확인해 주세요.';
+   }
+   model.eligibleKey=eligibleKey;model.eligibleCount=eligibleCount;
    const make=(tag,text)=>{const n=document.createElement(tag);n.textContent=text;return n;};
    const makeButton=(text,fn)=>{const b=make('button',text);b.type='button';b.addEventListener('click',fn);return b;};
    const legend=make('p','이 날짜만 적용됩니다. 체크한 사람은 제외됩니다.');

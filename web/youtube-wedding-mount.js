@@ -61,7 +61,7 @@ const markup = `<div data-wedding-project>
 </form>
 <p id="wedding-status" role="status"></p>
 <h3>날짜별 조사 기록</h3>
-<ul id="wedding-list"></ul>
+
 </details>
 </section>
 </div>`;
@@ -71,7 +71,7 @@ function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus,
  const document=root.ownerDocument;
  const $ = id => root.querySelector('#'+id);
  const heading=$('wedding-heading'), panel=$('wedding-panel'), auth=$('wedding-auth'), form=$('wedding-form'),
-   status=$('wedding-status'), filter=$('wedding-day'), list=$('wedding-list'), refresh=$('wedding-refresh'),
+   status=$('wedding-status'), filter=$('wedding-day'), refresh=$('wedding-refresh'),
    contactStatus=$('wedding-contact-status'), contactList=$('wedding-contact-list');
  const generic='별도 YouTube 프로젝트', projectTable='sanji_private_wedding_projects', shortlistTable='sanji_private_wedding_shortlist';
  const mailByDay=new Map();
@@ -83,7 +83,7 @@ function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus,
    statusReader?.abort();statusReader=null;
    for(const ctl of mailByDay.values())ctl.revoke();mailByDay.clear();
    owner=null;rows=[];contacts=null;statusByDay=new Map();copyDetails?.remove();copyDetails=null;panel.hidden=true;heading.textContent=generic;saving=false;uncertain=false;refreshing=false;
-   status.textContent='';contactStatus.textContent='';contactList.replaceChildren();form.reset();filter.replaceChildren(new Option('전체',''));list.replaceChildren();
+   status.textContent='';contactStatus.textContent='';contactList.replaceChildren();form.reset();filter.replaceChildren(new Option('전체',''));
  }
  function draw(){
    const day=filter.value, all=weddingRows(rows,owner);
@@ -92,19 +92,20 @@ function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus,
    filter.value=days.includes(day)?day:'';
    const visible=weddingRows(rows,owner,filter.value);
    const verified=contacts===null?null:verifiedContactsForDay(contacts,filter.value);
-   contactStatus.textContent=verified===null
-     ? '주소 확인 목록을 불러오지 못했습니다. 조사 원본은 아래에서 볼 수 있습니다.'
-     : `공개 비즈니스 주소 확인 ${verified.length}개 · 조사 기록 ${visible.length}개`;
    const groups=weddingDayGroups({owner,rows:visible,verified,statusByDay,day:filter.value});
+   const active=groups.reduce((n,g)=>n+g.active.length,0);
+   contactStatus.textContent=verified===null
+     ? '공개 이메일 확인 목록을 불러오지 못했습니다. 이전 조사와 발송 상태는 보존됩니다.'
+     : `공개 이메일 확인 및 구독자 5만 명 이상 ${active}명 · 전체 조사 기록 ${visible.length}명`;
    function buildTable(rows,label,exclusions=null){
      const wrap=element('div','');wrap.className='creator-table-wrap';
      const table=element('table','');table.className='creator-table';table.setAttribute('aria-label',label);
      const head=element('thead',''), header=element('tr',''),body=element('tbody','');
-     for(const name of ['채널명','이메일주소','발송 상태']){
+     for(const name of ['채널명','YouTube 구독자','이메일주소','발송 상태']){
        const th=element('th',name);th.setAttribute('scope','col');header.append(th);
      }
      head.append(header);table.append(head,body);wrap.append(table);
-     for(const {row,contact,status} of rows){
+     for(const {row,contact,status,subscriberCount} of rows){
        const tr=element('tr',''),candidate=element('td',''),address=element('td',contact?.email||'미확인'),state=element('td','');
        const details=element('details','');details.className='creator-detail';
        details.append(element('summary','상세 근거'),element('p',row.note),link('영상 근거',row.evidenceUrl));
@@ -116,14 +117,14 @@ function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus,
        candidate.append(link(row.name,row.channelUrl),details);
        const badge=element('span',status.label);badge.className='creator-mail-state creator-mail-'+status.state;state.append(badge);
        if(status.detail)state.append(element('small',status.detail));
-       tr.append(candidate,address,state);body.append(tr);
+       tr.append(candidate,element('td',subscriberCount===null?'미확인':new Intl.NumberFormat('ko-KR').format(subscriberCount)+'명'),address,state);body.append(tr);
      }
      return wrap;
    }
    contactList.replaceChildren(...groups.map(group=>{
      const section=element('section','');section.className='creator-project-day';
-     const {counts}=group;
-     section.append(element('h4',group.day+' · 발굴일 (KST)'),element('p',`확인된 기록: 찾기만 함 ${counts.found_only}명 · 발송 예약 ${counts.scheduled}명 · 발송 완료 ${counts.sent}명 · 발송 실패 ${counts.failed}명 · 확인 필요 ${counts.unknown}명`));
+     const {counts,cutoffCounts}=group;
+     section.append(element('h4',group.day+' · 발굴일 (KST)'),element('p',`기준 충족 ${group.active.length}명 · 구독자 5만 미만 ${cutoffCounts.below_minimum}명 · 구독자 미확인 ${cutoffCounts.unknown}명 · 5만 이상 중 이메일 미확인 ${cutoffCounts.eligible-group.active.length}명`),element('p',`전체 조사 기록 상태: 찾기만 함 ${counts.found_only}명 · 발송 예약 ${counts.scheduled}명 · 발송 완료 ${counts.sent}명 · 발송 실패 ${counts.failed}명 · 확인 필요 ${counts.unknown}명`));
      const hasMail=typeof mailRequest==='function'&&typeof readMailCopy==='function';
      const exclusions=hasMail?[]:null;
      if(group.active.length)section.append(buildTable(group.active,'공개 주소가 확인된 YouTube 후보',exclusions));
@@ -142,16 +143,12 @@ function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus,
      }
      if(group.history.length){
        const history=element('details','');history.className='creator-history';
-       history.append(element('summary',`이메일 미확인·조사 기록 (${group.history.length}명)`),buildTable(group.history,'기존 YouTube 조사 기록'));
+       history.append(element('summary',`활성 기준 미충족·이전 조사 기록 (${group.history.length}명)`),buildTable(group.history,'기존 YouTube 조사 기록'));
        section.append(history);
      }
      return section;
    }));
-   list.replaceChildren(...visible.map(row=>{
-     const item=element('li','');
-     item.append(element('strong',row.name),element('p',row.projectDay+' · '+row.note),link('채널 원문',row.channelUrl),document.createTextNode(' · '),link('영상 근거',row.evidenceUrl));
-     return item;
-   }));
+
  }
  function refreshMailStatuses(actor,ticket){
    statusReader?.abort();statusReader=null;statusByDay=new Map();

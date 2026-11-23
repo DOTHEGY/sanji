@@ -2,6 +2,7 @@ import { createInboxReviewSettingsApi } from "./inbox-review-settings.mjs";
 import { catalogSheetObservation } from "./catalog-sheet-record.mjs";
 import { functionUrlForPath } from "./edge-routing.mjs";
 import { loadStableStateRecords } from "./state-records.mjs";
+import {readWeddingMailPlanFailure} from "./youtube-wedding-mail-errors.mjs";
 import { probeEdge, classifyEdgeResponse } from "./edge-diagnostics.js";
 import { createClient } from "@supabase/supabase-js";
 import {
@@ -220,7 +221,16 @@ export async function workspaceWeddingMail({owner,body,stillActive}) {
     headers:{apikey:supabaseKey,Authorization:'Bearer '+approved.access_token,'Content-Type':'application/json'},
     body:JSON.stringify(body),
   });
-  if(!response.ok||!stillActive())throw Error('Unverified Partyum response');
+  if(!stillActive())throw Error('Inactive Partyum session');
+  if(!response.ok){
+    // Only the scoped planner uses allowlisted response diagnostics. Submit's
+    // unknown-outcome lock is unchanged.
+    const code=body?.action==='plan'?await readWeddingMailPlanFailure(response):null;
+    if(!stillActive())throw Error('Inactive Partyum session');
+    const err=Error('Unverified Partyum response');
+    if(code)err.partyumPlanCode=code;
+    throw err;
+  }
   return response.json();
 }
 export async function workspacePrimaryProjectCopy(expectedOwner, stillActive) {

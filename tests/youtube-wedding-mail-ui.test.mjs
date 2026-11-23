@@ -8,7 +8,7 @@ const planId='fixturePlanKey123.'+'Z'.repeat(43);
 const runAt=tomorrowTenKst(initial);
 const copy={subject:'예시 제목 <b>',body:'가상 카피 본문\n<img src=x onerror=noop>',version:7};
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
-const response=(mode,n=2)=>({projectId,day,mode,recipientCount:n,runAt:mode==='tomorrow'?runAt:new Date(initial).toISOString(),planId,expiresAt:new Date(initial+120000).toISOString(),copyVersion:7});
+const response=(mode,n=2)=>({projectId,day,mode,recipientCount:n,runAt:mode==='tomorrow'?runAt:new Date(initial).toISOString(),planId,expiresAt:new Date(initial+120000).toISOString(),subscriberMinimum:50000,copyVersion:7});
 class Element{
  constructor(tag){this.tag=tag;this.children=[];this.listeners={};this.attrs={};this.hidden=false;this.disabled=false;}
  setAttribute(k,v){this.attrs[k]=v;}
@@ -50,7 +50,7 @@ test('KST tomorrow 10 is 01:00 UTC and rolls on Seoul midnight, not host midnigh
 test('wrong project, date, signing token, send state or changed recipient count fails closed',()=>{
  const input=weddingMailPlanInput(day,'tomorrow',new Set());
  const rv=response('tomorrow'), plan=validateWeddingMailPlan(rv,input,initial);
- for(const mod of [{projectId:'chewy'},{day:'2026-11-22'},{planId:'not-a-signed-plan'},{copyVersion:null},{recipientCount:101},{runAt:'2026-11-24T02:00:00.000Z'}])assert.throws(()=>validateWeddingMailPlan({...rv,...mod},input,initial));
+ for(const mod of [{projectId:'chewy'},{day:'2026-11-22'},{planId:'not-a-signed-plan'},{subscriberMinimum:undefined},{subscriberMinimum:49999},{copyVersion:null},{recipientCount:101},{runAt:'2026-11-24T02:00:00.000Z'}])assert.throws(()=>validateWeddingMailPlan({...rv,...mod},input,initial));
  assert.throws(()=>validateWeddingMailSubmit({...rv,recipientCount:3,batchId:key,state:'scheduled'},input,plan));
  assert.throws(()=>validateWeddingMailSubmit({...rv,batchId:key,state:'sent'},input,plan));
 });
@@ -80,7 +80,7 @@ test('altering an exclusion invalidates preview, and mismatched copy version nev
  v.confirm.trigger('click');assert.equal(s.calls.length,1);
  const m=setup({readCopy:async()=>({...copy,version:8})}), x=m.bind();
  x.now.trigger('click');await settle();assert.equal(x.confirm.hidden,true);
- assert.match(x.status.textContent,/적용 카피를 확인하지 못했습니다/);
+ assert.match(x.status.textContent,/저장 카피의 최신 버전을 확인하지 못했습니다/);
 });
 
 test('uncertain network result does not render sent and blocks same-day resubmit across controller recreation',async()=>{
@@ -98,4 +98,18 @@ test('expired plan or inactive session cannot submit; zero count is inert',async
  s.time(initial+121000);v.confirm.trigger('click');assert.equal(s.calls.length,1);assert.match(v.status.textContent,/만료/);
  const p=setup(), v2=p.bind();v2.now.trigger('click');await settle();p.clearSession();v2.confirm.trigger('click');assert.equal(p.calls.length,1);
  const e=setup({request:async b=>response(b.mode,0)}), v3=e.bind();v3.now.trigger('click');await settle();assert.equal(v3.confirm.hidden,true);assert.match(v3.status.textContent,/대상이 없습니다/);
+});
+
+test('fail-closed typed preflight UX never loads copy or submits and does not show server details',async()=>{
+ let copyReads=0;
+ const s=setup({
+  request:async body=>{assert.equal(body.action,'plan');throw Object.assign(Error('retained smoke test secret detail'),{partyumPlanCode:'PARTYUM_DISABLED'});},
+  readCopy:async()=>{copyReads++;return copy;},
+ });
+ const v=s.bind();v.now.trigger('click');await settle();
+ assert.match(v.status.textContent,/더파티움 발송이 일시 중지/);
+ assert.match(v.status.textContent,/발송·예약 요청은 하지 않았습니다/);
+ assert.doesNotMatch(v.status.textContent,/secret|PARTYUM_DISABLED/);
+ assert.equal(v.confirm.hidden,true);assert.equal(copyReads,0);
+ v.confirm.trigger('click');assert.equal(s.calls.length,1);assert.equal(s.saved.size,0);
 });
