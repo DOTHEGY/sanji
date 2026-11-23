@@ -55,7 +55,7 @@ async function harness({embedded=false}={}){
  const root=Object.assign(new Node(),{isConnected:true});
  const document={getElementById:id=>id==='wedding-root'?root:get(id),createElement:()=>new Node(),createTextNode:t=>t,defaultView:{addEventListener:(n,c)=>events[n]=c}};
  Object.assign(root,{ownerDocument:document,querySelector:sel=>get(sel.slice(1)),replaceChildren(){this.innerHTML='';}});
- const context={mockClient,document,Option:Node,URL,setTimeout,FormData:class{constructor(form){return Object.entries(form.input??{});}}};
+ const context={mockClient,document,Option:Node,URL,setTimeout,AbortController,FormData:class{constructor(form){return Object.entries(form.input??{});}}};
  vm.runInNewContext(code,context);
  const auth=(actor)=>{state.actor=actor;change('CHANGED',actor?{user:{id:actor}}:null);};
  const tick=()=>new Promise(r=>setTimeout(r,10));
@@ -80,10 +80,10 @@ test('standalone route rejects outsiders, persists against owner shortlist, dedu
  await tick();assert.equal(get('wedding-panel').hidden,true);
  state.allowed=false;auth('outsider');await tick();assert.equal(get('wedding-panel').hidden,true);
  state.allowed=true;auth('a');await tick();assert.equal(get('wedding-panel').hidden,false);
- const f=get('wedding-form'),list=get('wedding-list');
+ const f=get('wedding-form'),list=get('wedding-contact-list');
  assert.equal(get('wedding-heading').textContent,'Private fixture title');
  f.input=fixture;await f.handlers.submit({preventDefault(){}});assert.equal(list.children.length,1);
- assert.equal(list.children[0].children[0].textContent,fixture.name);
+ assert.equal(list.children[0].children[3].children[1].children[0].children[1].children[0].children[0].children[0].textContent,fixture.name);
  f.input=fixture;await f.handlers.submit({preventDefault(){}});assert.match(get('wedding-status').textContent,/이미/);
  assert.equal(list.children.length,1);
  auth('b');assert.equal(list.children.length,0);await tick();assert.equal(list.children.length,0);
@@ -117,7 +117,7 @@ test('standalone route and native panel share the same private view without send
 test('uncertain save blocks replay until a verified refresh; cross-owner response fails closed',async()=>{
  const {get,state,auth,tick}=await harness();
  auth('a');await tick();
- const f=get('wedding-form'),list=get('wedding-list');
+ const f=get('wedding-form'),list=get('wedding-contact-list');
  state.failure=true;f.input=fixture;await f.handlers.submit({preventDefault(){}});
  assert.match(get('wedding-status').textContent,/확인하지 못했습니다/);
  await f.handlers.submit({preventDefault(){}});
@@ -156,8 +156,8 @@ test('two configured owners: SDK credentials switch during deferred request with
  state.actor='b'; // SDK has switched while the app has not received a change event.
  release();await submitting;
  assert.deepEqual(state.rows.map(r=>r.owner),['a']);
- assert.equal(get('wedding-list').children.length,1);
- auth('b');await tick();assert.equal(get('wedding-list').children.length,0);
+ assert.equal(get('wedding-contact-list').children.length,1);
+ auth('b');await tick();assert.equal(get('wedding-contact-list').children.length,0);
  assert.equal(get('wedding-panel').hidden,false);
 });
 test('installed Supabase SDK preserves explicit Authorization while its internal credential lookup switches',async()=>{
@@ -198,9 +198,9 @@ test('embedded view reuses explicit client and abort removes scoped content and 
  assert.equal(get('wedding-panel').hidden,false);
  get('wedding-form').input=fixture;
  await get('wedding-form').handlers.submit({preventDefault(){}});
- assert.equal(get('wedding-list').children.length,1);
+ assert.equal(get('wedding-contact-list').children.length,1);
  auth('b'); // The old host cannot load a second owner.
- assert.equal(get('wedding-list').children.length,0);
+ assert.equal(get('wedding-contact-list').children.length,0);
  assert.equal(get('wedding-panel').hidden,true);
  await tick();
  assert.equal(state.calls.filter(c=>c==='project').length,1);
@@ -226,17 +226,18 @@ test('owner verified list does not rename original evidence; source failure is u
  assert.equal(get('wedding-contact-list').children.length,1);
  const group=get('wedding-contact-list').children[0];
  assert.equal(group.children[0].textContent,'2026-11-21 · 발굴일 (KST)');
- const row=group.children[2].children[0].children[1].children[0];
- assert.equal(row.children[1].textContent,'partnerships@example.com');
+ const row=group.children[3].children[1].children[0].children[1].children[0];
+ assert.equal(row.children[1].textContent,'미확인');
+ assert.equal(row.children[2].textContent,'partnerships@example.com');
  assert.equal(row.children[0].children[1].children[3].href,'https://creator.example.com/contact');
- assert.equal(row.children[2].children[0].textContent,'확인 필요');
- assert.match(get('wedding-contact-status').textContent,/확인 1개 · 조사 기록 1개/);
- assert.equal(get('wedding-list').children.length,1);
+ assert.equal(row.children[3].children[0].textContent,'확인 필요');
+ assert.match(get('wedding-contact-status').textContent,/5만 명 이상 0명 · 전체 조사 기록 1명/);
+ assert.equal(get('wedding-contact-list').children.length,1);
  state.contactFailure=true;await get('wedding-refresh').handlers.click();
  assert.equal(get('wedding-contact-list').children.length,1);
- assert.match(get('wedding-contact-list').children[0].children[1].textContent,/확인 필요 1명/);
+ assert.match(get('wedding-contact-list').children[0].children[2].textContent,/확인 필요 1명/);
  assert.match(get('wedding-contact-status').textContent,/불러오지 못했습니다/);
- assert.equal(get('wedding-list').children.length,1);
+ assert.equal(get('wedding-contact-list').children.length,1);
 });
 
 test('late owner contact read is discarded after account changes',async()=>{
@@ -247,7 +248,7 @@ test('late owner contact read is discarded after account changes',async()=>{
  auth('a');await tick();assert.equal(state.contactReads.length,1);
  auth('b');await tick();finish();await tick();
  assert.equal(get('wedding-contact-list').children.length,0);
- assert.match(get('wedding-contact-status').textContent,/확인 0개 · 조사 기록 0개/);
+ assert.match(get('wedding-contact-status').textContent,/5만 명 이상 0명 · 전체 조사 기록 0명/);
  assert.equal(state.inserts,0);
 });
 
@@ -261,7 +262,7 @@ test('native Partyum actions only expose the owner verified email and keep resea
  const abort=new AbortController(),requests=[];
  const scan=(x)=>[x,...(x?.children??[]).filter(k=>typeof k==='object').flatMap(scan)];
  state.actor='a';
- const stop=mount('a',abort.signal,{readMailCopy:async()=>null,mailRequest:async body=>{requests.push(body);throw Error('Synthetic only');},mailStorage:{getItem:()=>null,setItem:()=>{throw Error('Must not submit');}}});
+ const stop=mount('a',abort.signal,{readStatus:async scope=>({projectId:'private-wedding-research',day:scope.day,items:[{channelId:keys[0],subscriberEligibility:'eligible',subscriberCount:50000},{channelId:keys[1],subscriberEligibility:'below_minimum',subscriberCount:49900}]}),readMailCopy:async()=>null,mailRequest:async body=>{requests.push(body);throw Error('Synthetic only');},mailStorage:{getItem:()=>null,setItem:()=>{throw Error('Must not submit');}}});
  await tick();
  const nodes=scan(get('wedding-contact-list'));
  assert.equal(nodes.filter(n=>n.textContent===email).length,1);
@@ -274,4 +275,25 @@ test('native Partyum actions only expose the owner verified email and keep resea
  assert.equal(requests[0].body.projectId,'private-wedding-research');
  assert.ok(nodes.find(n=>n.textContent==='표시된 인원 지금 발송 확정').disabled);
  stop();
+});
+
+test('owner explicitly refreshes subscriber proof once and then reloads status without any mail action',async()=>{
+ const {get,state,tick,mount}=await harness({embedded:true}),channel='UC'+'a'.repeat(22);
+ const day='2026-11-21',actions=[],reads=[];
+ state.rows.push({owner:'a',channel_id:channel,channel_name:'Synthetic',video_id:'ZXCVbnm1234',project_day:day,added_at:'2026-11-21T15:00:00Z',evidence_note:'Research only'});
+ let finish;
+ state.actor='a';
+ const stop=mount('a',new AbortController().signal,{
+   refreshSubscribers(options){actions.push(options);return new Promise(r=>{finish=r;});},
+   readStatus(scope){reads.push(scope.day);return {projectId:'private-wedding-research',day:scope.day,items:[]};},
+   mailRequest(){throw Error('unexpected mail action');},
+ });
+ const button=get('wedding-subscriber-refresh'),message=get('wedding-subscriber-result');
+ await tick();assert.equal(button.hidden,false);assert.equal(actions.length,0);assert.equal(reads.length,1);
+ const refreshing=button.handlers.click();await button.handlers.click();
+ assert.equal(actions.length,1);assert.equal(actions[0].owner,'a');assert.equal(actions[0].stillActive(),true);assert.equal(button.disabled,true);
+ finish({projectId:'private-wedding-research',subscriberMinimum:50000,total:1,eligible:1,belowMinimum:0,unknown:0,materialized:1});
+ await refreshing;await tick();assert.equal(reads.length,2);assert.match(message.textContent,/5만 이상 1명/);assert.equal(button.disabled,false);
+ const stale=button.handlers.click();stop();finish({raw:'private details'});await stale;
+ assert.equal(message.textContent,'');assert.equal(reads.length,2);
 });

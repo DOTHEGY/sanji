@@ -1,6 +1,10 @@
-const fs=require('node:fs'),assert=require('node:assert/strict'),{test}=require('node:test');
+const path=require('node:path'),assert=require('node:assert/strict'),{test}=require('node:test');
 const {chromium}=require('@playwright/test');
-const fixture=fs.readFileSync('web/youtube-wedding-mail-ui.mjs','utf8').replace(/^export /gm,'');
+const fixture=require('esbuild').buildSync({
+ stdin:{contents:"import { createWeddingMailUi } from './youtube-wedding-mail-ui.mjs'; window.createWeddingMailUi=createWeddingMailUi;",
+  resolveDir:path.resolve('web'),sourcefile:'synthetic-partyum-browser.js'},
+ bundle:true,write:false,platform:'browser',target:'es2022',
+}).outputFiles[0].text;
 const run='2026-11-24T01:00:00.000Z', expiry='2026-11-23T12:00:00.000Z';
 async function mount(page){
   await page.route('https://fixture.invalid/**',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><section id="one"></section><section id="two"></section>'}));
@@ -11,6 +15,7 @@ async function mount(page){
     for(const [root,day,ch] of [['one','2026-11-23','A'],['two','2026-11-22','B']]){
       const host=document.getElementById(root),box=document.createElement('input');
       box.type='checkbox';box.setAttribute('aria-label','가상 후보 제외');host.append(box);
+      const included=document.createElement('input');included.type='checkbox';included.hidden=true;host.append(included);
       createWeddingMailUi({owner:'example-owner',day,storage:localStorage,sessionActive:()=>true,
        now:()=>Date.parse('2026-11-23T11:58:00Z'),id:()=> 'be6ac50e-740f-447d-b837-676c3add849f',
        readCopy:async()=>({subject:'웨딩 예시 제목',body:'가상 본문 <img src=x>',version:1}),
@@ -18,9 +23,9 @@ async function mount(page){
        request:async({body})=>{
          window.requests.push(body);
          return {projectId:'private-wedding-research',day,mode:body.mode,recipientCount:1,runAt:run,
-          ...(body.action==='plan'?{expiresAt:expiry,copyVersion:1,planId:'syntheticPlanFixture.'+'Z'.repeat(43)}:{batchId:'syntheticBatchFixture',state:'scheduled'})};
+          ...(body.action==='plan'?{expiresAt:expiry,subscriberMinimum:50000,copyVersion:1,planId:'syntheticPlanFixture.'+'Z'.repeat(43)}:{batchId:'syntheticBatchFixture',state:'scheduled'})};
        }
-      }).bind({host,exclusions:[[box,'UC'+ch.repeat(22)]],eligibleCount:1,document});
+      }).bind({host,exclusions:[[box,'UC'+ch.repeat(22)],[included,'UC'+'Z'.repeat(22)]],eligibleCount:2,document});
     }
   },{run,expiry});
 }
