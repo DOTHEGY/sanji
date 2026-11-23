@@ -46,13 +46,13 @@ test('private menu text uses only the current owner title and renders it as text
 test('project-specific copy requires login and offers only two collapsed project panels',async()=>{
  const app={innerHTML:''},host={isConnected:true};
  const a=source.indexOf('let projectCopyView ='),b=source.indexOf('const pages =',a);
- const c={me:null,location:{hash:'#copy'},privateYoutubeLabelState:null,$:selector=>selector==='#app'?app:host,head:(title,sub)=>title+sub};
+ const c={me:null,location:{hash:'#copy'},PROJECT_COPY_PURPOSE:'youtube_project_copy_primary',WEDDING_COPY_PURPOSE:'youtube_project_copy_wedding',privateYoutubeLabelState:null,$:selector=>selector==='#app'?app:host,head:(title,sub)=>title+sub};
  vm.createContext(c);vm.runInContext(source.slice(a,b)+';this.showCopy=projectCopyPage;',c);
  let reads=0;c.workspacePrimaryProjectCopy=async()=>{reads++;return {rows:[]}};
  await c.showCopy();assert.equal(app.innerHTML,'');assert.equal(reads,0);
  c.me={id:'owner-fixture'};await c.showCopy();assert.equal(reads,1);
  assert.equal([...app.innerHTML.matchAll(/<details class="panel"><summary(?: id="private-youtube-copy-label")?>([^<]+)<\/summary>/g)].map(m=>m[1]).join(','),'쫀득빵,별도 YouTube 프로젝트');
- assert.match(app.innerHTML,/아직 카피가 설정되지 않았습니다/);
+ assert.match(app.innerHTML,/id="youtube-wedding-copy"/);
  assert.match(host.textContent,/아직 기본 카피가 설정되지 않았습니다/);
  assert.doesNotMatch(app.innerHTML,/<details[^>]*\bopen\b|<a\b|<button|<form|<textarea|data-action|mailto:/);
 });
@@ -157,7 +157,7 @@ test('basic project copy displays only the selected owner library slot as exact 
   await page.goto('https://sanji.example.test/workspace/#copy');
   const copy=source.slice(source.indexOf('let projectCopyView ='),source.indexOf('\nconst pages = {'));
   await page.evaluate(code=>{
-   Object.assign(window,{$:s=>document.querySelector(s),me:{id:'owner-fixture'},privateYoutubeLabelState:null,PROJECT_COPY_PURPOSE:'youtube_project_copy_primary',head:()=>'<h1>카피</h1>'});
+   Object.assign(window,{$:s=>document.querySelector(s),me:{id:'owner-fixture'},privateYoutubeLabelState:null,PROJECT_COPY_PURPOSE:'youtube_project_copy_primary',WEDDING_COPY_PURPOSE:'youtube_project_copy_wedding',head:()=>'<h1>카피</h1>'});
    window.eval(code+';window.openCopy=projectCopyPage;window.hideCopy=clearProjectCopyView;');
   },copy);
   const display=page.locator('#youtube-primary-copy');
@@ -181,7 +181,7 @@ test('basic project copy displays only the selected owner library slot as exact 
   await panels.nth(0).locator('summary').click();
   assert.equal(await display.isHidden(),true);
   await panels.nth(1).locator('summary').click();
-  assert.match(await panels.nth(1).locator('p').innerText(),/아직 카피가 설정되지/);
+  assert.match(await page.locator('#youtube-wedding-copy').innerText(),/아직 기본 카피가 설정되지/);
   assert.equal(await page.locator('#app a').count(),0);
   assert.equal(await display.locator('img, a, form, button').count(),0);
   assert.equal(await page.locator('#app button, #app form').count(),0);
@@ -200,8 +200,8 @@ test('basic project copy displays only the selected owner library slot as exact 
 
 test('project copy uses verbatim text instead of HTML and fails closed on stale or ambiguous reads',async()=>{
  const script=source.slice(source.indexOf('let projectCopyView ='),source.indexOf('\nconst pages = {'));
- const app={},host={isConnected:true,removeAttribute(){},replaceChildren(...nodes){this.nodes=nodes}};
- const c={me:{id:'a'},location:{hash:'#copy'},PROJECT_COPY_PURPOSE:'youtube_project_copy_primary',privateYoutubeLabelState:null,head:()=>'',document:{createElement:tag=>({tag})},$:selector=>selector==='#app'?app:host};
+ const app={},host={isConnected:true,ownerDocument:{createElement:tag=>({tag})},removeAttribute(){},replaceChildren(...nodes){this.nodes=nodes}},wedding={...host};
+ const c={me:{id:'a'},location:{hash:'#copy'},PROJECT_COPY_PURPOSE:'youtube_project_copy_primary',WEDDING_COPY_PURPOSE:'youtube_project_copy_wedding',privateYoutubeLabelState:null,head:()=>'',$:selector=>selector==='#app'?app:selector==='#youtube-primary-copy'?host:wedding};
  vm.createContext(c);vm.runInContext(script+';this.openCopy=projectCopyPage;',c);
  const row={archived:false,data:{purpose:'youtube_project_copy_primary',channel:'이메일',subject:'[채널명] 테스트',body:'  본문\r\n\r\n<img src=x> [채널명]  '}};
  c.workspacePrimaryProjectCopy=async(owner,active)=>{assert.equal(owner,'a');assert.equal(active(),true);return {rows:[row]}};
@@ -247,7 +247,7 @@ test('built workspace routes both real project panels and the private copy witho
    else if(path==='/rest/v1/rpc/sanji_is_member')response=true;
    else if(path==='/rest/v1/rpc/sanji_connection_status')response={gmail:null,instagram:null};
    else if(path==='/rest/v1/sanji_private_wedding_projects')response=[{owner,title:'샘플 지역 테스트홀 웨딩'}];
-   else if(path.endsWith('/template-library'))response={rows:[{archived:false,data:{purpose:'youtube_project_copy_primary',channel:'이메일',subject,body}}]};
+   else if(path.endsWith('/template-library'))response={rows:[{archived:false,data:{purpose:'youtube_project_copy_primary',channel:'이메일',subject,body}},{archived:false,data:{purpose:'youtube_project_copy_wedding',channel:'이메일',subject:'가상 웨딩 카피 제목',body:'가상 웨딩 원문 <img src=x>'}}]};
    else if(path.endsWith('/recent'))response={rows:[],more:false};
    else if(path.endsWith('/schedule-status'))response={jobs:[]};
    else if(path.endsWith('/connections'))response={gmail:{connected:false,enabled:false,reauthRequired:false},instagram:{connected:false,enabled:false}};
@@ -263,11 +263,20 @@ test('built workspace routes both real project panels and the private copy witho
   const wedding=host.locator('[data-youtube-project="youtube-private"]');
   await wedding.locator('#wedding-panel').waitFor({timeout:12000});
   assert.equal(await wedding.locator('#wedding-heading').textContent(),'샘플 지역 테스트홀 웨딩');
+  await wedding.locator('#wedding-copy-panel summary').click();
+  const weddingInline=wedding.locator('#wedding-copy-panel .message');
+  await weddingInline.first().waitFor({timeout:12000});
+  assert.deepEqual(await weddingInline.allTextContents(),['가상 웨딩 카피 제목','가상 웨딩 원문 <img src=x>']);
+  assert.equal(await wedding.locator('#wedding-copy-panel img').count(),0);
   assert.equal(await primary.isHidden(),true);
   await nav.nth(2).click();await page.locator('#app summary').first().click();
   const saved=page.locator('#youtube-primary-copy .message');
   await saved.first().waitFor({timeout:12000});
   assert.deepEqual(await saved.allTextContents(),[subject,body]);
+  await page.locator('#private-youtube-copy-label').click();
+  const weddingCopy=page.locator('#youtube-wedding-copy .message');
+  await weddingCopy.first().waitFor({timeout:12000});
+  assert.deepEqual(await weddingCopy.allTextContents(),['가상 웨딩 카피 제목','가상 웨딩 원문 <img src=x>']);
   assert.equal(await page.locator('#app a').count(),0);
   assert.equal(await host.isHidden(),true);
   await nav.nth(0).click();await primary.locator('#workspace').waitFor({timeout:12000});
