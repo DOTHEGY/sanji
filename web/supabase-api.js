@@ -232,9 +232,11 @@ export async function workspaceWeddingSubscriberRefresh({owner,stillActive}) {
   return body;
 }
 // Uses the existing member check and session custody; only opaque approved ID.
-export const workspaceWeddingResearch=createOwnerPartyumResearchClient({
-  member,getSession:()=>client.auth.getSession(),supabaseUrl,supabaseKey,
-});
+export function workspaceWeddingResearch(options) {
+  return createOwnerPartyumResearchClient({
+    member,getSession:()=>client.auth.getSession(),supabaseUrl,supabaseKey,
+  })(options);
+}
 // Partyum campaign action only. The server determines the actor from the
 // authenticated session; neither contact data nor an owner goes in the body.
 export async function workspaceWeddingMail({owner,body,stillActive}) {
