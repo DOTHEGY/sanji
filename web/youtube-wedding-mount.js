@@ -4,6 +4,7 @@ import { weddingDayGroups } from './youtube-wedding-day-groups.mjs';
 import {decodeWeddingStatus,MAX_WEDDING_STATUS_IDS,decodeWeddingSubscriberRefresh,subscriberRefreshError} from './youtube-wedding-status-client.mjs';
 
 import {createWeddingMailUi} from './youtube-wedding-mail-ui.mjs';
+import {createWeddingRecoveryUi} from './youtube-wedding-recovery-ui.mjs';
 
 const markup = `<div data-wedding-project>
 <style>
@@ -44,6 +45,7 @@ const markup = `<div data-wedding-project>
 <section id="wedding-panel" class="panel" hidden>
 <h3>날짜별 발굴·예약·발송 상태</h3>
 <p>발굴일은 한국시간 기준입니다. 예약과 발송은 이 프로젝트의 확인된 기록만 표시합니다.</p>
+<div id="wedding-optional-recovery" class="wedding-mail-actions" hidden></div>
 <label for="wedding-day">조사일 (한국시간)</label><select id="wedding-day"><option value="">전체</option></select>
 <p id="wedding-contact-status" role="status"></p>
 <div id="wedding-contact-list"></div>
@@ -77,11 +79,13 @@ function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus,
    subscriberRefresh=$('wedding-subscriber-refresh'),subscriberResult=$('wedding-subscriber-result'),contactStatus=$('wedding-contact-status'), contactList=$('wedding-contact-list');
  const generic='별도 YouTube 프로젝트', projectTable='sanji_private_wedding_projects', shortlistTable='sanji_private_wedding_shortlist';
  const mailByDay=new Map();
- let statusReader=null,copyDetails=null,owner=null, epoch=0, rows=[], contacts=null,statusByDay=new Map(), disposed=false, saving=false, uncertain=false, refreshing=false, subscriberBusy=false;
+ const recoveryHost=$('wedding-optional-recovery');
+ let recoveryUi=null,statusReader=null,copyDetails=null,owner=null, epoch=0, rows=[], contacts=null,statusByDay=new Map(), disposed=false, saving=false, uncertain=false, refreshing=false, subscriberBusy=false;
  const element=(tag,text)=>{const node=document.createElement(tag);node.textContent=text;return node;};
  const link=(label,address)=>{const node=element('a',label);node.href=address;node.target='_blank';node.rel='noopener noreferrer';return node;};
  const current=(actor,ticket)=>!disposed&&ticket===epoch&&owner===actor;
  function clear(){
+   recoveryUi?.revoke();recoveryUi=null;
    statusReader?.abort();statusReader=null;
    for(const ctl of mailByDay.values())ctl.revoke();mailByDay.clear();
    owner=null;rows=[];contacts=null;statusByDay=new Map();copyDetails?.remove();copyDetails=null;panel.hidden=true;heading.textContent=generic;saving=false;uncertain=false;refreshing=false;
@@ -208,6 +212,7 @@ function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus,
    throw Error('result limit');
  }
  async function verify(session){
+   recoveryUi?.revoke();recoveryUi=null;
    statusReader?.abort();statusReader=null;statusByDay=new Map();
    for(const ctl of mailByDay.values())ctl.refreshed();
    const ticket=++epoch, requested=session?.user?.id;
@@ -236,6 +241,14 @@ function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus,
      if(!current(requested,ticket))return;
      rows=next;contacts=nextContacts;uncertain=false;saving=false;heading.textContent=project.data.title;
      auth.textContent=mailRequest&&readMailCopy?'공개 업무 이메일 확인 · 날짜별 발송·예약':'비즈니스 주소 확인 · 발송 기능 없음';panel.hidden=false;subscriberRefresh.hidden=typeof refreshSubscribers!=='function';draw();refreshMailStatuses(requested,ticket);
+     if(recoveryHost&&typeof mailRequest==='function'){
+       const active=()=>current(requested,ticket)&&!panel.hidden&&root.isConnected&&root.contains(recoveryHost);
+       recoveryUi=createWeddingRecoveryUi({host:recoveryHost,document,active,
+         request:({body,stillActive})=>mailRequest({owner:requested,body,stillActive}),
+         afterQueued:()=>{if(active())refreshMailStatuses(requested,ticket);}
+       });
+       void recoveryUi.load();
+     }
      if(mountCopy){
        const details=element('details','');
        details.id='wedding-copy-panel';
