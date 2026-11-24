@@ -1,3 +1,4 @@
+import {createOwnerPartyumResearchClient} from './youtube-wedding-research-client.mjs';
 import { createInboxReviewSettingsApi } from "./inbox-review-settings.mjs";
 import { catalogSheetObservation } from "./catalog-sheet-record.mjs";
 import { functionUrlForPath } from "./edge-routing.mjs";
@@ -229,6 +230,12 @@ export async function workspaceWeddingSubscriberRefresh({owner,stillActive}) {
     const e=Error('Subscriber refresh not verified');e.partyumSubscriberCode=code;throw e;
   }
   return body;
+}
+// Uses the existing member check and session custody; only opaque approved ID.
+export function workspaceWeddingResearch(options) {
+  return createOwnerPartyumResearchClient({
+    member,getSession:()=>client.auth.getSession(),supabaseUrl,supabaseKey,
+  })(options);
 }
 // Partyum campaign action only. The server determines the actor from the
 // authenticated session; neither contact data nor an owner goes in the body.
