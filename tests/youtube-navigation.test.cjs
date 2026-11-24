@@ -227,7 +227,7 @@ test('built workspace routes both real project panels and the private copy witho
   const body='  [채널명] original\n\nfixture  ';
   const page=await browser.newPage({viewport:{width:390,height:880}});
   await page.addInitScript(({session})=>localStorage.setItem('sb-ofasbfpeapbdcotnptvz-auth-token',JSON.stringify(session)),{session});
-  const documentRequests=[],writes=[],partyumRead=[];
+  const documentRequests=[],writes=[],partyumRead=[],recoveryRead=[];
   const channels=['UC'+'A'.repeat(22),'UC'+'B'.repeat(22),'UC'+'C'.repeat(22)];
   const dates=['2026-11-21','2026-11-22','2026-11-22'];
   const shortlist=channels.map((channel_id,i)=>({owner,channel_id,video_id:'ZXCVbnm1234',channel_name:'Fixture Channel '+i,evidence_note:'Test evidence',project_day:dates[i],added_at:'2026-11-23T01:00:00Z'}));
@@ -242,6 +242,14 @@ test('built workspace routes both real project panels and the private copy witho
    const headers={'access-control-allow-origin':origin,'access-control-allow-methods':'GET,POST,OPTIONS','access-control-allow-headers':'*'};
    if(req.method()==='OPTIONS')return route.fulfill({status:204,headers});
    if(url.hostname!=='ofasbfpeapbdcotnptvz.supabase.co')return route.abort();
+   if(req.method()==='POST'&&path==='/functions/v1/youtube-wedding-mail'){
+    let data;
+    try{data=req.postDataJSON();}catch{}
+    if(data?.action==='recovery_availability'&&data.projectId==='private-wedding-research'&&Object.keys(data).length===2){
+     recoveryRead.push(data);
+     return route.fulfill({headers,json:{available:false}});
+    }
+   }
    const readPosts=['/rest/v1/rpc/sanji_is_member','/rest/v1/rpc/sanji_connection_status','/functions/v1/youtube-manual-mail/recent','/functions/v1/youtube-wedding-day-status'];
    if(req.method()!=='GET'&&!readPosts.includes(path)){writes.push(path);return route.fulfill({status:400,headers,json:{error:'unexpected write'}})}
    let response=[];
@@ -275,9 +283,13 @@ test('built workspace routes both real project panels and the private copy witho
   try{await primary.locator('#workspace').waitFor({timeout:12000});}
   catch(e){throw new Error(`Workspace boot fixture: ${(await page.locator('#toast,#connection-banner,#app').allTextContents()).join(' | ').slice(0,1000)}`,{cause:e});}
   await primary.getByText('최근 이메일 발송 상태',{exact:true}).waitFor({timeout:12000});
+  const recoveryResponse=page.waitForResponse(resp=>new URL(resp.url()).pathname==='/functions/v1/youtube-wedding-mail'&&
+   resp.request().method()==='POST',{timeout:12000});
   await nav.nth(1).click();
   const wedding=host.locator('[data-youtube-project="youtube-private"]');
   await wedding.locator('#wedding-panel').waitFor({timeout:12000});
+  assert.equal((await recoveryResponse).status(),200);
+  assert.equal(await wedding.locator('#wedding-optional-recovery').isHidden(),true);
   assert.equal(await wedding.locator('#wedding-heading').textContent(),'샘플 지역 테스트홀 웨딩');
   await wedding.locator('.creator-mail-scheduled').waitFor({timeout:12000});
   const sent=wedding.locator('.creator-mail-sent');
@@ -310,6 +322,7 @@ test('built workspace routes both real project panels and the private copy witho
   assert.equal(await wedding.isHidden(),true);
   assert.equal(await host.locator('iframe').count(),0);
   assert.deepEqual(documentRequests,['/workspace/']);
+  assert.deepEqual(recoveryRead,[{action:'recovery_availability',projectId:'private-wedding-research'}]);
   assert.deepEqual(writes,[]);
  }finally{await browser.close()}
 });
