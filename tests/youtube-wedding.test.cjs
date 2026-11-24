@@ -54,7 +54,9 @@ async function harness({embedded=false}={}){
  }};
  const root=Object.assign(new Node(),{isConnected:true});
  const document={getElementById:id=>id==='wedding-root'?root:get(id),createElement:()=>new Node(),createTextNode:t=>t,defaultView:{addEventListener:(n,c)=>events[n]=c}};
- Object.assign(root,{ownerDocument:document,querySelector:sel=>get(sel.slice(1)),replaceChildren(){this.innerHTML='';}});
+ Object.assign(root,{ownerDocument:document,querySelector:sel=>get(sel.slice(1)),
+  contains(node){return node===this||Object.entries(nodes).some(([id,value])=>value===node&&this.innerHTML?.includes('id="'+id+'"'));},
+  replaceChildren(){this.innerHTML='';}});
  const context={mockClient,document,Option:Node,URL,setTimeout,AbortController,FormData:class{constructor(form){return Object.entries(form.input??{});}}};
  vm.runInNewContext(code,context);
  const auth=(actor)=>{state.actor=actor;change('CHANGED',actor?{user:{id:actor}}:null);};
@@ -259,16 +261,20 @@ test('native Partyum actions only expose the owner verified email and keep resea
  const keys=['a','b','c'].map(x=>'UC'+x.repeat(22));
  for(const [i,key] of keys.entries())state.rows.push({owner:i===2?'other':'a',channel_id:key,channel_name:'Synthetic '+i,video_id:'ZXCVbnm1234',project_day:day,added_at:'2026-11-21T14:00:00Z',evidence_note:'Synthetic research only'});
  state.contacts.push(...[email,expired,foreign].map((address,i)=>({owner:i===2?'other':'a',channel_id:keys[i],email:address,source_url:'https://creator.example.com/contact',source_kind:'official_website',verified_at:new Date(Date.now()-3600000).toISOString(),expires_at:new Date(Date.now()+(i===1?-36000:86400000)).toISOString()})));
- const abort=new AbortController(),requests=[];
+ const abort=new AbortController(),requests=[],recoveryReads=[];
  const scan=(x)=>[x,...(x?.children??[]).filter(k=>typeof k==='object').flatMap(scan)];
  state.actor='a';
- const stop=mount('a',abort.signal,{readStatus:async scope=>({projectId:'private-wedding-research',day:scope.day,items:[{channelId:keys[0],subscriberEligibility:'eligible',subscriberCount:50000},{channelId:keys[1],subscriberEligibility:'below_minimum',subscriberCount:49900}]}),readMailCopy:async()=>null,mailRequest:async body=>{requests.push(body);throw Error('Synthetic only');},mailStorage:{getItem:()=>null,setItem:()=>{throw Error('Must not submit');}}});
+ const stop=mount('a',abort.signal,{readStatus:async scope=>({projectId:'private-wedding-research',day:scope.day,items:[{channelId:keys[0],subscriberEligibility:'eligible',subscriberCount:50000},{channelId:keys[1],subscriberEligibility:'below_minimum',subscriberCount:49900}]}),readMailCopy:async()=>null,mailRequest:async body=>{
+  if(body.body.action==='recovery_availability'){recoveryReads.push({...body.body});return {available:false};}
+  requests.push(body);throw Error('Synthetic only');
+ },mailStorage:{getItem:()=>null,setItem:()=>{throw Error('Must not submit');}}});
  await tick();
  const nodes=scan(get('wedding-contact-list'));
  assert.equal(nodes.filter(n=>n.textContent===email).length,1);
  assert.equal(nodes.filter(n=>[expired,foreign].includes(n.textContent)).length,0);
  assert.equal(nodes.filter(n=>n.type==='checkbox').length,1);
  assert.equal(nodes.filter(n=>n.className==='wedding-mail-actions').length,1);
+ assert.deepEqual(recoveryReads,[{action:'recovery_availability',projectId:'private-wedding-research'}]);
  assert.deepEqual(requests,[]);
  const action=nodes.find(n=>n.textContent==='지금 발송 대상 확인');assert.equal(action.disabled,false);action.handlers.click();await tick();
  assert.equal(requests.length,1);assert.equal(requests[0].body.action,'plan');assert.equal(requests[0].body.day,day);
@@ -279,21 +285,26 @@ test('native Partyum actions only expose the owner verified email and keep resea
 
 test('owner explicitly refreshes subscriber proof once and then reloads status without any mail action',async()=>{
  const {get,state,tick,mount}=await harness({embedded:true}),channel='UC'+'a'.repeat(22);
- const day='2026-11-21',actions=[],reads=[];
+ const day='2026-11-21',actions=[],reads=[],recoveryReads=[],unexpectedMail=[];
  state.rows.push({owner:'a',channel_id:channel,channel_name:'Synthetic',video_id:'ZXCVbnm1234',project_day:day,added_at:'2026-11-21T15:00:00Z',evidence_note:'Research only'});
  let finish;
  state.actor='a';
  const stop=mount('a',new AbortController().signal,{
    refreshSubscribers(options){actions.push(options);return new Promise(r=>{finish=r;});},
    readStatus(scope){reads.push(scope.day);return {projectId:'private-wedding-research',day:scope.day,items:[]};},
-   mailRequest(){throw Error('unexpected mail action');},
+   mailRequest({body}){
+    if(body.action==='recovery_availability'){recoveryReads.push({...body});return {available:false};}
+    unexpectedMail.push(body);throw Error('unexpected mail action');
+   },
  });
  const button=get('wedding-subscriber-refresh'),message=get('wedding-subscriber-result');
  await tick();assert.equal(button.hidden,false);assert.equal(actions.length,0);assert.equal(reads.length,1);
+ assert.deepEqual(recoveryReads,[{action:'recovery_availability',projectId:'private-wedding-research'}]);
  const refreshing=button.handlers.click();await button.handlers.click();
  assert.equal(actions.length,1);assert.equal(actions[0].owner,'a');assert.equal(actions[0].stillActive(),true);assert.equal(button.disabled,true);
  finish({projectId:'private-wedding-research',subscriberMinimum:50000,total:1,eligible:1,belowMinimum:0,unknown:0,materialized:1});
  await refreshing;await tick();assert.equal(reads.length,2);assert.match(message.textContent,/5만 이상 1명/);assert.equal(button.disabled,false);
  const stale=button.handlers.click();stop();finish({raw:'private details'});await stale;
  assert.equal(message.textContent,'');assert.equal(reads.length,2);
+ assert.deepEqual(unexpectedMail,[]);
 });
