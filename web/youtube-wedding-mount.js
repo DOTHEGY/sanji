@@ -1,3 +1,4 @@
+import {mountWeddingResearchControl} from './youtube-wedding-research-control.mjs';
 import { researchDay, weddingCandidate, weddingRows } from './youtube-wedding-model.mjs';
 import { verifiedContactsForDay, readVerifiedProjectContacts } from './youtube-verified-project-contacts.mjs';
 import { weddingDayGroups } from './youtube-wedding-day-groups.mjs';
@@ -52,6 +53,7 @@ const markup = `<div data-wedding-project>
 <button id="wedding-refresh" type="button">목록 새로고침</button>
 <button id="wedding-subscriber-refresh" type="button" hidden>구독자 수 확인</button>
 <p id="wedding-subscriber-result" role="status"></p>
+<div id="wedding-research-control" hidden></div>
 <details>
 <summary>조사 원본 및 연락처 미확인 기록</summary>
 <h3>직접 확인한 후보 기록</h3>
@@ -70,7 +72,7 @@ const markup = `<div data-wedding-project>
 </section>
 </div>`;
 
-function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus,refreshSubscribers,mailRequest,readMailCopy,mailStorage}){
+function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus,refreshSubscribers,researchRequest,mailRequest,readMailCopy,mailStorage}){
  root.innerHTML=markup;
  const document=root.ownerDocument;
  const $ = id => root.querySelector('#'+id);
@@ -84,8 +86,23 @@ function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus,
  const element=(tag,text)=>{const node=document.createElement(tag);node.textContent=text;return node;};
  const link=(label,address)=>{const node=element('a',label);node.href=address;node.target='_blank';node.rel='noopener noreferrer';return node;};
  const current=(actor,ticket)=>!disposed&&ticket===epoch&&owner===actor;
+ const researchHost=$('wedding-research-control');
+ const researchControl=mountWeddingResearchControl(researchHost,{
+   submit:researchRequest,
+   context:()=>{
+     const actor=owner,ticket=epoch;
+     if(!actor||panel.hidden||saving||refreshing||subscriberBusy)return null;
+     return {owner:actor,ticket,stillActive:()=>current(actor,ticket)&&!panel.hidden&&root.isConnected};
+   },
+   onSuccess:async ({owner:actor,ticket},result)=>{
+     if(result.enrolled>0){refresh.click();return;}
+     if(current(actor,ticket)){refreshMailStatuses(actor,ticket);draw();}
+   },
+ });
+
  function clear(){
    recoveryUi?.revoke();recoveryUi=null;
+   researchControl.revoke();researchHost.hidden=true;
    statusReader?.abort();statusReader=null;
    for(const ctl of mailByDay.values())ctl.revoke();mailByDay.clear();
    owner=null;rows=[];contacts=null;statusByDay=new Map();copyDetails?.remove();copyDetails=null;panel.hidden=true;heading.textContent=generic;saving=false;uncertain=false;refreshing=false;
@@ -240,7 +257,7 @@ function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus,
      catch { /* An unavailable evidence query must not look like zero verified contacts. */ }
      if(!current(requested,ticket))return;
      rows=next;contacts=nextContacts;uncertain=false;saving=false;heading.textContent=project.data.title;
-     auth.textContent=mailRequest&&readMailCopy?'공개 업무 이메일 확인 · 날짜별 발송·예약':'비즈니스 주소 확인 · 발송 기능 없음';panel.hidden=false;subscriberRefresh.hidden=typeof refreshSubscribers!=='function';draw();refreshMailStatuses(requested,ticket);
+     auth.textContent=mailRequest&&readMailCopy?'공개 업무 이메일 확인 · 날짜별 발송·예약':'비즈니스 주소 확인 · 발송 기능 없음';panel.hidden=false;subscriberRefresh.hidden=typeof refreshSubscribers!=='function';researchHost.hidden=typeof researchRequest!=='function';draw();refreshMailStatuses(requested,ticket);
      if(recoveryHost&&typeof mailRequest==='function'){
        const active=()=>current(requested,ticket)&&!panel.hidden&&root.isConnected&&root.contains(recoveryHost);
        recoveryUi=createWeddingRecoveryUi({host:recoveryHost,document,active,
@@ -324,7 +341,7 @@ function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus,
    }finally{if(current(actor,ticket))saving=false;}
  });
  refresh.addEventListener('click',async()=>{
-   if(!owner||disposed||saving||refreshing||subscriberBusy)return;
+   if(!owner||disposed||saving||refreshing||subscriberBusy||researchControl.busy())return;
    refreshing=true;
    const ticket=epoch;
    try{
@@ -335,7 +352,7 @@ function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus,
    }finally{refreshing=false;}
  });
  subscriberRefresh.addEventListener('click',async()=>{
-   if(!owner||disposed||panel.hidden||subscriberBusy||typeof refreshSubscribers!=='function')return;
+   if(!owner||disposed||panel.hidden||subscriberBusy||researchControl.busy()||typeof refreshSubscribers!=='function')return;
    const actor=owner,ticket=epoch;
    const stillActive=()=>current(actor,ticket)&&!panel.hidden&&root.isConnected;
    subscriberBusy=true;subscriberRefresh.disabled=true;
@@ -359,10 +376,10 @@ function createWeddingView(root,{client,expectedOwner=null,mountCopy,readStatus,
 
 // The host supplies its verified owner and existing Supabase Auth client. The view
 // re-verifies that owner and still applies the existing server-side RLS checks.
-export function mountYouTubeWedding(root,{owner,signal,client,mountCopy,readStatus,refreshSubscribers,mailRequest,readMailCopy,mailStorage}={}){
+export function mountYouTubeWedding(root,{owner,signal,client,mountCopy,readStatus,refreshSubscribers,researchRequest,mailRequest,readMailCopy,mailStorage}={}){
  if(signal?.aborted)return ()=>{};
  if(!root||!owner||!client)return ()=>{};
- const view=createWeddingView(root,{client,expectedOwner:owner,mountCopy,readStatus,refreshSubscribers,mailRequest,readMailCopy,mailStorage});
+ const view=createWeddingView(root,{client,expectedOwner:owner,mountCopy,readStatus,refreshSubscribers,researchRequest,mailRequest,readMailCopy,mailStorage});
  const auth=client.auth.onAuthStateChange(view.authChanged);
  let stopped=false;
  const cleanup=()=>{
