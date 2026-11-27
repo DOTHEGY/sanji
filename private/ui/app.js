@@ -56,6 +56,7 @@ let csrf = "",
 const routes = {
   "youtube-primary": ["▶", "쫀득빵"],
   "youtube-private": ["▶", "별도 YouTube 프로젝트"],
+  "youtube-jerong": ["▶", "제롱쿠키"],
   copy: ["▧", "카피"],
   dashboard: ["◫", "대시보드"],
   brands: ["▣", "브랜드 이메일"],
@@ -76,6 +77,7 @@ const navGroups = [
 const compactProjectMenus = [
   ["youtube-primary", routes["youtube-primary"][1]],
   ["youtube-private", routes["youtube-private"][1]],
+  ["youtube-jerong", routes["youtube-jerong"][1]],
   ["copy", "카피"],
   ["settings", "Gmail 설정"],
 ];
@@ -1797,6 +1799,10 @@ const pages = {
   copy: projectCopyPage,
   "youtube-primary": () => $("#app").replaceChildren(),
   "youtube-private": () => $("#app").replaceChildren(),
+  "youtube-jerong": () => {
+    if (!YOUTUBE_DISCOVERY_AVAILABLE) return dashboard();
+    $("#app").innerHTML = '<section class="panel" aria-labelledby="jerong-title"><h1 id="jerong-title">제롱쿠키</h1><p>후보 발굴을 중단했습니다.</p></section>';
+  },
   emailtracking:emailTrackingPage,
   dashboard,
   discovery: discoveryPage,
