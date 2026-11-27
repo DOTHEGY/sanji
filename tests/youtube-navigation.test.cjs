@@ -2,7 +2,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const source=fs.readFileSync('private/ui/app.js','utf8'),decl=source.slice(source.indexOf('const routes ='),source.indexOf('const statuses =')),render=source.slice(source.indexOf('function render() {'),source.indexOf('function dashboardExistingSummary(')),panel=source.slice(source.indexOf('let youtubeWorkspaceOwner='),source.indexOf('async function discoveryPage()',source.indexOf('let youtubeWorkspaceOwner=')));
 function navContext(raw='#brands',feature=true,reader){
  const n={innerHTML:''},bread={},label={},copy={},calls=[],nodes={'#nav':n,'#breadcrumb':bread,'#private-youtube-menu-label':label,'#private-youtube-copy-label':copy};
- const routes=['youtube-primary','youtube-private','copy','brands','settings','templates','inbox','deals','emailtracking'];
+ const routes=['youtube-primary','youtube-private','youtube-jerong','copy','brands','settings','templates','inbox','deals','emailtracking'];
  const c={YOUTUBE_DISCOVERY_AVAILABLE:feature,location:{hash:raw,pathname:'/workspace/',search:''},history:{replaceState(_a,_b,url){c.location.hash=url.slice(url.indexOf('#'));}},
   me:{id:'fixture-owner'},manualNotesView:null,inboxRequestGeneration:0,inboxLifecycle:'active',catalogSheetSettingsDispose(){},inboxNotesDispose(){},
   syncYoutubeEmailHost(key){calls.push('host:'+key);},dashboard(){calls.push('page:dashboard');},pages:Object.fromEntries(routes.map(key=>[key,()=>calls.push('page:'+key)])),
@@ -10,17 +10,17 @@ function navContext(raw='#brands',feature=true,reader){
  vm.createContext(c);vm.runInContext(decl+render+';this.open=render;this.title=compactYoutubeLabel;',c);
  return {c,n,bread,label,copy,calls};
 }
-test('production workspace opens the existing project immediately with exactly four main menus',()=>{
+test('production workspace opens the existing project immediately with exactly five main menus',()=>{
  const {c,n,calls,bread}=navContext('');c.open();
  assert.equal(c.location.hash,'#youtube-primary');
- assert.deepEqual([...n.innerHTML.matchAll(/href="(#.*?)"/g)].map(m=>m[1]),['#youtube-primary','#youtube-private','#copy','#settings']);
- for(const name of ['쫀득빵','별도 YouTube 프로젝트','카피','Gmail 설정'])assert.ok(n.innerHTML.includes(name));
+ assert.deepEqual([...n.innerHTML.matchAll(/href="(#.*?)"/g)].map(m=>m[1]),['#youtube-primary','#youtube-private','#youtube-jerong','#copy','#settings']);
+ for(const name of ['쫀득빵','별도 YouTube 프로젝트','제롱쿠키','카피','Gmail 설정'])assert.ok(n.innerHTML.includes(name));
  assert.doesNotMatch(n.innerHTML,/브랜드 이메일|태그바이|Instagram|상품 딜|성과·추적/);
  assert.deepEqual(calls,['host:youtube-primary','page:youtube-primary']);
  assert.equal(bread.textContent,'워크스페이스 / 쫀득빵');
 });
 test('old supported direct links keep their routes; retired links keep prior redirect; local unsupported build unchanged',()=>{
- for(const route of ['brands','inbox','deals','emailtracking','templates','settings','youtube-private','copy']){
+ for(const route of ['brands','inbox','deals','emailtracking','templates','settings','youtube-private','youtube-jerong','copy']){
   const {c,calls}=navContext('#'+route);c.open();assert.equal(c.location.hash,'#'+route);
   assert.deepEqual(calls,['host:'+route,'page:'+route]);
  }
@@ -124,14 +124,14 @@ test('desktop and mobile navigate the native projects without a nested page and 
    },{decl,render,panel});
    const nav=page.locator('#nav a'),host=page.locator('#youtube-email-host');
    const primary=host.getByRole('textbox',{name:'primary fixture'}),wedding=host.getByRole('textbox',{name:'private fixture'});
-   assert.equal(await nav.count(),4);
+   assert.equal(await nav.count(),5);
    assert.equal(await nav.nth(0).getAttribute('aria-current'),'page');
    assert.equal(await host.locator('[data-youtube-project]').count(),1);
    await primary.fill('primary unsaved');
    await nav.nth(1).click();
    await page.waitForURL('**/#youtube-private');
    await wedding.fill('private unsaved');
-   await nav.nth(3).click();
+   await nav.getByText('Gmail 설정',{exact:true}).click();
    await page.waitForURL('**/#settings');await host.waitFor({state:'hidden'});
    await nav.nth(0).click();
    await page.waitForURL('**/#youtube-primary');await primary.waitFor();assert.equal(await primary.inputValue(),'primary unsaved');
@@ -308,7 +308,15 @@ test('built workspace routes both real project panels and the private copy witho
   assert.deepEqual(await weddingInline.allTextContents(),['가상 웨딩 카피 제목','가상 웨딩 원문 <img src=x>']);
   assert.equal(await wedding.locator('#wedding-copy-panel img').count(),0);
   assert.equal(await primary.isHidden(),true);
-  await nav.nth(2).click();await page.locator('#app summary').first().click();
+  const priorPartyumReads=partyumRead.length;
+  await nav.getByText('제롱쿠키',{exact:true}).click();
+  await page.waitForURL('**/#youtube-jerong');
+  const paused=page.getByRole('region',{name:'제롱쿠키',exact:true});
+  await paused.getByText('후보 발굴을 중단했습니다.',{exact:true}).waitFor();
+  assert.equal(await paused.locator('button,input,textarea,select,a').count(),0);
+  assert.equal(await host.isHidden(),true);
+  assert.equal(partyumRead.length,priorPartyumReads);
+  await nav.getByText('카피',{exact:true}).click();await page.locator('#app summary').first().click();
   const saved=page.locator('#youtube-primary-copy .message');
   await saved.first().waitFor({timeout:12000});
   assert.deepEqual(await saved.allTextContents(),[subject,body]);

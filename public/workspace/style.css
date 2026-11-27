@@ -948,11 +948,11 @@ nav {
 #youtube-email-host [data-youtube-project]{min-width:0}
 #youtube-email-host [hidden]{display:none !important}
 
-/* Compact signed-in project menu. Keep all four destinations visible on narrow screens. */
+/* Compact signed-in project menu. Keep all five destinations readable on narrow screens. */
 #nav .workspace-menu-label{width:auto;min-width:0;text-align:left;overflow-wrap:anywhere}
 @media(max-width:760px){
- #nav .compact-project-menu{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));width:100%;min-width:0;gap:2px}
- #nav .compact-project-menu a{justify-content:center;padding:8px 3px;margin:2px 0;min-width:0}
+ #nav .compact-project-menu{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));width:100%;min-width:0;gap:2px}
+ #nav .compact-project-menu a{justify-content:center;padding:8px 3px;margin:2px 0;min-width:0;white-space:normal}
  #nav .compact-project-menu a>span[aria-hidden]{display:none}
- #nav .compact-project-menu .workspace-menu-label{text-align:center}
+ #nav .compact-project-menu .workspace-menu-label{display:block;text-align:center}
 }
