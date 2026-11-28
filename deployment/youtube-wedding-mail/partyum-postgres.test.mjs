@@ -39,7 +39,7 @@ async function fixture(t){
  const {PGlite}=await import(pathToFileURL(process.env.PARTYUM_PGLITE));
  const db=new PGlite();t.after(()=>db.close());
  await db.exec(setup);
- for(const file of ['0001_partyum_ledger.unapplied.sql','0002_partyum_native_scheduler.unapplied.sql','0003_partyum_runtime_control.unapplied.sql','0004_partyum_verified_contact_reader.unapplied.sql']){
+ for(const file of ['0001_partyum_ledger.unapplied.sql','0002_partyum_native_scheduler.unapplied.sql','0003_partyum_runtime_control.unapplied.sql','0004_partyum_verified_contact_reader.unapplied.sql','0006_partyum_custom_schedule.unapplied.sql']){
   await db.exec(await fs.readFile(new URL('./'+file,import.meta.url),'utf8'));
  }
  await db.exec('update sanji_partyum_internal.partyum_runtime_controls set send_enabled=true');
@@ -152,4 +152,24 @@ test('narrow contact reader matches actual restrictive role graph and exact whit
  await x.db.exec('set role service_role');assert.equal((await read()).rows.length,0);
  await x.db.exec('reset role');await x.db.exec('update sanji_partyum_internal.partyum_runtime_controls set send_enabled=false');
  await x.db.exec('set role service_role');await assert.rejects(()=>read(),/contact scope unavailable/);
+});
+
+test('two separately selected discovery days can share a custom due time without dispatch or cross-day exclusions',async t=>{
+ const x=await fixture(t);if(!x)return;
+ const otherDay='2026-11-23';
+ await x.db.exec('reset role');
+ await x.db.query('update public.sanji_private_wedding_shortlist set project_day=$1 where channel_id=$2',[otherDay,ids[1]]);
+ await x.db.exec('set role service_role');
+ await x.ad.heartbeat();
+ const scheduleAt=new Date(Math.floor((Date.now()+2*86400000)/60000)*60000).toISOString();
+ const a={mode:'scheduled',scheduleAt},b={...a,day:otherDay};
+ const [pa,pb]=await Promise.all([plan(x,a),plan(x,b)]);
+ assert.equal(pa.recipientCount,1);assert.equal(pb.recipientCount,1);
+ assert.equal(pa.runAt,scheduleAt);assert.equal(pb.runAt,scheduleAt);
+ const first=await submit(x,pa,a),second=await submit(x,pb,b);
+ assert.equal(first.state,'scheduled');assert.equal(second.state,'scheduled');
+ assert.notEqual(first.batchId,second.batchId);
+ assert.equal((await evidence(x,[ids[0]])).get(ids[0]).at,scheduleAt);
+ assert.equal((await x.ad.readStatusEvidence({actor:owner,day:otherDay,projectId:PROJECT,channelIds:[ids[1]]})).get(ids[1]).at,scheduleAt);
+ assert.deepEqual(await x.ad.claimDue({projectId:PROJECT,limit:6}),[]);
 });

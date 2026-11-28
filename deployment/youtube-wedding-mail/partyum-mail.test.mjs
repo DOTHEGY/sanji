@@ -129,3 +129,30 @@ test('Gmail dot, tag and googlemail aliases normalize only inside Partyum recipi
  x.state.rows[1].email='firstlast@example.test';
  assert.equal((await plan(x)).recipientCount,2);
 });
+
+test('Saturday selects Monday 10 Seoul; scope binds timestamp, exclusions and discovery date, including submit expiry',async()=>{
+ const x=await fixture();
+ x.setTime('2026-11-28T09:00:00Z');
+ const scope={mode:'scheduled',scheduleAt:'2026-11-30T01:00:00.000Z',channelIdsExcluded:[B]};
+ for(const scheduleAt of ['2026-11-28T08:59:00.000Z','2026-12-30T01:00:00.000Z','2026-11-30T10:00:00+09:00','2026-11-30T01:00:01.000Z','2026-11-31T01:00:00.000Z',null]){
+  await assert.rejects(()=>plan(x,{...scope,scheduleAt}),{code:'SCOPE'});
+ }
+ await assert.rejects(()=>plan(x,{mode:'tomorrow',scheduleAt:scope.scheduleAt}),{code:'SCOPE'});
+ const p=await plan(x,scope);
+ assert.equal(p.runAt,scope.scheduleAt);
+ assert.equal(p.recipientCount,1);
+ for(const override of [{scheduleAt:'2026-11-30T02:00:00.000Z'},{channelIdsExcluded:[]},{day:'2026-11-23'}]){
+  await assert.rejects(()=>submit(x,p,{...scope,...override}),{code:'INVALID_PLAN'});
+ }
+ const result=await submit(x,p,scope);
+ assert.equal(result.state,'scheduled');
+ assert.equal(result.runAt,scope.scheduleAt);
+ x.setTime('2026-11-30T01:05:00Z');
+ assert.deepEqual(await submit(x,p,scope),result);
+ assert.equal(x.count(),1);
+ const y=await fixture();y.setTime('2026-11-28T00:59:45Z');
+ const soon={mode:'scheduled',scheduleAt:'2026-11-28T01:00:00.000Z'};
+ const expiring=await plan(y,soon);y.setTime('2026-11-28T01:00:00Z');
+ await assert.rejects(()=>submit(y,expiring,soon),{code:'PLAN_STALE'});
+ assert.equal(y.count(),0);
+});

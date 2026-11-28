@@ -33,8 +33,9 @@ function setup(opts={}){
  function bind(){
   const host=new Element('div'),box=new Element('input');
   ctl.bind({host,exclusions:[[box,channel]],eligibleCount:2,document});
-  const [legend,now,tomorrow,summary,preview,confirm,status]=host.children;
-  return {host,box,legend,now,tomorrow,summary,preview,confirm,status};
+  const [legend,now,tomorrow,scheduleBox,summary,preview,confirm,status]=host.children;
+  const [dateLabel,timeLabel,schedule]=scheduleBox.children;
+  return {host,box,legend,now,tomorrow,summary,preview,confirm,status,dateInput:dateLabel.children[0],timeInput:timeLabel.children[0],schedule};
  }
  return {ctl,bind,clearSession(){active=false;},calls,saved,get refreshes(){return refreshes;},time(v){time=v;}};
 }
@@ -112,4 +113,28 @@ test('fail-closed typed preflight UX never loads copy or submits and does not sh
  assert.doesNotMatch(v.status.textContent,/secret|PARTYUM_DISABLED/);
  assert.equal(v.confirm.hidden,true);assert.equal(copyReads,0);
  v.confirm.trigger('click');assert.equal(s.calls.length,1);assert.equal(s.saved.size,0);
+});
+
+test('calendar selection uses exact Seoul time, stale settings cancel preview, and exclusions retain discovery day',async()=>{
+ const s=setup({request:async body=>({
+  ...response(body.mode),runAt:body.scheduleAt,
+  ...(body.action==='submit'?{batchId:key,state:'scheduled'}:{}),
+ })}),v=s.bind();
+ v.schedule.trigger('click');await settle();
+ assert.match(v.status.textContent,/앞으로 30일/);assert.equal(s.calls.length,0);
+ v.dateInput.value='2026-11-30';v.dateInput.trigger('input');
+ v.box.checked=true;v.box.trigger('change');
+ v.schedule.trigger('click');await settle();
+ assert.match(v.summary.textContent,/2026-11-23 발굴.*예약.*2026. 11. 30.*10:00/);
+ assert.equal(v.confirm.disabled,false);
+ v.timeInput.value='11:30';v.timeInput.trigger('input');
+ assert.equal(v.confirm.hidden,true);
+ const refreshed=s.bind();assert.equal(refreshed.dateInput.value,'2026-11-30');
+ refreshed.schedule.trigger('click');await settle();
+ refreshed.confirm.trigger('click');await settle();
+ assert.equal(s.calls.length,3);
+ assert.deepEqual(s.calls[2],{
+  action:'submit',projectId,day,mode:'scheduled',scheduleAt:'2026-11-30T02:30:00.000Z',
+  channelIdsExcluded:[channel],planId,expectedRecipientCount:2,expectedRunAt:'2026-11-30T02:30:00.000Z',idempotencyKey:key,
+ });
 });

@@ -1,3 +1,4 @@
+import {MAX_WEDDING_SCHEDULE_MS,validWeddingScheduleAt,weddingScheduleAtKst} from './youtube-wedding-schedule.mjs';
 import {weddingMailPlanErrorMessage} from "./youtube-wedding-mail-errors.mjs";
 
 import {WEDDING_SUBSCRIBER_MINIMUM} from './youtube-wedding-status-client.mjs';
@@ -19,9 +20,10 @@ export function tomorrowTenKst(now=Date.now()){
  const tomorrow=new Date(Date.parse(day+'T00:00:00Z')+86400000).toISOString().slice(0,10);
  return tomorrow+'T01:00:00.000Z';
 }
-export function weddingMailPlanInput(day,mode,excluded){
- if(!date(day)||!['now','tomorrow'].includes(mode)||!(excluded instanceof Set)||excluded.size>100||[...excluded].some(x=>!channelRE.test(x)))throw Error('invalid wedding mail scope');
- return {action:'plan',projectId,day,mode,channelIdsExcluded:[...excluded].sort()};
+export function weddingMailPlanInput(day,mode,excluded,scheduleAt,now=Date.now()){
+ if(!date(day)||!['now','tomorrow','scheduled'].includes(mode)||
+    (mode==='scheduled'&&!validWeddingScheduleAt(scheduleAt,now))||!(excluded instanceof Set)||excluded.size>100||[...excluded].some(x=>!channelRE.test(x)))throw Error('invalid wedding mail scope');
+ return {action:'plan',projectId,day,mode,channelIdsExcluded:[...excluded].sort(),...(mode==='scheduled'?{scheduleAt}:{})};
 }
 function sameScope(value,requested){
  return value?.projectId===projectId&&value.day===requested.day&&value.mode===requested.mode;
@@ -37,17 +39,18 @@ export function validateWeddingMailPlan(value,requested,now=Date.now()){
  const expiry=Date.parse(value.expiresAt), run=Date.parse(value.runAt);
  if(expiry<=now||expiry>now+3600000)throw Error('invalid plan expiry');
  if(requested.mode==='tomorrow'&&run!==Date.parse(tomorrowTenKst(now)))throw Error('invalid planned reservation');
+ if(requested.mode==='scheduled'&&(!validWeddingScheduleAt(requested.scheduleAt,now)||run!==Date.parse(requested.scheduleAt)))throw Error('invalid planned reservation');
  if(requested.mode==='now'&&(run<now-300000||run>now+300000))throw Error('invalid immediate plan');
  return {planId:value.planId,recipientCount:value.recipientCount,runAt:value.runAt,expiresAt:value.expiresAt,copyVersion:value.copyVersion};
 }
 export function validateWeddingMailSubmit(value,requested,plan){
  if(!sameScope(value,requested)||value.recipientCount!==plan.recipientCount||!instant(value.runAt)||Date.parse(value.runAt)!==Date.parse(plan.runAt)||
-    typeof value.batchId!=='string'||!tokenRE.test(value.batchId)||value.state!==(requested.mode==='tomorrow'?'scheduled':'queued'))throw Error('unverified result');
+    typeof value.batchId!=='string'||!tokenRE.test(value.batchId)||value.state!==(requested.mode==='now'?'queued':'scheduled'))throw Error('unverified result');
  return {state:value.state,batchId:value.batchId};
 }
 export function createWeddingMailUi({owner,day,storage,request,readCopy,sessionActive,refreshStatus,now=Date.now,id=()=>crypto.randomUUID()}){
  const key='sanji:partyum:submit:v1:'+owner+':'+day;
- const model={excluded:new Set(),pending:null,view:null,plan:null,prepareVersion:0,locked:false,message:'',options:null,eligibleKey:null,eligibleCount:0};
+ const model={excluded:new Set(),pending:null,view:null,plan:null,prepareVersion:0,locked:false,message:'',options:null,eligibleKey:null,eligibleCount:0,scheduleDay:'',scheduleTime:'10:00'};
  if(storage){try{model.locked=storage.getItem(key)!==null;}catch{storage=null;}}
  if(model.locked)model.message='이 날짜의 기존 요청을 먼저 확인해야 합니다. 발송·예약 상태를 확인하고 관리자에게 문의해 주세요.';
  function sync(){
@@ -57,7 +60,7 @@ export function createWeddingMailUi({owner,day,storage,request,readCopy,sessionA
   const hasPlan=!!model.plan;
   v.confirm.hidden=!hasPlan;
   v.confirm.disabled=model.locked||!!model.pending||!hasPlan||model.plan?.recipientCount===0||!model.eligibleCount;
-  v.confirm.textContent=model.options?.mode==='tomorrow'?'표시된 인원 예약 확정':'표시된 인원 지금 발송 확정';
+  v.confirm.textContent=model.options&&model.options.mode!=='now'?'표시된 인원 예약 확정':'표시된 인원 지금 발송 확정';
   v.controls.forEach(b=>{b.disabled=model.locked||!!model.pending||!storage;});
   v.exclusions.forEach(([box,channel])=>{box.checked=model.excluded.has(channel);box.disabled=!!model.pending||model.locked||!storage;});
   v.copyTitle.textContent=model.visibleCopy?.subject??'';
@@ -73,7 +76,10 @@ export function createWeddingMailUi({owner,day,storage,request,readCopy,sessionA
   invalidate();
   const revision=model.prepareVersion;
   let options;
-  try{options=weddingMailPlanInput(day,mode,model.excluded);}catch{model.message='선택 범위를 확인할 수 없습니다. 제외한 후보 수를 확인해 주세요.';sync();return;}
+  try{
+   const t=now(),scheduleAt=mode==='scheduled'?weddingScheduleAtKst(model.scheduleDay,model.scheduleTime,t):null;
+   options=weddingMailPlanInput(day,mode,model.excluded,scheduleAt,t);
+  }catch{model.message=mode==='scheduled'?'한국시간 기준 앞으로 30일 이내의 예약 날짜와 시각을 선택해 주세요.':'선택 범위를 확인할 수 없습니다. 제외한 후보 수를 확인해 주세요.';sync();return;}
   model.pending='plan';model.message='대상과 카피 확인 중…';sync();
   let stage='request';
   try{
@@ -97,7 +103,8 @@ export function createWeddingMailUi({owner,day,storage,request,readCopy,sessionA
  async function submit(){
   const plan=model.plan,options=model.options;
   if(!plan||!options||model.pending||model.locked||!storage||!sessionActive()||plan.recipientCount<1)return;
-  if(Date.parse(plan.expiresAt)<=now()||(options.mode==='tomorrow'&&Date.parse(plan.runAt)!==Date.parse(tomorrowTenKst(now())))){
+  if(Date.parse(plan.expiresAt)<=now()||(options.mode==='tomorrow'&&Date.parse(plan.runAt)!==Date.parse(tomorrowTenKst(now())))||
+     (options.mode==='scheduled'&&!validWeddingScheduleAt(options.scheduleAt,now()))){
    invalidate();model.message='확인 내용이 만료되었거나 한국 날짜가 바뀌었습니다. 다시 대상 수를 확인해 주세요.';sync();return;
   }
   let idempotencyKey;
@@ -142,8 +149,23 @@ export function createWeddingMailUi({owner,day,storage,request,readCopy,sessionA
    copy.className='wedding-mail-copy';copy.append(make('h5','이 요청에 적용할 카피'),copyTitle,copyBody);
    host.append(legend);
    if(eligibleCount)host.append(nowBtn,tomorrowBtn);else host.append(empty);
+   const scheduleBox=make('section',''),dateInput=make('input',''),timeInput=make('input','');
+   dateInput.type='date';dateInput.setAttribute('aria-label','예약 날짜 (한국시간)');dateInput.min=kstDay.format(new Date(now()));dateInput.max=kstDay.format(new Date(now()+MAX_WEDDING_SCHEDULE_MS));dateInput.value=model.scheduleDay;
+   timeInput.type='time';timeInput.setAttribute('aria-label','예약 시각 (한국시간)');timeInput.step='60';timeInput.value=model.scheduleTime;
+   const dateLabel=make('label','예약 날짜 (한국시간) '),timeLabel=make('label','예약 시각 (한국시간) ');
+   dateLabel.append(dateInput);timeLabel.append(timeInput);
+   const scheduleBtn=makeButton('선택 날짜 예약 대상 확인',()=>void prepare('scheduled'));
+   scheduleBox.className='wedding-schedule-fields';
+   scheduleBox.append(dateLabel,timeLabel,scheduleBtn,make('p','예약 시각부터 순차 발송됩니다.'));
+   if(eligibleCount)host.append(scheduleBox);
    host.append(summary,copy,confirm,notice);
-   model.view={summary,notice,confirm,copy,copyTitle,copyBody,controls:[nowBtn,tomorrowBtn],exclusions};
+   for(const [input,field] of [[dateInput,'scheduleDay'],[timeInput,'scheduleTime']]){
+    input.addEventListener('input',()=>{
+     if(model.pending||model.locked||model[field]===input.value)return;
+     model[field]=input.value;invalidate();model.message='예약 시각이 바뀌었습니다. 대상 수를 다시 확인해 주세요.';sync();
+    });
+   }
+   model.view={summary,notice,confirm,copy,copyTitle,copyBody,controls:[nowBtn,tomorrowBtn,dateInput,timeInput,scheduleBtn],exclusions};
    if(!storage&&!model.message)model.message='이 브라우저에서 중복 방지를 확인할 수 없어 발송 기능이 잠겼습니다.';
    for(const [box,channel] of exclusions){
     box.addEventListener('change',()=>{

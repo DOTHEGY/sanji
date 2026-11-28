@@ -1,3 +1,4 @@
+import {validWeddingScheduleAt} from '../../web/youtube-wedding-schedule.mjs';
 import {partyumPhase} from './partyum-plan-diagnostic.mjs';
 export const PROJECT='private-wedding-research';
 const KEY=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -13,7 +14,7 @@ const maxRows=100;
 const ttl=120000;
 const canonical=b=>JSON.stringify(b);
 const dayAt=(t)=>iso(t+9*3600000).slice(0,10);
-const runAtFor=(mode,t)=>mode==='now'?iso(t):iso(Date.parse(dayAt(t)+'T01:00:00Z')+86400000);
+const runAtFor=(scope,t)=>scope.mode==='scheduled'?scope.scheduleAt:scope.mode==='now'?iso(t):iso(Date.parse(dayAt(t)+'T01:00:00Z')+86400000);
 const b64=a=>btoa(String.fromCharCode(...a)).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'');
 const unb64=s=>Uint8Array.from(atob(s.replaceAll('-','+').replaceAll('_','/')),c=>c.charCodeAt(0));
 const bytes=x=>typeof x==='string'?enc.encode(x):x;
@@ -32,16 +33,18 @@ const hash=async(x)=>b64(new Uint8Array(await crypto.subtle.digest('SHA-256',enc
 const exact=(obj,keys)=>obj&&Object.getPrototypeOf(obj)===Object.prototype&&Object.keys(obj).sort().join(',')===[...keys].sort().join(',');
 function inputScope(v,action,now){
  const keys=['action','projectId','day','channelIdsExcluded','mode'];
+ if(v?.mode==='scheduled')keys.push('scheduleAt');
  const submit=['planId','expectedRecipientCount','expectedRunAt','idempotencyKey'];
  if(!exact(v,action==='submit'?[...keys,...submit]:keys)||v.action!==action||v.projectId!==PROJECT||
-    !['now','tomorrow'].includes(v.mode)||!validDay(v.day)||v.day>dayAt(now)||
+    !['now','tomorrow','scheduled'].includes(v.mode)||!validDay(v.day)||v.day>dayAt(now)||
     !Array.isArray(v.channelIdsExcluded)||v.channelIdsExcluded.length>maxRows||
     !v.channelIdsExcluded.every(x=>typeof x==='string'&&UC.test(x))||
     new Set(v.channelIdsExcluded).size!==v.channelIdsExcluded.length)throw FAIL('SCOPE');
  if(action==='submit'&&(!KEY.test(v.idempotencyKey)||!tokenRE.test(v.planId)||
      !Number.isSafeInteger(v.expectedRecipientCount)||v.expectedRecipientCount<1||v.expectedRecipientCount>maxRows||
      !isDate(v.expectedRunAt)))throw FAIL('SCOPE');
- return {projectId:PROJECT,day:v.day,mode:v.mode,channelIdsExcluded:[...v.channelIdsExcluded].sort()};
+ return {projectId:PROJECT,day:v.day,mode:v.mode,channelIdsExcluded:[...v.channelIdsExcluded].sort(),
+   ...(v.mode==='scheduled'?{scheduleAt:v.scheduleAt}:{})};
 }
 function auth(actor){
  if(typeof actor!=='string'||!OWNER.test(actor))throw FAIL('AUTH');
@@ -117,9 +120,10 @@ export function createPartyumMail({secret,loadSnapshot,admitAtomic,readReplay,no
   const t=now();
   const scope=runScope(actor,input,t),scopeDigest=await hash(scope);
   if(input.action==='plan'){
+   if(scope.mode==='scheduled'&&!validWeddingScheduleAt(scope.scheduleAt,t))throw FAIL('SCOPE');
    const snapshot=await partyumPhase('snapshot',()=>loadSnapshot(scope));
    const e=await partyumPhase('snapshot_eligibility',()=>recomputePartyumEligibility(snapshot,scope,t));
-   const runAt=runAtFor(scope.mode,t),expiresAt=iso(t+ttl),recipientCount=e.recipients.length;
+   const runAt=runAtFor(scope,t),expiresAt=iso(t+ttl),recipientCount=e.recipients.length;
    const planId=await sign({scopeDigest,runAt,expiresAt,recipientCount,digest:e.digest});
    return {projectId:PROJECT,day:scope.day,mode:scope.mode,recipientCount,runAt,expiresAt,copyVersion:e.copy.version,planId};
   }
@@ -131,7 +135,8 @@ export function createPartyumMail({secret,loadSnapshot,admitAtomic,readReplay,no
   const previous=await readReplay({actor,projectId:PROJECT,idempotencyKey:input.idempotencyKey,fingerprint});
   if(previous)return projectResult(previous,scope,claim);
   if(!isDate(claim.expiresAt)||Date.parse(claim.expiresAt)<=t||
-     (scope.mode==='tomorrow'&&claim.runAt!==runAtFor(scope.mode,t)))throw FAIL('PLAN_STALE');
+     (scope.mode==='tomorrow'&&claim.runAt!==runAtFor(scope,t))||
+     (scope.mode==='scheduled'&&(claim.runAt!==scope.scheduleAt||!validWeddingScheduleAt(scope.scheduleAt,t))))throw FAIL('PLAN_STALE');
   const e=await recomputePartyumEligibility(await loadSnapshot(scope),scope,t);
   if(e.digest!==claim.digest||e.recipients.length!==claim.recipientCount)throw FAIL('PLAN_STALE');
   // Final adapter MUST recompute in one serializable transaction with dedup ledger and bind proof.

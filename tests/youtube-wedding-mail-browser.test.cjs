@@ -22,7 +22,7 @@ async function mount(page){
        refreshStatus:()=>window.refreshed++,
        request:async({body})=>{
          window.requests.push(body);
-         return {projectId:'private-wedding-research',day,mode:body.mode,recipientCount:1,runAt:run,
+         return {projectId:'private-wedding-research',day,mode:body.mode,recipientCount:1,runAt:body.scheduleAt??run,
           ...(body.action==='plan'?{expiresAt:expiry,subscriberMinimum:50000,copyVersion:1,planId:'syntheticPlanFixture.'+'Z'.repeat(43)}:{batchId:'syntheticBatchFixture',state:'scheduled'})};
        }
       }).bind({host,exclusions:[[box,'UC'+ch.repeat(22)],[included,'UC'+'Z'.repeat(22)]],eligibleCount:2,document});
@@ -55,5 +55,33 @@ test('synthetic Partyum-only mobile/desktop action and duplicate guard',async()=
    assert.equal(await two.getByRole('button',{name:'내일 오전 10시 예약 대상 확인'}).isEnabled(),true);
    await page.close();
   }
+ }finally{await browser.close();}
+});
+
+test('date picker uses Seoul rather than browser timezone and keeps discovery cohorts and exclusions separate',async()=>{
+ const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
+ try{
+  const page=await browser.newPage({viewport:{width:390,height:800},timezoneId:'America/Los_Angeles'});
+  await mount(page);
+  const one=page.locator('#one'),two=page.locator('#two');
+  await one.getByRole('checkbox',{name:'가상 후보 제외'}).check();
+  const expected='2026-11-30T01:00:00.000Z';
+  for(const cohort of [one,two]){
+   await cohort.getByLabel('예약 날짜 (한국시간)',{exact:true}).fill('2026-11-30');
+   await cohort.getByLabel('예약 시각 (한국시간)',{exact:true}).fill('11:30');
+   await cohort.getByRole('button',{name:'선택 날짜 예약 대상 확인'}).click();
+   await cohort.getByRole('button',{name:'표시된 인원 예약 확정'}).waitFor();
+   await cohort.getByLabel('예약 시각 (한국시간)',{exact:true}).fill('10:00');
+   assert.equal(await cohort.getByRole('button',{name:'표시된 인원 예약 확정'}).isVisible(),false);
+   await cohort.getByRole('button',{name:'선택 날짜 예약 대상 확인'}).click();
+   await cohort.getByText(/대상 1명.*예약.*10:00.*한국시간/).waitFor();
+   await cohort.getByRole('button',{name:'표시된 인원 예약 확정'}).click();
+   await cohort.getByText(/예약 요청을 접수했습니다/).waitFor();
+  }
+  const requests=await page.evaluate(()=>window.requests.filter(x=>x.action==='submit'));
+  assert.deepEqual(requests.map(x=>[x.day,x.scheduleAt,x.expectedRunAt,x.channelIdsExcluded]),[
+   ['2026-11-23',expected,expected,['UC'+'A'.repeat(22)]],
+   ['2026-11-22',expected,expected,[]],
+  ]);
  }finally{await browser.close();}
 });
