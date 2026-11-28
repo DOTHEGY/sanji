@@ -36,6 +36,8 @@ const markup = `<div data-wedding-project>
 [data-wedding-project] :is(.creator-mail-unknown,.creator-mail-failed){color:#8a400d}
 [data-wedding-project] .wedding-mail-actions{display:flex;flex-wrap:wrap;gap:.45rem;align-items:center;margin:.65rem 0}
 [data-wedding-project] .wedding-mail-actions :is(p,section){width:100%;margin:.25rem 0}
+[data-wedding-project] .wedding-schedule-fields{display:flex;flex-wrap:wrap;align-items:end;gap:.45rem}
+[data-wedding-project] .wedding-schedule-fields label{display:grid;gap:.2rem}
 [data-wedding-project] .wedding-mail-copy{font-size:.9rem;padding:.65rem;border:1px solid #dbe4da;border-radius:.35rem;max-height:18rem;overflow:auto}
 [data-wedding-project] .wedding-mail-copy p{white-space:pre-wrap}
 [data-wedding-project] input.wedding-mail-exclude{width:auto;margin:0 .4rem 0 0;vertical-align:middle}

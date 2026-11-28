@@ -1,3 +1,4 @@
+import {validWeddingScheduleAt} from '../../web/youtube-wedding-schedule.mjs';
 import {PROJECT,recomputePartyumEligibility,partyumCopyDigest,partyumRecipientKey} from './partyum-mail.mjs';
 import {partyumPhase} from './partyum-plan-diagnostic.mjs';
 import {PARTYUM_WORK_POLICY as POLICY} from './worker-policy.mjs';
@@ -163,6 +164,7 @@ export function createPartyumPostgres({
     const next=await q.query("select (((clock_timestamp() at time zone 'Asia/Seoul')::date+1+time '10:00') at time zone 'Asia/Seoul') as due");
     if(iso(next.rows[0].due)!==x.runAt)throw fail('PLAN_STALE');
    }
+   if(x.mode==='scheduled'&&(x.runAt!==x.scheduleAt||!validWeddingScheduleAt(x.runAt,t)))throw fail('PLAN_STALE');
    const again=await recomputePartyumEligibility(await readLocked(q,x,t),x,t);
    if(again.digest!==x.snapshotDigest||again.recipients.length!==x.recipients.length||again.senderRef!==x.senderRef)throw fail('PLAN_STALE');
    const id=crypto.randomUUID();
